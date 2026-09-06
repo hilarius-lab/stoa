@@ -1,0 +1,1308 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdatomic.h>
+#include <dirent.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <limits.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "esp_http_client.h"
+#include "esp_crt_bundle.h"
+#include "esp_log.h"
+#include "esp_wifi.h"
+#include "esp_heap_caps.h"
+#include "esp_random.h"
+#include "lwip/netdb.h"
+#include "nvs.h"
+#include "cJSON.h"
+#include "journal.h"
+#include "memo_queue.h"
+#include "recorder.h"
+#include "api_client.h"
+#include "screen.h"
+
+/* Headroom, not a fit. The server projects the e-paper surface down to roughly
+ * six kilobytes, so 8192 would have worked on paper — and a worst case measured
+ * at 8181 bytes is not a margin, it is a coin toss whose losing side is a blank
+ * panel with an HTTP 200 in the log. Doubling costs one transient allocation on
+ * a device with eight megabytes of PSRAM. Keep this at or below SNAPSHOT_MAX in
+ * screen.c: the snapshot is copied with snprintf, which truncates in silence. */
+#define API_RESPONSE_MAX 16384
+#define API_URL_MAX 320
+#define API_CONTRACT "1"
+
+/* How long the worker sleeps when nothing has woken it. Three cases, and until
+ * today only the first of them existed.
+ *
+ * A pass that failed used to schedule nothing at all: with an empty queue the
+ * wait was portMAX_DELAY, so the worker blocked until a reconnect, a finished
+ * recording or a button press happened to poke it. A device that boots into a
+ * DNS hiccup then sits there indefinitely — observed on 6 September, where a
+ * single failed name lookup left an enrollment code unredeemed while it expired.
+ *
+ * A pass that succeeded scheduled nothing either, which meant an idle device
+ * never refreshed its dashboard: the panel kept whatever snapshot the boot had
+ * fetched and eventually marked it stale, and nothing ever went and got a newer
+ * one. `transports.fallback_refresh` has always said polling; there simply was
+ * none. */
+#define API_RETRY_MIN_MS 15000
+#define API_RETRY_MAX_MS 600000
+/* Used only when the server states no cache window of its own. */
+#define API_REFRESH_FALLBACK_S 3600
+#define API_REFRESH_MIN_S 300
+#define API_REFRESH_MAX_S 3600
+
+typedef struct {
+    char *data;
+    size_t used;
+    size_t capacity;
+    bool overflow;
+} response_buffer;
+
+typedef struct {
+    unsigned gates_ok;
+    unsigned gates_failed;
+    unsigned creates_ok;
+    unsigned creates_failed;  /* the server refused the create */
+    unsigned replay_failed;   /* the journal did not yield a usable session */
+    unsigned settled_skipped; /* already delivered, nothing left to do */
+    unsigned abandoned;       /* a journal without a single segment and without an end */
+    unsigned resync_impossible; /* server wants it back, the release already removed it */
+    unsigned uploads_acked;
+    unsigned uploads_failed;
+    unsigned reconciled;
+    unsigned resynced;   /* acked segments the server had lost, queued again */
+    unsigned released;   /* sessions whose audio the server released and we deleted */
+    unsigned release_refused; /* released by the server, not complete here */
+    unsigned release_withheld; /* released and complete here, but the server could not confirm it holds it */
+    unsigned finishes_ok;
+    unsigned sessions_seen;
+    int last_http;
+    bool compatible;
+} api_status;
+
+static char base[256];
+static char credential[65];
+static char installation[JOURNAL_UUID_CHARS];
+static TaskHandle_t worker;
+static api_status status;
+/* `limits.dashboard_cache_max_age_seconds` as the server last stated it, or 0
+ * for a server that stated nothing. The panel gets its own copy for the staleness
+ * mark; this one sets how often the worker goes and fetches a fresh snapshot. */
+static unsigned cache_max_age_s;
+/* A pending detail request. Written by the display task, read by the worker;
+ * `pending` is the handover, so the strings are complete before it is set. */
+static char entity_type[32], entity_id[40];
+static atomic_bool entity_pending;
+static atomic_bool history_pending;
+static char session_id_wanted[40];
+static atomic_bool session_pending;
+
+static void auth_load(void) {
+    nvs_handle_t n;if(nvs_open("notebook",NVS_READWRITE,&n)!=ESP_OK)return;
+    size_t size=sizeof(installation);
+    if(nvs_get_str(n,"install",installation,&size)!=ESP_OK){
+        journal_uuid(installation,memo_queue_random);nvs_set_str(n,"install",installation);nvs_commit(n);
+    }
+    size=sizeof(credential);if(nvs_get_str(n,"credential",credential,&size)!=ESP_OK)credential[0]=0;
+    nvs_close(n);
+}
+
+static void auth_header(esp_http_client_handle_t client) {
+    if(!credential[0])return;
+    char value[80];
+    snprintf(value,sizeof(value),"Bearer %s",credential);
+    esp_http_client_set_header(client,"Authorization",value);memset(value,0,sizeof(value));
+}
+
+static esp_err_t receive(esp_http_client_event_t *event) {
+    response_buffer *response = event->user_data;
+    if (event->event_id != HTTP_EVENT_ON_DATA || !event->data_len) return ESP_OK;
+    if (response->used + (size_t)event->data_len >= response->capacity) {
+        response->overflow = true;
+        return ESP_FAIL;
+    }
+    memcpy(response->data + response->used, event->data, event->data_len);
+    response->used += event->data_len;
+    response->data[response->used] = 0;
+    return ESP_OK;
+}
+
+/* One client for the worker's whole life, instead of one per request.
+ *
+ * A TLS connection is expensive to establish and cheap to keep: the handshake
+ * verifies the certificate chain and agrees a key, several hundred milliseconds
+ * of arithmetic, and it was being paid again for every single call. With one
+ * handle the connection stays open across requests, so a pass over eight
+ * sessions performs one handshake instead of sixteen. That is not only faster —
+ * the arithmetic is the most power-hungry thing the device does outside
+ * recording, and it was doing it dozens of times per sync.
+ *
+ * The buffer is static because the event handler is bound to it at creation
+ * time and there is no way to change it afterwards. Safe: only the worker task
+ * ever calls this. */
+static esp_http_client_handle_t shared;
+static response_buffer shared_response;
+
+/* Anything a request may have left behind must go, or a GET would inherit the
+ * body and content type of the POST before it. */
+static void reset_request(esp_http_client_handle_t client, bool has_body) {
+    if (has_body) esp_http_client_set_header(client, "Content-Type", "application/json");
+    else {
+        esp_http_client_delete_header(client, "Content-Type");
+        esp_http_client_set_post_field(client, NULL, 0);
+    }
+}
+
+static bool call(esp_http_client_method_t method, const char *path,
+                 const char *request, char *body, size_t capacity, int *http) {
+    char url[API_URL_MAX];
+    int length = snprintf(url, sizeof(url), "%s%s", base, path);
+    if (length <= 0 || length >= (int)sizeof(url)) return false;
+    shared_response = (response_buffer){.data=body, .capacity=capacity};
+    body[0] = 0;
+    esp_http_client_config_t config = {
+        .url = url,
+        .method = method,
+        .timeout_ms = 20000,
+        .event_handler = receive,
+        .user_data = &shared_response,
+        .buffer_size = 1024,
+        .buffer_size_tx = 1024,
+        /* Verify the server against the built-in root store. Attached
+         * unconditionally: it is ignored for http:// and cannot be forgotten
+         * for https://, which is the direction the mistake would go. There is
+         * deliberately no way to skip verification — a bearer credential and
+         * recorded audio must never travel on an unverified connection, and a
+         * switch for it would eventually be left on. */
+        .crt_bundle_attach = esp_crt_bundle_attach,
+        /* Together with the long-lived handle below, this is what actually
+         * keeps the connection: the flag alone reuses nothing while a handle is
+         * created and destroyed per request. */
+        .keep_alive_enable = true,
+    };
+    bool first_use = !shared;
+    if (!shared) {
+        shared = esp_http_client_init(&config);
+        if (!shared) return false;
+        /* Set once: these headers belong to every request the device makes. */
+        esp_http_client_set_header(shared, "Accept", "application/json");
+        esp_http_client_set_header(shared, "X-Smart-Notebook-Contract", API_CONTRACT);
+    } else if (esp_http_client_set_url(shared, url) != ESP_OK) {
+        memset(url, 0, sizeof(url));
+        return false;
+    }
+    esp_http_client_set_method(shared, method);
+    /* Re-applied per request rather than once: the credential does not exist
+     * yet when the first call goes out during enrollment. */
+    auth_header(shared);
+    reset_request(shared, request != NULL);
+    if (request) esp_http_client_set_post_field(shared, request, strlen(request));
+
+    esp_err_t result = esp_http_client_perform(shared);
+    if (result != ESP_OK) {
+        /* A broken connection must not be carried into the next request, and a
+         * response the buffer could not hold leaves the stream at an unknown
+         * position. Both are resolved by starting over. */
+        bool was_reused = !first_use;
+        esp_http_client_cleanup(shared);
+        shared = NULL;
+        /* One retry, and only on a connection we had inherited from an earlier
+         * request. Keeping a connection open means the other end may close it
+         * while nothing is happening — a proxy idle timeout is normal, not a
+         * fault — and the device only finds out by trying. Reporting that as a
+         * failed request would turn routine housekeeping into alarming log
+         * lines and, worse, into a snapshot the panel never receives. A request
+         * that fails on a freshly built connection is a real failure and is
+         * reported as one. */
+        if (was_reused && !shared_response.overflow) {
+            ESP_LOGD("api", "connection was closed while idle; reconnecting");
+            return call(method, path, request, body, capacity, http);
+        }
+        *http = 0;
+        memset(url, 0, sizeof(url));
+        return false;
+    }
+    *http = esp_http_client_get_status_code(shared);
+    memset(url, 0, sizeof(url));
+    return !shared_response.overflow;
+}
+
+static bool string_is(cJSON *object, const char *name, const char *expected) {
+    cJSON *value = cJSON_GetObjectItemCaseSensitive(object, name);
+    return cJSON_IsString(value) && strcmp(value->valuestring, expected) == 0;
+}
+
+static bool boolean_is(cJSON *object, const char *name, bool expected) {
+    cJSON *value = cJSON_GetObjectItemCaseSensitive(object, name);
+    return cJSON_IsBool(value) && cJSON_IsTrue(value) == expected;
+}
+
+static bool server_available(cJSON *root) {
+    return string_is(root, "status", "ready") || string_is(root, "status", "degraded");
+}
+
+static bool validate_capabilities(const char *text) {
+    cJSON *root = cJSON_Parse(text);
+    cJSON *contract = cJSON_GetObjectItemCaseSensitive(root, "contract");
+    cJSON *features = cJSON_GetObjectItemCaseSensitive(root, "features");
+    cJSON *profiles = cJSON_GetObjectItemCaseSensitive(root, "audio_profiles");
+    cJSON *limits = cJSON_GetObjectItemCaseSensitive(root, "limits");
+    cJSON *profile = cJSON_IsArray(profiles) ? cJSON_GetArrayItem(profiles, 0) : NULL;
+    bool valid = cJSON_IsObject(root) && server_available(root) &&
+        cJSON_IsObject(contract) && string_is(contract, "current", API_CONTRACT) &&
+        cJSON_IsObject(features) && boolean_is(features, "audio_upload", true) &&
+        boolean_is(features, "session_recovery", true) &&
+        cJSON_IsObject(profile) && string_is(profile, "mime_type", "audio/mp4") &&
+        string_is(profile, "container", "mp4") && string_is(profile, "codec", "aac-lc") &&
+        cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(profile, "sample_rate_hz")) == 48000 &&
+        cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(profile, "channels")) == 1 &&
+        cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(profile, "max_chunk_bytes")) > 0 &&
+        cJSON_IsObject(limits) &&
+        cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(limits, "request_timeout_seconds")) > 0;
+    /* Not part of the gate: a server that states no cache limit is still a
+     * valid server, the device just falls back to its own. Anything absent,
+     * negative or absurdly large counts as unstated rather than being clamped,
+     * so a malformed value cannot silently shorten the window. */
+    if (valid) {
+        double max_age = cJSON_GetNumberValue(
+            cJSON_GetObjectItemCaseSensitive(limits, "dashboard_cache_max_age_seconds"));
+        cache_max_age_s = max_age > 0 && max_age < 604800 ? (unsigned)max_age : 0;
+        screen_snapshot_cache_limit(cache_max_age_s);
+    }
+    cJSON_Delete(root);
+    return valid;
+}
+
+static bool gate(const char *path) {
+    char *body = malloc(API_RESPONSE_MAX);
+    if (!body) return false;
+    int http = 0;
+    bool ok = call(HTTP_METHOD_GET, path, NULL, body, API_RESPONSE_MAX, &http) &&
+              http == 200 && validate_capabilities(body);
+    status.last_http = http;
+    memset(body, 0, API_RESPONSE_MAX);
+    free(body);
+    return ok;
+}
+
+static bool enroll_if_needed(void) {
+    if(credential[0])return true;
+    nvs_handle_t n;if(nvs_open("notebook",NVS_READWRITE,&n)!=ESP_OK)return false;
+    char code[201]={0};size_t size=sizeof(code);
+    if(nvs_get_str(n,"enroll",code,&size)!=ESP_OK){nvs_close(n);return true;}
+    cJSON *request=cJSON_CreateObject();cJSON_AddStringToObject(request,"enrollment_code",code);
+    cJSON_AddStringToObject(request,"client_installation_id",installation);
+    cJSON_AddStringToObject(request,"device_model","waveshare-esp32-s3-epaper-3.97");
+    cJSON_AddStringToObject(request,"firmware_version",MEMO_FIRMWARE);
+    char *json=cJSON_PrintUnformatted(request);cJSON_Delete(request);char *body=malloc(API_RESPONSE_MAX);int http=0;bool ok=false;
+    if(json&&body&&call(HTTP_METHOD_POST,"/api/client/v1/installations/enroll",json,body,API_RESPONSE_MAX,&http)&&http==200){
+        cJSON *root=cJSON_Parse(body);cJSON *token=cJSON_GetObjectItemCaseSensitive(root,"credential");
+        if(cJSON_IsString(token)&&strlen(token->valuestring)==64){
+            strcpy(credential,token->valuestring);
+            esp_err_t saved=nvs_set_str(n,"credential",credential);
+            esp_err_t erased=nvs_erase_key(n,"enroll");
+            ok=saved==ESP_OK&&(erased==ESP_OK||erased==ESP_ERR_NVS_NOT_FOUND)&&nvs_commit(n)==ESP_OK;
+        }cJSON_Delete(root);
+    }
+    if(json){memset(json,0,strlen(json));cJSON_free(json);}if(body){memset(body,0,API_RESPONSE_MAX);free(body);}memset(code,0,sizeof(code));nvs_close(n);status.last_http=http;
+    return ok;
+}
+
+/* Latch the queue counts and let the panel redraw them. `screen_status` only
+ * stores the values; a screen message is what actually paints them, so an
+ * upload that empties the queue would otherwise leave a stale badge on the
+ * panel until the next recording. */
+static void publish_queue_status(void) {
+    memo_queue_status queued = memo_queue_get();
+    screen_status(queued.ready, queued.attention, queued.space_low);
+    screen_status_storage_block(queued.space_block);
+    if (!recorder_busy()) screen_memo(SCREEN_READY, 0);
+}
+
+static void fetch_dashboard(void) {
+    char *body=malloc(API_RESPONSE_MAX);int http=0;
+    if(!body){ESP_LOGW("dashboard","no memory for the response");return;}
+    /* Every other fetch says what happened; this one only ever spoke when the
+     * request had already succeeded. A failed call or a non-200 left no trace
+     * at all, which is why an empty panel could not be told apart from a panel
+     * nobody had tried to fill. */
+    bool reached=call(HTTP_METHOD_GET,"/api/client/v1/dashboard?surface=esp32_epaper",NULL,body,API_RESPONSE_MAX,&http);
+    status.last_http=http;
+    /* `reached=0` together with `http=200` is not a contradiction and cost an
+     * hour on 6 September: the server answered, and the transfer then failed on
+     * this side. The overwhelmingly likely cause is the response outgrowing
+     * API_RESPONSE_MAX — the event handler returns ESP_FAIL on overflow, which
+     * aborts the perform after the status line has already been read. The same
+     * limit already broke the session list at 24 entries. So the overflow is
+     * named outright instead of leaving two numbers that look impossible. */
+    if(!reached||http!=200)
+        ESP_LOGW("dashboard","snapshot fetch failed: reached=%d http=%d overflow=%d limit=%d",
+                 reached?1:0,http,shared_response.overflow?1:0,API_RESPONSE_MAX);
+    if(reached&&http==200){
+        cJSON *root=cJSON_Parse(body);cJSON *schema=cJSON_GetObjectItemCaseSensitive(root,"schema_version");
+        cJSON *sections=cJSON_GetObjectItemCaseSensitive(root,"sections");
+        if(cJSON_IsString(schema)&&strcmp(schema->valuestring,"1")==0&&cJSON_IsArray(sections)){
+            ESP_LOGI("dashboard","snapshot accepted: sections=%d",cJSON_GetArraySize(sections));
+            screen_snapshot_received(body, cJSON_GetArraySize(sections) == 0);
+            /* Recording is local truth and owns the panel while it runs. A
+             * snapshot that arrives mid-recording is accepted but not drawn;
+             * the recorder returns to READY itself when the memo is stored. */
+            if(recorder_busy()) ESP_LOGI("dashboard","render deferred: recording active");
+            else screen_show(SCREEN_READY,NULL);
+        } else ESP_LOGW("dashboard","snapshot rejected");
+        cJSON_Delete(root);
+    }
+    memset(body,0,API_RESPONSE_MAX);free(body);
+}
+
+static bool response_matches_session(const char *text, const char *session_id) {
+    cJSON *root = cJSON_Parse(text);
+    cJSON *state = cJSON_GetObjectItemCaseSensitive(root, "state");
+    bool valid = cJSON_IsObject(root) && string_is(root, "client_session_id", session_id) &&
+        cJSON_IsString(state) && cJSON_HasObjectItem(root, "device_metadata") &&
+        cJSON_HasObjectItem(root, "capture_mode") && cJSON_HasObjectItem(root, "created_at") &&
+        cJSON_HasObjectItem(root, "updated_at");
+    cJSON_Delete(root);
+    return valid;
+}
+
+static bool create_session(const journal_session *session) {
+    cJSON *request = cJSON_CreateObject();
+    cJSON *metadata = cJSON_CreateObject();
+    if (!request || !metadata) { cJSON_Delete(request); cJSON_Delete(metadata); return false; }
+    cJSON_AddStringToObject(request, "client_session_id", session->session_id);
+    cJSON_AddStringToObject(request, "capture_mode", session->capture_mode);
+    cJSON_AddStringToObject(request, "source_type", "esp32_epaper_audio");
+    cJSON_AddStringToObject(metadata, "client", "waveshare-esp32-s3-epaper-3.97");
+    cJSON_AddStringToObject(metadata, "firmware_version", MEMO_FIRMWARE);
+    cJSON_AddNumberToObject(metadata, "sequence_base", 0);
+    cJSON_AddItemToObject(request, "device_metadata", metadata);
+    char *json = cJSON_PrintUnformatted(request);
+    cJSON_Delete(request);
+    if (!json) return false;
+    char *body = malloc(API_RESPONSE_MAX);
+    if (!body) { cJSON_free(json); return false; }
+    int http = 0;
+    bool ok = call(HTTP_METHOD_POST, "/api/client/v1/sessions", json,
+                   body, API_RESPONSE_MAX, &http) && http == 201 &&
+              response_matches_session(body, session->session_id);
+    status.last_http = http;
+    memset(json, 0, strlen(json));
+    cJSON_free(json);
+    memset(body, 0, API_RESPONSE_MAX);
+    free(body);
+    return ok;
+}
+
+static bool mark_chunk(journal_session *session, journal_chunk *chunk,
+                       chunk_state state, const char *reason) {
+    char payload[JOURNAL_MAX_PAYLOAD];
+    int length = journal_build_chunk_state(payload, sizeof(payload), chunk->sequence, state, reason);
+    if (length <= 0 || !journal_append(session, payload, (size_t)length)) return false;
+    /* The card is written first and the counters follow, both here and nowhere
+     * else. A state that did not reach the journal is not counted, and a state
+     * that did is counted exactly once — including the departure from whatever
+     * the segment was before. */
+    memo_queue_note_transition(chunk->state, state);
+    chunk->state = state;
+    return true;
+}
+
+static bool ack_matches(const char *text, const journal_session *session,
+                        const journal_chunk *chunk) {
+    cJSON *root = cJSON_Parse(text);
+    cJSON *remote = cJSON_GetObjectItemCaseSensitive(root, "chunk");
+    bool valid = cJSON_IsObject(root) && boolean_is(root, "durable_ack", true) &&
+        string_is(root, "client_session_id", session->session_id) && cJSON_IsObject(remote) &&
+        string_is(remote, "client_chunk_id", chunk->chunk_id) &&
+        string_is(remote, "content_hash", chunk->plain_sha256) &&
+        cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(remote, "sequence")) == chunk->sequence &&
+        cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(remote, "byte_length")) == chunk->plain_length;
+    cJSON_Delete(root);
+    return valid;
+}
+
+static bool stream_part(esp_http_client_handle_t client, const void *data, size_t length) {
+    const char *cursor = data;
+    while (length) {
+        int written = esp_http_client_write(client, cursor, length);
+        if (written <= 0) return false;
+        cursor += written;
+        length -= (size_t)written;
+    }
+    return true;
+}
+
+/* The uploader keeps its own connection, separate from the one the JSON calls
+ * share, because a chunk is streamed with open/write rather than performed in
+ * one go. Same reason, same gain: measured on the device, a memo of fourteen
+ * segments spent 48 seconds uploading, of which roughly three seconds per
+ * segment were the handshake alone. For the multi-hour mode in H5 — 360
+ * segments in an hour — that difference is the whole feature. */
+static esp_http_client_handle_t uploader;
+
+static bool upload_attempt(const journal_session *session, const journal_chunk *chunk,
+                           char *body, size_t capacity, int *http, bool *reused) {
+    char path[128], url[API_URL_MAX], file_path[96], boundary[64], preamble[1400];
+    snprintf(path, sizeof(path), "/api/client/v1/sessions/%s/audio-chunks", session->session_id);
+    if (snprintf(url, sizeof(url), "%s%s", base, path) >= (int)sizeof(url)) return false;
+    snprintf(file_path, sizeof(file_path), "%s/%s", session->directory, chunk->file);
+    snprintf(boundary, sizeof(boundary), "sn-%s", chunk->chunk_id);
+#define FIELD(name, format, value) "--%s\r\nContent-Disposition: form-data; name=\"" name "\"\r\n\r\n" format "\r\n"
+    int prefix = snprintf(preamble, sizeof(preamble),
+        FIELD("sequence", "%u", chunk->sequence)
+        FIELD("client_chunk_id", "%s", chunk->chunk_id)
+        FIELD("duration_ms", "%llu", (unsigned long long)chunk->duration_ms)
+        FIELD("source_start_ms", "%llu", (unsigned long long)chunk->source_start_ms)
+        FIELD("source_end_ms", "%llu", (unsigned long long)chunk->source_end_ms)
+        FIELD("content_hash", "%s", chunk->plain_sha256)
+        FIELD("codec", "%s", "aac-lc")
+        FIELD("sample_rate_hz", "%u", 48000u)
+        FIELD("channels", "%u", 1u)
+        "--%s\r\nContent-Disposition: form-data; name=\"audio\"; filename=\"segment.m4a\"\r\nContent-Type: audio/mp4\r\n\r\n",
+        boundary, chunk->sequence, boundary, chunk->chunk_id,
+        boundary, (unsigned long long)chunk->duration_ms,
+        boundary, (unsigned long long)chunk->source_start_ms,
+        boundary, (unsigned long long)chunk->source_end_ms,
+        boundary, chunk->plain_sha256, boundary, "aac-lc", boundary, 48000u,
+        boundary, 1u, boundary);
+#undef FIELD
+    if (prefix <= 0 || prefix >= (int)sizeof(preamble)) return false;
+    char ending[80];
+    int suffix = snprintf(ending, sizeof(ending), "\r\n--%s--\r\n", boundary);
+    if (suffix <= 0 || suffix >= (int)sizeof(ending)) return false;
+    FILE *audio = fopen(file_path, "rb");
+    if (!audio) return false;
+    char content_type[96];
+    snprintf(content_type, sizeof(content_type), "multipart/form-data; boundary=%s", boundary);
+    esp_http_client_config_t config = {.url=url, .method=HTTP_METHOD_POST, .timeout_ms=20000,
+        .buffer_size=1024, .buffer_size_tx=1024,
+        /* The upload path carries the audio itself and needs the same root
+         * store as every other request. Two client configurations is exactly
+         * how one of them ends up without verification. */
+        .crt_bundle_attach = esp_crt_bundle_attach,
+        .keep_alive_enable = true};
+    *reused = uploader != NULL;
+    if (!uploader) {
+        uploader = esp_http_client_init(&config);
+        if (!uploader) { fclose(audio); return false; }
+        esp_http_client_set_header(uploader, "Accept", "application/json");
+        esp_http_client_set_header(uploader, "X-Smart-Notebook-Contract", API_CONTRACT);
+    } else if (esp_http_client_set_url(uploader, url) != ESP_OK) {
+        fclose(audio);
+        esp_http_client_cleanup(uploader);
+        uploader = NULL;
+        return false;
+    }
+    esp_http_client_handle_t client = uploader;
+    esp_http_client_set_method(client, HTTP_METHOD_POST);
+    auth_header(client);
+    /* The boundary is derived from the chunk id, so this header genuinely
+     * changes per segment and must be set every time. */
+    esp_http_client_set_header(client, "Content-Type", content_type);
+    int64_t total = prefix + (int64_t)chunk->plain_length + suffix;
+    bool ok = total <= INT_MAX && esp_http_client_open(client, (int)total) == ESP_OK &&
+              stream_part(client, preamble, (size_t)prefix);
+    uint8_t buffer[1024];
+    uint64_t sent = 0;
+    while (ok && sent < chunk->plain_length) {
+        size_t wanted = chunk->plain_length - sent > sizeof(buffer) ? sizeof(buffer) : (size_t)(chunk->plain_length - sent);
+        size_t got = fread(buffer, 1, wanted, audio);
+        if (got != wanted || !stream_part(client, buffer, got)) ok = false;
+        sent += got;
+    }
+    if (ok) ok = stream_part(client, ending, (size_t)suffix);
+    fclose(audio);
+    body[0] = 0;
+    size_t used = 0;
+    /* A connection may only be kept if the response was read to its end.
+     * Stopping early leaves the rest of the body in the socket, and the next
+     * request would read it as its own reply. */
+    bool drained = false;
+    if (ok && esp_http_client_fetch_headers(client) >= 0) {
+        *http = esp_http_client_get_status_code(client);
+        while (used + 1 < capacity) {
+            int got = esp_http_client_read(client, body + used, capacity - used - 1);
+            if (got < 0) { ok = false; break; }
+            if (!got) { drained = true; break; }
+            used += (size_t)got;
+        }
+        body[used] = 0;
+    } else { *http = 0; ok = false; }
+    if (!ok || !drained) {
+        esp_http_client_cleanup(uploader);
+        uploader = NULL;
+    }
+    memset(buffer, 0, sizeof(buffer));
+    return ok && drained;
+}
+
+static bool upload_request(const journal_session *session, const journal_chunk *chunk,
+                           char *body, size_t capacity, int *http) {
+    bool reused = false;
+    if (upload_attempt(session, chunk, body, capacity, http, &reused)) return true;
+    /* Same reasoning as the JSON path: a connection the other side closed while
+     * nothing was being uploaded is routine, and finding out costs one failed
+     * attempt. Only a reused connection earns the second try — a failure on a
+     * fresh one is a real failure and must be reported as such, or a genuinely
+     * broken upload would retry forever without ever being counted. */
+    if (!reused) return false;
+    return upload_attempt(session, chunk, body, capacity, http, &reused);
+}
+
+static bool reconciliation_has(const journal_session *session, const journal_chunk *chunk) {
+    char path[128];
+    snprintf(path, sizeof(path), "/api/client/v1/sessions/%s/reconciliation", session->session_id);
+    char *body = malloc(API_RESPONSE_MAX);
+    if (!body) return false;
+    int http = 0;
+    bool found = false;
+    if (call(HTTP_METHOD_GET, path, NULL, body, API_RESPONSE_MAX, &http) && http == 200) {
+        cJSON *root = cJSON_Parse(body);
+        cJSON *chunks = cJSON_GetObjectItemCaseSensitive(root, "chunks");
+        cJSON *item;
+        cJSON_ArrayForEach(item, chunks) {
+            if (cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(item, "sequence")) == chunk->sequence &&
+                string_is(item, "client_chunk_id", chunk->chunk_id) &&
+                string_is(item, "content_hash", chunk->plain_sha256) &&
+                boolean_is(item, "durable_ack", true)) { found = true; break; }
+        }
+        cJSON_Delete(root);
+    }
+    status.last_http = http;
+    memset(body, 0, API_RESPONSE_MAX); free(body);
+    return found;
+}
+
+static bool upload_chunk(journal_session *session, journal_chunk *chunk) {
+    if (!mark_chunk(session, chunk, CHUNK_UPLOADING, "")) return false;
+    char *body = malloc(API_RESPONSE_MAX);
+    if (!body) { mark_chunk(session, chunk, CHUNK_READY, ""); return false; }
+    int http = 0;
+    bool request_ok = upload_request(session, chunk, body, API_RESPONSE_MAX, &http);
+    bool durable = request_ok && http == 201 && ack_matches(body, session, chunk);
+    if (!durable && reconciliation_has(session, chunk)) {
+        durable = true;
+        status.reconciled++;
+    }
+    status.last_http = http;
+    bool persisted;
+    if (durable) {
+        persisted = mark_chunk(session, chunk, CHUNK_ACKED, "");
+        if (persisted) status.uploads_acked++;
+    } else if (http == 409) {
+        persisted = mark_chunk(session, chunk, CHUNK_ATTENTION, "server_conflict");
+        status.uploads_failed++;
+    } else {
+        persisted = mark_chunk(session, chunk, CHUNK_READY, "");
+        status.uploads_failed++;
+    }
+    memset(body, 0, API_RESPONSE_MAX); free(body);
+    return durable && persisted;
+}
+
+static bool finish_session(journal_session *session) {
+    char path[128], request[128];
+    snprintf(path, sizeof(path), "/api/client/v1/sessions/%s/finish", session->session_id);
+    snprintf(request, sizeof(request), "{\"final_sequence\":%u,\"final_source_end_ms\":%llu}",
+             session->final_sequence, (unsigned long long)session->final_source_end_ms);
+    char *body = malloc(API_RESPONSE_MAX);
+    if (!body) return false;
+    int http = 0;
+    bool ok = call(HTTP_METHOD_POST, path, request, body, API_RESPONSE_MAX, &http) && http == 200;
+    if (ok) {
+        cJSON *root = cJSON_Parse(body);
+        cJSON *reconciliation = cJSON_GetObjectItemCaseSensitive(root, "reconciliation");
+        ok = cJSON_IsObject(root) && cJSON_IsObject(reconciliation) &&
+             string_is(reconciliation, "client_session_id", session->session_id) &&
+             boolean_is(reconciliation, "upload_complete", true);
+        cJSON_Delete(root);
+    }
+    status.last_http = http;
+    if (ok) status.finishes_ok++;
+    memset(body, 0, API_RESPONSE_MAX); free(body);
+    return ok;
+}
+
+/* The server accepted the finish but reports the upload as incomplete: it is
+ * missing segments this device considers delivered.
+ *
+ * A durable ACK is a promise the server made. If the server later says it does
+ * not have that segment, the promise did not survive on its side — a restored
+ * backup, a wiped store, a lost write. The device still holds the audio, since
+ * nothing is deleted before the retention policy allows it, so the honest
+ * response is to send it again rather than to insist on an acknowledgement the
+ * other side no longer honours. Without this the two sides deadlock silently:
+ * the device never re-uploads because the segment is acked, the server never
+ * completes because the segment is missing, and the session is re-created on
+ * every sync forever.
+ *
+ * Only sequences the server explicitly lists as missing are demoted, and only
+ * from ACKED — a segment in any other state is already on its way. Returns the
+ * number reset, so the caller can tell "nothing to do" from "work scheduled". */
+static unsigned resync_missing(journal_session *session) {
+    char path[128];
+    snprintf(path, sizeof(path), "/api/client/v1/sessions/%s/reconciliation", session->session_id);
+    char *body = malloc(API_RESPONSE_MAX);
+    if (!body) return 0;
+    int http = 0;
+    unsigned reset = 0, unavailable = 0;
+    if (call(HTTP_METHOD_GET, path, NULL, body, API_RESPONSE_MAX, &http) && http == 200) {
+        cJSON *root = cJSON_Parse(body);
+        cJSON *missing = cJSON_GetObjectItemCaseSensitive(root, "missing_sequences");
+        cJSON *item;
+        cJSON_ArrayForEach(item, missing) {
+            if (!cJSON_IsNumber(item)) continue;
+            unsigned sequence = (unsigned)item->valuedouble;
+            journal_chunk *chunk = journal_find(session, sequence);
+            if (!chunk || chunk->state != CHUNK_ACKED) continue;
+            /* Demotion only makes sense while the audio is still here to send.
+             * Once the retention release has removed it, `ready` is a promise
+             * the device cannot keep: the next boot finds no file and marks the
+             * segment `attention`, turning a correctly delivered and released
+             * recording into a permanent warning. That is what happened on
+             * 6 September when the proxy was pointed at a backend that had never
+             * seen these sessions — 66 segments, every one of them already
+             * delivered and deliberately deleted. Kept acknowledged and counted
+             * apart instead; the disagreement is real, but it is not this
+             * device's to resolve by destroying its own history. */
+            char audio[128];
+            snprintf(audio, sizeof(audio), "%s/%08u.M4A", session->directory, chunk->sequence);
+            struct stat info;
+            if (stat(audio, &info) != 0) { unavailable++; continue; }
+            if (!mark_chunk(session, chunk, CHUNK_READY, "server_missing")) break;
+            reset++;
+        }
+        cJSON_Delete(root);
+    }
+    status.last_http = http;
+    if (unavailable) {
+        status.resync_impossible += unavailable;
+        ESP_LOGW("api", "server missing %u acknowledged segments whose audio was already released; "
+                        "kept acknowledged", unavailable);
+    }
+    if (reset) {
+        status.resynced += reset;
+        ESP_LOGW("api", "server missing %u acknowledged segments; queued again", reset);
+    }
+    memset(body, 0, API_RESPONSE_MAX); free(body);
+    return reset;
+}
+
+static bool transfer_session(journal_session *session) {
+    for (unsigned i = 0; i < session->chunk_count; i++) {
+        journal_chunk *chunk = &session->chunks[i];
+        if (chunk->state != CHUNK_READY) continue;
+        if (recorder_busy() || !upload_chunk(session, chunk)) return false;
+    }
+    if (!session->finished) return true;
+    for (unsigned i = 0; i < session->chunk_count; i++)
+        if (session->chunks[i].state != CHUNK_ACKED) return false;
+    if (finish_session(session)) return true;
+    /* Everything is acknowledged locally, yet the finish did not complete. Ask
+     * the server what it is actually missing; the next pass sends it. */
+    resync_missing(session);
+    return false;
+}
+
+static bool memo_name(const char *name) {
+    return strlen(name) == 8 && strspn(name, "0123456789abcdefABCDEF") == 8;
+}
+
+/* One pass covers at most SESSION_WINDOW directories. The window start rotates
+ * between passes, so a card holding more sessions than one pass can carry is
+ * still covered completely instead of starving everything behind the first
+ * SESSION_WINDOW entries. */
+/* Bounded per pass, and the bound is about time, not memory: every request now
+ * carries a TLS handshake of roughly three seconds, so a window of 32 sessions
+ * meant a pass of several minutes. The window start rotates, so everything is
+ * still covered — just spread over more passes, with the display responsive in
+ * between. */
+#define SESSION_WINDOW 8
+static unsigned session_offset;
+
+/* Sessions that are finished, whose every segment carries a persisted durable
+ * ACK, and whose finish the server accepted in this boot. Without this the pass
+ * re-created and re-finished every completed session on the card on every sync:
+ * one POST per session per pass, growing with the recording history and
+ * counting as a failure each time the server refused the repeat.
+ *
+ * Deliberately RAM only. Whether the server accepted the finish is not
+ * persisted anywhere, and inventing a journal record for it would be inventing
+ * backend semantics. After a restart every session is therefore offered once
+ * more — idempotent on the server, bounded to a single pass, and the honest
+ * behaviour when the device cannot know what the server has.
+ *
+ * Sized to the card, not to the window. It once held SESSION_WINDOW entries,
+ * which looked reasonable and was not: the pass walks the card in a rotating
+ * window of eight, so after the first eight sessions were marked the list was
+ * full and every later session could never be marked at all. With 32 sessions on
+ * the card that meant 24 of them were re-created and re-finished on every single
+ * pass, forever — not once after a restart, as the note above claims. Sixty-four
+ * entries cost about 2.4 KB and cover a realistic card. */
+#define SETTLED_MAX 64
+static char settled[SETTLED_MAX][JOURNAL_UUID_CHARS];
+static unsigned settled_count;
+static unsigned settled_next;   /* FIFO cursor once the list is full */
+
+static bool is_settled(const char *session_id) {
+    for (unsigned i = 0; i < settled_count; i++)
+        if (strcmp(settled[i], session_id) == 0) return true;
+    return false;
+}
+
+/* Bounded, and when full it evicts the oldest rather than refusing the newest.
+ * Refusing was the worse of the two: it pinned the first eight sessions and left
+ * every later one permanently unmarked, which is precisely the set the rotating
+ * window keeps coming back to. A forgotten session costs one redundant pass; a
+ * never-markable session costs one every pass for the life of the card. */
+static void mark_settled(const char *session_id) {
+    if (is_settled(session_id)) return;
+    if (settled_count < SETTLED_MAX) {
+        snprintf(settled[settled_count++], JOURNAL_UUID_CHARS, "%s", session_id);
+        return;
+    }
+    snprintf(settled[settled_next], JOURNAL_UUID_CHARS, "%s", session_id);
+    settled_next = (settled_next + 1) % SETTLED_MAX;
+}
+
+/* Nothing left to do: finished locally and every segment durably acknowledged.
+ * A session that is merely finished still has segments to upload. */
+static bool session_complete(const journal_session *session) {
+    if (!session->finished) return false;
+    for (unsigned i = 0; i < session->chunk_count; i++)
+        if (session->chunks[i].state != CHUNK_ACKED) return false;
+    return true;
+}
+
+/* --- local retention ------------------------------------------------------ */
+
+/* True while any of this session's audio is still on the card. Once the files
+ * are gone there is nothing to release, so the check costs no request. */
+static bool audio_present(const journal_session *session) {
+    for (unsigned i = 0; i < session->chunk_count; i++) {
+        char path[96];
+        struct stat info;
+        snprintf(path, sizeof(path), "%s/%s", session->directory, session->chunks[i].file);
+        if (stat(path, &info) == 0) return true;
+    }
+    return false;
+}
+
+/* Does the server itself say it holds every segment of this session?
+ *
+ * Answers only "yes" on an explicit, well-formed confirmation: HTTP 200, the
+ * session named back, and `missing_sequences` present and empty. A malformed
+ * body, an unreachable server, a missing field — all count as "no". The caller
+ * uses this to gate deletion, so the safe answer must be the default one. */
+static bool reconciliation_complete(const journal_session *session) {
+    char path[128];
+    snprintf(path, sizeof(path), "/api/client/v1/sessions/%s/reconciliation", session->session_id);
+    char *body = malloc(API_RESPONSE_MAX);
+    if (!body) return false;
+    int http = 0;
+    bool complete = false;
+    if (call(HTTP_METHOD_GET, path, NULL, body, API_RESPONSE_MAX, &http) && http == 200) {
+        cJSON *root = cJSON_Parse(body);
+        cJSON *missing = cJSON_GetObjectItemCaseSensitive(root, "missing_sequences");
+        complete = cJSON_IsObject(root) &&
+                   string_is(root, "client_session_id", session->session_id) &&
+                   cJSON_IsArray(missing) && cJSON_GetArraySize(missing) == 0;
+        cJSON_Delete(root);
+    }
+    status.last_http = http;
+    memset(body, 0, API_RESPONSE_MAX);
+    free(body);
+    return complete;
+}
+
+/* Ask the server whether it has durably processed and stored this recording.
+ * `local_audio_release_allowed` is monotone and session-wide, and an absent
+ * field counts as false — a server that says nothing has released nothing. */
+static bool server_released(const journal_session *session) {
+    char path[128];
+    snprintf(path, sizeof(path), "/api/client/v1/sessions/%s", session->session_id);
+    char *body = malloc(API_RESPONSE_MAX);
+    if (!body) return false;
+    int http = 0;
+    bool allowed = false;
+    if (call(HTTP_METHOD_GET, path, NULL, body, API_RESPONSE_MAX, &http) && http == 200) {
+        cJSON *root = cJSON_Parse(body);
+        allowed = cJSON_IsObject(root) &&
+                  string_is(root, "client_session_id", session->session_id) &&
+                  boolean_is(root, "local_audio_release_allowed", true);
+        cJSON_Delete(root);
+    }
+    status.last_http = http;
+    memset(body, 0, API_RESPONSE_MAX);
+    free(body);
+    return allowed;
+}
+
+/* The only place in the firmware that removes a user's recording.
+ *
+ * Two independent conditions, never one: the server has released the session,
+ * and this device has itself confirmed that the session is closed and every
+ * segment carries a persisted durable ACK. The server may release; it may not
+ * order. A release for something that is not complete here is refused and made
+ * visible as `attention` rather than obeyed — on 6 September this device held
+ * valid ACKs for fourteen segments the server no longer had, and deleting on
+ * the strength of the other side's word alone would have lost them.
+ *
+ * Only the audio goes. The journal and the session's state stay, or the next
+ * scan would find an empty directory with no history. */
+static void release_audio(journal_session *session) {
+    if (!audio_present(session)) return;
+    if (!server_released(session)) return;
+
+    if (!session_complete(session)) {
+        /* Not obeyed, and not silent either: the two sides disagree about a
+         * recording, and that is exactly the state H1 requires to be visible. */
+        ESP_LOGW("api", "server released a session this device has not completed");
+        for (unsigned i = 0; i < session->chunk_count; i++) {
+            journal_chunk *chunk = &session->chunks[i];
+            if (chunk->state == CHUNK_ACKED) continue;
+            mark_chunk(session, chunk, CHUNK_ATTENTION, "release_mismatch");
+        }
+        status.release_refused++;
+        return;
+    }
+
+    /* Last check before the irreversible step, and deliberately a second
+     * question to the server rather than a second look at our own records.
+     *
+     * Both conditions above are about what this device believes: our ACKs, our
+     * finish. On 6 September that was not enough. Two sessions were uploaded,
+     * acknowledged, released and deleted — and the very next reconciliation
+     * reported both segments missing. The device had every local reason to
+     * delete and destroyed recordings that had not survived on the other side.
+     *
+     * So immediately before deleting, ask the reconciliation endpoint what the
+     * server actually holds. If it names any missing sequence, or the question
+     * cannot be answered at all, nothing is deleted. Silence is not consent:
+     * this is the one operation where an unreachable server must mean "keep". */
+    if (!reconciliation_complete(session)) {
+        ESP_LOGW("api", "release withheld: the server does not confirm holding every segment");
+        status.release_withheld++;
+        return;
+    }
+
+    unsigned removed = 0;
+    for (unsigned i = 0; i < session->chunk_count; i++) {
+        char path[96];
+        snprintf(path, sizeof(path), "%s/%s", session->directory, session->chunks[i].file);
+        if (unlink(path) == 0) removed++;
+    }
+    if (removed) {
+        status.released++;
+        memo_queue_update_space();
+        /* Counted and logged, never quietly: deleting a recording is the one
+         * irreversible thing this device does. */
+        ESP_LOGI("api", "server released a session; %u audio files deleted", removed);
+    }
+}
+
+static void create_local_sessions(void) {
+    DIR *directory = opendir(MEMO_ROOT);
+    if (!directory) return;
+    char names[SESSION_WINDOW][9];
+    unsigned count = 0, matching = 0;
+    struct dirent *entry;
+    while ((entry = readdir(directory))) {
+        if (!memo_name(entry->d_name)) continue;
+        if (matching++ < session_offset) continue;
+        if (count == SESSION_WINDOW) continue;
+        memcpy(names[count], entry->d_name, 8);
+        names[count++][8] = 0;
+    }
+    closedir(directory);
+    if (!count && matching) session_offset = 0; /* Sessions vanished under the offset. */
+    else if (matching > SESSION_WINDOW) {
+        session_offset = (session_offset + count) % matching;
+        ESP_LOGW("api", "session window: %u of %u sessions this pass; next start=%u",
+                 count, matching, session_offset);
+    } else session_offset = 0;
+    status.sessions_seen = count;
+    for (unsigned i = 0; i < count; i++) {
+        char path[64];
+        snprintf(path, sizeof(path), "%s/%s", MEMO_ROOT, names[i]);
+        journal_session *session = heap_caps_malloc(sizeof(journal_session), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!session) { status.replay_failed++; return; }
+        journal_session_init(session, path);
+        bool loaded = journal_replay(session) && session->session_id[0];
+        if (!loaded) {
+            /* Not a server problem: the directory holds no replayable journal,
+             * or none that names a session. Counted apart so a card full of
+             * pre-journal leftovers cannot look like a backend failure. */
+            status.replay_failed++;
+        } else if (is_settled(session->session_id)) {
+            status.settled_skipped++;
+            /* Settled means the server has the recording, not that it is done
+             * with it. The release comes later, when its processing chain has
+             * finished, so a settled session is exactly the one worth asking
+             * about — and it costs nothing once the audio is gone. */
+            release_audio(session);
+        } else if (!recorder_busy() && !session->finished && session->chunk_count == 0) {
+            /* A journal that names a session, holds no segment and has no end.
+             * Nothing can ever change that: a new memo gets its own UUID and
+             * writes its own directory, so this one will never gain a segment.
+             *
+             * It was still being offered on every pass, which created an empty
+             * session on the server each time — idempotent, so it looked
+             * harmless, but the server keeps it in `created` and the dashboard
+             * lists it under open sessions. A recording that never happened
+             * was showing up as a card, and since a session card now follows
+             * its own action it was one press away from an empty view.
+             *
+             * Counted rather than skipped in silence: a state with no way out
+             * is exactly the kind this device is supposed to name. The guard on
+             * `recorder_busy` keeps the live session out of it — that one has
+             * no segment yet either, and it is meant to be created early. */
+            status.abandoned++;
+        } else if (create_session(session)) {
+            status.creates_ok++;
+            if (transfer_session(session) && session_complete(session))
+                mark_settled(session->session_id);
+            release_audio(session);
+        } else {
+            status.creates_failed++;
+        }
+        free(session);
+        if (ulTaskNotifyTake(pdTRUE, 0)) break;
+    }
+}
+
+static void fetch_entity(void) {
+    if (!atomic_load(&entity_pending)) return;
+    char path[128];
+    snprintf(path, sizeof(path), "/api/client/v1/entities/%s/%s", entity_type, entity_id);
+    char *body = malloc(API_RESPONSE_MAX);
+    int http = 0;
+    bool ok = body && call(HTTP_METHOD_GET, path, NULL, body, API_RESPONSE_MAX, &http) &&
+              http == 200;
+    if (ok) {
+        /* The response must at least identify itself, or the detail view would
+         * show whatever arrived. */
+        cJSON *root = cJSON_Parse(body);
+        ok = cJSON_IsObject(root) && string_is(root, "id", entity_id) &&
+             string_is(root, "type", entity_type) &&
+             cJSON_HasObjectItem(root, "status");
+        cJSON_Delete(root);
+    }
+    status.last_http = http;
+    screen_entity_received(ok ? body : NULL);
+    ESP_LOGI("api", "entity fetch %s http=%d", ok ? "ok" : "failed", http);
+    if (body) { memset(body, 0, API_RESPONSE_MAX); free(body); }
+    atomic_store(&entity_pending, false);
+}
+
+/* The session list for the history view. Unlike the dashboard this is a plain
+ * array, so the only check is that it is one: a body of the wrong shape is
+ * reported as unavailable rather than drawn as an empty history, which would
+ * claim there are no recordings. */
+#define HISTORY_PAGE "12"
+
+static void fetch_history(void) {
+    if (!atomic_load(&history_pending)) return;
+    char *body = malloc(API_RESPONSE_MAX);
+    int http = 0;
+    /* A window, not the whole list. Entries run to roughly 520 bytes, so an
+     * unbounded history outgrows the receive buffer after a dozen recordings
+     * and keeps growing for the life of the device — which is exactly how this
+     * first showed up: 24 sessions came to 12 kB against an 8 kB buffer, and
+     * the view said the history was unavailable. The number of visible entries
+     * is a display decision and belongs here, not to the server. */
+    bool ok = body && call(HTTP_METHOD_GET,
+                           "/api/client/v1/sessions?limit=" HISTORY_PAGE, NULL,
+                           body, API_RESPONSE_MAX, &http) && http == 200;
+    if (ok) {
+        cJSON *root = cJSON_Parse(body);
+        ok = cJSON_IsArray(root);
+        cJSON_Delete(root);
+    }
+    status.last_http = http;
+    screen_history_received(ok ? body : NULL);
+    /* http=200 with a failed fetch means the body did not fit or was not an
+     * array; without that distinction an overflow reads like a server error. */
+    ESP_LOGI("api", "history fetch %s http=%d", ok ? "ok" : "failed", http);
+    if (body) { memset(body, 0, API_RESPONSE_MAX); free(body); }
+    atomic_store(&history_pending, false);
+}
+
+/* The dashboard of one past recording. Same envelope as the home dashboard, so
+ * the device renders it with the same code; the only check is the envelope
+ * itself, exactly as for the home snapshot. */
+static void fetch_session(void) {
+    if (!atomic_load(&session_pending)) return;
+    char path[128];
+    snprintf(path, sizeof(path), "/api/client/v1/sessions/%s/dashboard", session_id_wanted);
+    char *body = malloc(API_RESPONSE_MAX);
+    int http = 0;
+    bool ok = body && call(HTTP_METHOD_GET, path, NULL, body, API_RESPONSE_MAX, &http) &&
+              http == 200;
+    if (ok) {
+        cJSON *root = cJSON_Parse(body);
+        cJSON *sections = cJSON_GetObjectItemCaseSensitive(root, "sections");
+        ok = cJSON_IsObject(root) && string_is(root, "schema_version", "1") &&
+             cJSON_IsArray(sections);
+        cJSON_Delete(root);
+    }
+    status.last_http = http;
+    screen_session_received(ok ? body : NULL);
+    ESP_LOGI("api", "session dashboard %s http=%d", ok ? "ok" : "failed", http);
+    if (body) { memset(body, 0, API_RESPONSE_MAX); free(body); }
+    atomic_store(&session_pending, false);
+}
+
+static void synchronize(void) {
+    status.compatible = false;
+    if(!enroll_if_needed()){ESP_LOGW("api","device enrollment pending; http=%d",status.last_http);return;}
+    if (!gate("/api/client/capabilities") || !gate("/api/client/v1/contract")) {
+        status.gates_failed++;
+        ESP_LOGW("api", "contract gate failed; http=%d", status.last_http);
+        return;
+    }
+    status.compatible = true;
+    status.gates_ok++;
+    /* The dashboard comes first, before any housekeeping. What the user sees
+     * must not wait behind the session sweep: over TLS a pass costs seconds per
+     * request, and with a card full of recordings the panel stayed empty for
+     * minutes while the device was busy re-offering sessions nobody was waiting
+     * for. Housekeeping is the background job, not the display. */
+    fetch_dashboard();
+    /* Uploads change the local queue, so the ambient badges are latched before
+     * anything is drawn again and pushed once per pass afterwards. The display
+     * task drops an identical frame, so an unchanged queue costs no refresh. */
+    publish_queue_status();
+    create_local_sessions();
+    publish_queue_status();
+    ESP_LOGI("api", "sync complete: compatible=1 sessions=%u create_ok=%u create_failed=%u replay_failed=%u settled=%u abandoned=%u acked=%u failed=%u resynced=%u unresyncable=%u released=%u refused=%u withheld=%u finish=%u",
+             status.sessions_seen, status.creates_ok, status.creates_failed,
+             status.replay_failed, status.settled_skipped, status.abandoned,
+             status.uploads_acked, status.uploads_failed, status.resynced, status.resync_impossible,
+             status.released, status.release_refused, status.release_withheld,
+             status.finishes_ok);
+}
+
+/* Exponential backoff with jitter, bounded at both ends. The floor keeps a
+ * single transient failure from costing minutes; the ceiling keeps a server that
+ * is genuinely down from being asked every quarter minute for the rest of the
+ * day. The jitter matters less on one device than it will on several, but it
+ * costs nothing to spread the retries now rather than to remember later. */
+static unsigned retry_delay_ms(unsigned failures) {
+    unsigned span = API_RETRY_MIN_MS;
+    for (unsigned i = 0; i < failures && span < API_RETRY_MAX_MS; i++) span *= 2;
+    if (span > API_RETRY_MAX_MS) span = API_RETRY_MAX_MS;
+    if (span <= API_RETRY_MIN_MS) return API_RETRY_MIN_MS;
+    return API_RETRY_MIN_MS + esp_random() % (span - API_RETRY_MIN_MS + 1);
+}
+
+/* How long a healthy, idle device may go without asking for a new snapshot.
+ *
+ * Derived from what the server announces rather than chosen here, so a server
+ * that shortens its window is followed without a firmware change. Half the
+ * window, not all of it: refreshing exactly at the deadline would mean the panel
+ * spends a moment showing something it has already declared stale. */
+static unsigned refresh_interval_s(void) {
+    unsigned window = cache_max_age_s ? cache_max_age_s : API_REFRESH_FALLBACK_S;
+    unsigned interval = window / 2;
+    if (interval < API_REFRESH_MIN_S) interval = API_REFRESH_MIN_S;
+    if (interval > API_REFRESH_MAX_S) interval = API_REFRESH_MAX_S;
+    return interval;
+}
+
+/* Wake the radio for the duration of a pass and let it doze again afterwards.
+ *
+ * The default is WIFI_PS_MIN_MODEM, which nothing in this project ever chose —
+ * it is simply what ESP-IDF starts with. The device log says what it costs:
+ * `li: 4` against `DTIM period = 2`, so the station wakes every four beacons
+ * while the access point announces buffered frames every two. A reply that
+ * arrives in between can be missed. TCP retransmits through that; a name lookup,
+ * one datagram each way on a short timeout, does not — which is why
+ * `getaddrinfo() returns 202` kept appearing while an already open TLS
+ * connection to the same host carried on working. The beacon timeouts and the
+ * reset connections come from the same place.
+ *
+ * A pass lasts seconds and happens at most hourly when idle, so the saving is
+ * kept where it is worth having and given up only where it costs reliability. */
+static void radio_awake(bool awake) {
+    esp_err_t result = esp_wifi_set_ps(awake ? WIFI_PS_NONE : WIFI_PS_MIN_MODEM);
+    if (result != ESP_OK)
+        ESP_LOGW("api", "power save change failed: %s", esp_err_to_name(result));
+}
+
+/* Resolve the server name once per pass, before anything else needs it.
+ *
+ * Two things are bought here. A lookup that fails is named as such instead of
+ * hiding behind `http=0`, which stood equally for a dead name, a refused port
+ * and a hung upstream. And the answer lands in lwIP's cache, so the requests
+ * that follow in the same pass do not each pay their own lookup — on
+ * 6 September three of them cost seven seconds apiece before the pass gave up.
+ *
+ * Deliberately not a cache of this device's own. The resolved address cannot go
+ * into the URL without breaking certificate validation against the hostname,
+ * and that check has no switch on this device by design. Caching therefore
+ * belongs where it already is, in the resolver, and this only makes sure a
+ * single transient miss does not fail the whole pass. */
+static bool resolve_server(void) {
+    const char *host = strstr(base, "://");
+    host = host ? host + 3 : base;
+    size_t length = strcspn(host, ":/");
+    char name[128];
+    if (!length || length >= sizeof(name)) return false;
+    memcpy(name, host, length);
+    name[length] = 0;
+    struct addrinfo hints = {.ai_family = AF_INET, .ai_socktype = SOCK_STREAM};
+    for (unsigned attempt = 0; attempt < 2; attempt++) {
+        struct addrinfo *found = NULL;
+        int failure = getaddrinfo(name, NULL, &hints, &found);
+        if (found) freeaddrinfo(found);
+        if (!failure) {
+            if (attempt) ESP_LOGI("api", "name resolved on the second attempt");
+            return true;
+        }
+        vTaskDelay(pdMS_TO_TICKS(400));
+    }
+    ESP_LOGW("api", "cannot resolve '%s'; the network is up but DNS is not answering", name);
+    return false;
+}
+
+/* A pass that never reached the network still owes the display an answer. A
+ * reader left pending keeps its "wird geladen …" placeholder on the panel and
+ * keeps the worker on the five second tick, so the failure is delivered rather
+ * than skipped. */
+static void fail_pending_readers(void) {
+    if (atomic_exchange(&entity_pending, false)) {
+        screen_entity_received(NULL);
+        ESP_LOGI("api", "entity fetch failed: name not resolved");
+    }
+    if (atomic_exchange(&history_pending, false)) {
+        screen_history_received(NULL);
+        ESP_LOGI("api", "history fetch failed: name not resolved");
+    }
+    if (atomic_exchange(&session_pending, false)) {
+        screen_session_received(NULL);
+        ESP_LOGI("api", "session dashboard failed: name not resolved");
+    }
+}
+
+static void api_task(void *unused) {
+    (void)unused;
+    /* The delay is drawn once, when the failure happens, and kept until it is
+     * used. Drawing it again at the top of the loop would make the number in the
+     * log a different one from the number actually waited. */
+    unsigned failures = 0, retry_ms = 0;
+    while (true) {
+        /* A failed request leaves its chunk READY.  Keep a bounded retry clock
+         * while work exists, so a transient server failure cannot strand the
+         * queue until another recording or WLAN reconnect happens. */
+        memo_queue_status queued = memo_queue_get();
+        TickType_t wait;
+        if (queued.ready || atomic_load(&entity_pending) ||
+            atomic_load(&history_pending) || atomic_load(&session_pending))
+            wait = pdMS_TO_TICKS(5000);
+        else if (retry_ms)
+            wait = pdMS_TO_TICKS(retry_ms);
+        else
+            wait = pdMS_TO_TICKS(refresh_interval_s() * 1000);
+        ulTaskNotifyTake(pdTRUE, wait);
+        wifi_ap_record_t station;
+        /* No association: nothing to try, and the failure count is left alone.
+         * Going offline is not the server's fault and must not lengthen the
+         * backoff that applies once the network is back. `IP_EVENT_STA_GOT_IP`
+         * wakes the worker either way. */
+        if (esp_wifi_sta_get_ap_info(&station) != ESP_OK) continue;
+        radio_awake(true);
+        if (resolve_server()) {
+            /* A waiting reader comes before housekeeping. */
+            fetch_entity();
+            fetch_history();
+            fetch_session();
+            synchronize();
+        } else {
+            fail_pending_readers();
+            /* Without a name nothing on this path can succeed, and every
+             * request would otherwise pay its own lookup timeout. Marked as a
+             * failed pass so the backoff applies rather than the previous
+             * pass's success carrying over. */
+            status.compatible = false;
+        }
+        radio_awake(false);
+        /* `compatible` is the honest signal here: `synchronize` clears it on
+         * entry and only sets it once enrollment and both gates have passed, so
+         * it covers the unreachable server, the unredeemed enrollment code and
+         * the incompatible contract alike. A dashboard that was merely too large
+         * does not count as a failure — the server is fine and asking again in
+         * fifteen seconds would not make the response any smaller. */
+        if (status.compatible) { failures = 0; retry_ms = 0; }
+        else {
+            if (failures < 16) failures++;
+            retry_ms = retry_delay_ms(failures);
+            ESP_LOGW("api", "sync failed (%u in a row); next attempt in %u s",
+                     failures, retry_ms / 1000);
+        }
+    }
+}
+
+void api_client_start(const char *base_url) {
+    if (!base_url || !base_url[0] || worker) return;
+    snprintf(base, sizeof(base), "%s", base_url);
+    /* Said once at startup, and it names what is exposed rather than only
+     * that the connection is insecure. The plain path stays usable on
+     * purpose — it is the development profile — but it should never be
+     * running unnoticed. */
+    if (strncmp(base, "https://", 8) != 0)
+        ESP_LOGW("api", "development profile: plain HTTP, credential and "
+                        "audio travel unencrypted");
+    auth_load();
+    while (strlen(base) && base[strlen(base)-1] == '/') base[strlen(base)-1] = 0;
+    /* Priority 1, below the display task and level with the input loop in
+     * app_main. It used to be 3, which put background housekeeping above the
+     * user interface: a TLS handshake computes for hundreds of milliseconds
+     * without ever blocking, so while it ran the button polling simply did not
+     * get scheduled and presses were missed outright — no reaction, and nothing
+     * in the log, because the press was never sampled. Uploading is the job
+     * that may wait; the person pressing a button is not. */
+    if (xTaskCreate(api_task, "api", 12288, NULL, 1, &worker) != pdPASS) {
+        worker = NULL;
+        ESP_LOGE("api", "worker allocation failed");
+    }
+}
+
+void api_client_open_entity(const char *type, const char *id) {
+    if (!type || !id || atomic_load(&entity_pending)) return;
+    snprintf(entity_type, sizeof(entity_type), "%s", type);
+    snprintf(entity_id, sizeof(entity_id), "%s", id);
+    atomic_store(&entity_pending, true);
+    if (worker) xTaskNotifyGive(worker);
+}
+
+void api_client_open_history(void) {
+    if (atomic_load(&history_pending)) return;
+    atomic_store(&history_pending, true);
+    if (worker) xTaskNotifyGive(worker);
+}
+
+void api_client_open_session(const char *session_id) {
+    if (!session_id || !session_id[0] || atomic_load(&session_pending)) return;
+    snprintf(session_id_wanted, sizeof(session_id_wanted), "%s", session_id);
+    atomic_store(&session_pending, true);
+    if (worker) xTaskNotifyGive(worker);
+}
+
+void api_client_network_up(void) { if (worker) xTaskNotifyGive(worker); }
+void api_client_queue_changed(void) { if (worker) xTaskNotifyGive(worker); }
+
+void api_client_report(void) {
+    printf("@API configured=%d authenticated=%d compatible=%d gate_ok=%u gate_failed=%u sessions=%u create_ok=%u create_failed=%u replay_failed=%u settled=%u abandoned=%u acked=%u upload_failed=%u reconciled=%u resynced=%u unresyncable=%u released=%u refused=%u withheld=%u finish=%u last_http=%d\n",
+           base[0] ? 1 : 0, credential[0] ? 1 : 0, status.compatible ? 1 : 0, status.gates_ok,
+           status.gates_failed, status.sessions_seen, status.creates_ok,
+           status.creates_failed, status.replay_failed, status.settled_skipped,
+           status.abandoned, status.uploads_acked, status.uploads_failed,
+           status.reconciled, status.resynced, status.resync_impossible, status.released,
+           status.release_refused, status.release_withheld, status.finishes_ok,
+           status.last_http);
+}

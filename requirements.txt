@@ -1,0 +1,7 @@
+fastapi
+cryptography>=46,<47
+httpx
+jsonschema>=4.23,<5
+psycopg[binary]
+python-multipart==0.0.32
+uvicorn

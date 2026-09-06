@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="wizard_title">Einrichtung</string>
+    <string name="wizard_progress">Schritt %1$d von %2$d</string>
+    <string name="action_back">Zurück</string>
+    <string name="action_continue">Weiter</string>
+    <string name="action_retry">Erneut versuchen</string>
+    <string name="action_enable_push">Push aktivieren</string>
+    <string name="action_skip">Überspringen</string>
+    <string name="action_allow_notification">Benachrichtigungen erlauben</string>
+    <string name="action_allow_microphone">Mikrofonzugriff erlauben</string>
+    <string name="step_welcome_title">Willkommen bei Smart Notebook</string>
+    <string name="step_welcome_text">In wenigen Schritten verbindest du die App mit deinem Server und prüfst, was die App benötigt.</string>
+    <string name="step_server_title">Serveradresse</string>
+    <string name="scheme_https">https</string>
+    <string name="scheme_http">http</string>
+    <string name="field_profile_name">Profilname</string>
+    <string name="field_host">Hostname oder IP-Adresse</string>
+    <string name="field_port">Port</string>
+    <string name="field_base_path">API-Basispfad</string>
+    <string name="field_device_name">Gerätebezeichnung</string>
+    <string name="field_language">Sprache</string>
+    <string name="field_audio_profile">Audioqualitätsprofil</string>
+    <string name="field_request_timeout">Request-Timeout (Sekunden)</string>
+    <string name="field_connection_timeout">Connection-Timeout (Sekunden)</string>
+    <string name="error_cleartext">Klartext-HTTP ist nur in Debug-Builds erlaubt.</string>
+    <string name="probe_running">Prüfe…</string>
+    <string name="step_tls_title">TLS-Prüfung</string>
+    <string name="step_capabilities_title">Health und Capabilities</string>
+    <string name="step_compatibility_title">Kompatibilität</string>
+    <string name="step_installation_title">Geräte-Installation</string>
+    <string name="step_audio_test_title">Mikrofontest</string>
+    <string name="step_upload_ack_title">Upload-Test</string>
+    <string name="step_initial_sync_title">Initialer Sync</string>
+    <string name="step_notification_title">Benachrichtigungen</string>
+    <string name="step_notification_text">Die App zeigt den Aufnahme- und Synchronisationsstatus als Benachrichtigung.</string>
+    <string name="step_push_optional_title">Push (optional)</string>
+    <string name="step_push_optional_text">Mit UnifiedPush kann die App im Hintergrund für Updates geweckt werden. Dieser Schritt ist optional.</string>
+    <string name="step_microphone_title">Mikrofon</string>
+    <string name="step_microphone_text">Für die Aufnahme wird der Mikrofonzugriff benötigt. Die Berechtigung wird direkt vor dem Audiotest angefordert.</string>
+    <string name="step_completed_title">Einrichtung abgeschlossen</string>
+    <string name="step_completed_text">Dein Profil ist bestätigt und die App ist einsatzbereit.</string>
+</resources>

@@ -1,0 +1,28 @@
+SMART NOTEBOOK – CONSOLIDATED CONTEXT v1.28
+Date: 2026-08-24
+
+Canonical tested baseline:
+- v0.22.1 modular
+
+Prepared but not live-accepted:
+- v0.23.0 A2 ingestion chunks
+
+Key development direction:
+- finish ingestion foundation first
+- then semantic live session processing
+- then questions/evidence/activity
+- only then real audio/STT
+- proactive dashboard and external knowledge after that
+
+See:
+- 00_START_HERE.md
+- 01_OBJECTIVE_AND_PRINCIPLES.md
+- 02_ARCHITECTURE_AND_APPROACH.md
+- 03_CURRENT_STATUS.md
+- 04_ROADMAP.md
+- 05_FEATURE_INVENTORY.md
+- 06_API_AND_DATA_MODEL_SNAPSHOT.md
+- 07_DECISIONS_AND_CONSTRAINTS.md
+- 08_HANDOFF_INSTRUCTIONS_FOR_CODEX.md
+
+Do not treat prepared A2 as production/stable until the specified live tests pass.

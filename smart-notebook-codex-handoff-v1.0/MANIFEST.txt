@@ -1,0 +1,16 @@
+00_START_HERE.md
+01_OBJECTIVE_AND_PRINCIPLES.md
+02_ARCHITECTURE_AND_APPROACH.md
+03_CURRENT_STATUS.md
+04_ROADMAP.md
+05_FEATURE_INVENTORY.md
+06_API_AND_DATA_MODEL_SNAPSHOT.md
+07_DECISIONS_AND_CONSTRAINTS.md
+08_HANDOFF_INSTRUCTIONS_FOR_CODEX.md
+context/smart-notebook-modularization-plan-v0.22.1.md
+context/smart-notebook-project-context-v1.25.txt
+context/smart-notebook-project-context-v1.26.txt
+context/smart-notebook-project-context-v1.27.txt
+context/smart-notebook-project-context-v1.28-consolidated.txt
+context/smart-notebook-roadmap-features-v0.3.md
+context/smart-notebook-roadmap-features-v0.4.md

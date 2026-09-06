@@ -1,0 +1,24 @@
+.env
+__pycache__/
+*.pyc
+.work/
+*.local.env
+scripts/graphify.local.env
+android/local.properties
+android/keystore.properties
+android/.gradle/
+android/build/
+android/**/build/
+
+# Python virtualenv / runtime data
+.venv/
+venv/
+*.db
+data/
+
+# ESP32 build output
+esp32-client/build/
+esp32-client/managed_components/
+
+# Reports / generated artifacts
+reports/

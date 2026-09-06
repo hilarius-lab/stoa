@@ -1,0 +1,1394 @@
+Smart Notebook – Projektkontext
+Version: 1.0
+Stand: 23.08.2026
+
+1. Projektziel
+
+Das Smart Notebook ist ein serverzentriertes, persönliches Wissens- und Assistenzsystem mit einem späteren kleinen, portablen Client-Gerät. Es soll Informationen schnell erfassen, automatisch strukturieren, dauerhaft relevantes persönliches Wissen aufbauen und dieses situationsabhängig wieder bereitstellen.
+
+Wissenspriorität:
+1. Eigenes persönliches Wissen.
+2. Kuratiertes Fachwissen, z. B. Hämatologie und IT.
+3. Externes Wissen aus aktueller Recherche.
+
+Das System soll vollständig Open Source geplant werden. Bestehende Open-Source-Projekte können einzelne Schlüsselaufgaben übernehmen oder als Grundlage geforkt werden, sofern dies sinnvoller als Eigenentwicklung ist.
+
+2. Infrastruktur
+
+Ocean:
+- Zentraler Daten- und Retrieval-Server.
+- PostgreSQL 18.6 + pgvector 0.8.6.
+- Geplante Rollen: Datenbank, Embeddings, Speech-to-Text, API/Sync, Archivierung.
+- Projektpfad: /mnt/Dolphin/docker/smart-notebook/
+
+Capybara:
+- LLM-Inferenzserver.
+- llama.cpp auf Port 8080.
+- Modell: ThinkingCap-Qwen3.6-27B-Q4_K_M.gguf.
+
+VPS:
+- Connectivity, NetBird, ntfy und spätere externe Relay-/Benachrichtigungsfunktionen.
+
+3. Aktueller Software-Prototyp
+
+Aktuelle Architektur:
+Browser/Test-UI
+  -> FastAPI
+     -> PostgreSQL auf Ocean
+     -> llama.cpp / ThinkingCap auf Capybara
+
+Bereits implementiert:
+- Texteingabe über ein simples Webinterface.
+- Speicherung jedes Inputs als Event.
+- Speicherung der LLM-Antwort.
+- Abruf bisheriger Events.
+- System Prompt.
+- Laufzeitkontext mit aktuellem Datum, Uhrzeit und Zeitzone Europe/Berlin.
+- Kurzzeit-Kontext aus maximal 10 Events der letzten 60 Minuten.
+- Debug-Endpunkt.
+- PostgreSQL als zentraler persistenter Datenspeicher.
+- pgvector ist aktiviert, wird aber noch nicht für Retrieval genutzt.
+
+4. Feste Domänenbegriffe
+
+4.1 Event
+
+Ein Event ist die rohe Speicherung einer Information oder Interaktion.
+
+Beispiele:
+- eine gesprochene oder geschriebene Aussage.
+- eine Frage.
+- ein Gesprächsausschnitt.
+- ein Befehl an das Smart Notebook.
+- ein temporär relevanter Kontext.
+
+Events sind primär Rohdaten und Gesprächshistorie. Sie sind nicht automatisch dauerhaftes Wissen.
+
+Events sollen:
+- unverändert bzw. nachvollziehbar gespeichert werden.
+- einen Zeitstempel besitzen.
+- als Quelle für spätere Notes oder Tasks dienen können.
+- nach Ablauf ihres operativen Nutzens archiviert werden können.
+
+4.2 Note
+
+Eine Note ist eine konkrete Information, die als dauerhaft relevantes persönliches Wissen gespeichert werden soll.
+
+Notes können:
+- direkt vom Nutzer als zu speichernde Information vorgegeben werden.
+- aus einem oder mehreren Events durch ein LLM extrahiert werden.
+- prägnant und eindeutig umgeschrieben werden.
+- später a priori als persönliches Wissen für Retrieval verwendet werden.
+
+Grundregel:
+Eine Note soll nicht unnötig Gesprächswortlaut konservieren, sondern die darin enthaltene relevante Information prägnant repräsentieren.
+
+Beispiel:
+Event:
+"Stefan meinte gerade, dass der neue Proxmox-Server wohl nächsten Montag geliefert wird."
+
+Note:
+"Der neue Proxmox-Server wird voraussichtlich am 24.08.2026 geliefert. Quelle: Aussage von Stefan."
+
+Notes bilden den langfristigen persönlichen Wissensschatz.
+
+4.3 Task
+
+Der bisherige Arbeitsbegriff "Timer" wird durch "Task" ersetzt.
+
+Ein Task ist ein zeitlich begrenzter, erledigbarer Wissenseintrag mit Frist.
+
+Beispiele:
+- "Serverwartung bis Freitag durchführen."
+- "Arztbrief bis 17:00 Uhr fertigstellen."
+- "Stefan am Montag nach dem Proxmox-Server fragen."
+
+Tasks gehören während ihrer Gültigkeit ebenfalls zum relevanten persönlichen Wissensschatz.
+
+Ein Task besitzt mindestens:
+- Inhalt.
+- Erstellungszeitpunkt.
+- absolute Fälligkeit / Deadline.
+- Status, später z. B. open, done, expired, archived.
+- optional source_event_id.
+
+Nach Erledigung oder Ablauf können Tasks archiviert werden.
+
+Spätere Integration:
+- CalDAV kann verwendet werden, um Tasks extern sichtbar und abhackbar zu machen.
+- Nach Erledigung kann der Task im Smart-Notebook-System archiviert werden.
+
+5. Event-Lifecycle und tägliche Konsolidierung
+
+Ein täglicher Konsolidierungsprozess soll einmal pro Abend alle noch aktiven Events des aktuellen Tages analysieren.
+
+Ziele:
+1. Relevante neue Informationen erkennen.
+2. Prüfen, ob diese Information bereits als Note vorhanden ist.
+3. Nur neue oder materiell ergänzende Informationen als Note speichern.
+4. Mehrere ähnliche Events bei Bedarf zu einer prägnanten Note zusammenführen.
+5. Keine redundanten Notes erzeugen.
+6. Tasks erkennen und gegebenenfalls als Task mit Deadline speichern.
+7. Verarbeitete bzw. nicht mehr operativ benötigte Events anschließend archivieren.
+
+Konzeptioneller Ablauf:
+
+Events des Tages
+  -> LLM-Analyse
+  -> Informationsextraktion
+  -> Abgleich mit bestehendem Wissen
+  -> neue Information?
+       nein -> keine neue Note
+       ja   -> prägnante Note erzeugen
+  -> Task erkannt?
+       ja   -> Task erzeugen / aktualisieren
+  -> Events archivieren
+
+Wichtig:
+- Das LLM entscheidet nicht allein anhand semantischer Ähnlichkeit.
+- Vorhandene Notes müssen für den Abgleich gezielt gesucht werden.
+- Der ursprüngliche Event-Verlauf bleibt im Archiv nachvollziehbar.
+
+6. Zeitnormalisierung
+
+Relative Datumsreferenzen in Events sollen so früh wie möglich in absolute Datumswerte überführt werden.
+
+Beispiele:
+- "nächsten Montag"
+- "übernächsten Mittwoch"
+- "letzte Woche Dienstag"
+- "diesen Donnerstag"
+- "morgen"
+- "in drei Tagen"
+
+Grundregel:
+Die relative Zeitreferenz wird immer relativ zum Zeitstempel des betreffenden Events interpretiert.
+
+Beispiel:
+Event-Zeitpunkt:
+23.08.2026
+
+Text:
+"Stefan kommt nächsten Montag."
+
+Normalisierte Information:
+"Stefan kommt am 24.08.2026."
+
+Die normalisierte absolute Zeit soll:
+- als strukturiertes Datumsfeld gespeichert werden, sofern semantisch sinnvoll.
+- zusätzlich in der erzeugten Note bzw. Task-Repräsentation verwendet werden.
+- den ursprünglichen Event-Text nicht zerstören; der Rohtext bleibt erhalten.
+
+Damit bleibt die ursprüngliche Aussage nachvollziehbar, während spätere Retrieval- und Deadline-Abfragen mit eindeutigen absoluten Datumswerten arbeiten können.
+
+7. Wissensspeicher und Retrieval-Prinzip
+
+PostgreSQL ist die Source of Truth.
+
+Geplante Ebenen:
+- strukturierte Metadaten.
+- Volltextsuche.
+- pgvector / semantische Suche.
+- Hybrid Retrieval.
+- Re-Ranking.
+
+Embeddings sind nur ein abgeleiteter Suchindex und müssen jederzeit neu erzeugt werden können.
+
+Persönliches Wissen erhält bei Retrieval grundsätzlich höhere Relevanz als externe Wissensquellen.
+
+8. Nächste Entwicklungsschritte
+
+Unmittelbar als Nächstes:
+1. Notes-Tabelle einführen.
+2. Tasks-Tabelle einführen.
+3. Kontrolliertes Speichern von Notes und Tasks über definierte Backend-Funktionen.
+4. Relative Datumsreferenzen beim Erzeugen von Notes/Tasks normalisieren.
+5. Danach Embedding-Service und erstes search_notes-Retrieval aufbauen.
+6. Erst danach tägliche automatische Event-Konsolidierung implementieren.
+
+Spätere Ausbaustufen:
+- Hybrid Retrieval.
+- automatische Knowledge Consolidation.
+- Web-Recherche.
+- kuratiertes Fachwissen.
+- Audio/STT.
+- Listening Mode.
+- CalDAV-Integration.
+- Geräte-Client.
+
+
+9. Implementierungsstand v0.3.0
+
+Neu eingeführt:
+- PostgreSQL-Tabelle notes.
+- PostgreSQL-Tabelle tasks.
+- Notes können über POST /api/notes angelegt und über GET /api/notes gelesen werden.
+- Tasks können über POST /api/tasks angelegt und über GET /api/tasks gelesen werden.
+- source_event_id kann Notes und Tasks auf ein auslösendes Event zurückführen.
+- Tasks besitzen due_at und Statuswerte open, done, expired, archived.
+- Notes und Tasks besitzen ein archived-Feld.
+- Automatische LLM-Erzeugung, Retrieval und Embeddings sind noch nicht implementiert.
+
+
+10. Implementierungsstand v0.4.0 – automatische Capture-Entscheidung
+
+Neu:
+- Vor der normalen Chat-Antwort analysiert ein separater, kontrollierter LLM-Aufruf
+  ausschließlich die aktuelle Nutzernachricht.
+- Erlaubte Aktionen sind strikt: none, save_note, save_task.
+- llama.cpp schema-constrained JSON wird verwendet, um strukturierte Ausgabe zu erzwingen.
+- save_note erzeugt eine Note mit source_event_id.
+- save_task erzeugt einen Task mit source_event_id und absolutem due_at.
+- Relative Zeitreferenzen werden anhand des Zeitpunkts des auslösenden Events und
+  Europe/Berlin interpretiert.
+- Der Capture-Schritt ist bewusst getrennt von der normalen Assistant-Antwort.
+- Die Entscheidung wird im Debug-Output unter capture sichtbar gemacht.
+- Automatische Deduplizierung gegen vorhandene Notes ist noch nicht implementiert;
+  sie gehört zur späteren Konsolidierungs-/Retrieval-Schicht.
+
+
+11. Retrieval/Embedding-Entscheidung
+
+- Deduplizierung bleibt ein verpflichtender späterer Bestandteil sowohl beim direkten
+  Speichern als auch bei der täglichen Event-Konsolidierung.
+- Als Embedding-Modell wird zunächst Qwen3-Embedding-0.6B verwendet.
+- Offizieller Qwen GGUF Q8_0, 1024 Dimensionen.
+- Serving über einen separaten llama.cpp CUDA-Container auf Ocean.
+- API: OpenAI-kompatibles /v1/embeddings.
+- Qwen3-Embedding verwendet mit llama.cpp pooling=last.
+- Embedding-Vektoren werden später in pgvector als vector(1024) gespeichert.
+- Notes/Documents werden ohne Retrieval-Instruktion embedded.
+- Queries erhalten später eine englische Retrieval-Instruktion, da Qwen dies für
+  instruction-aware Retrieval empfiehlt.
+
+
+12. Tatsächliche Ocean-Embedding-Konfiguration
+
+- llama.cpp Embedding-Service ist erfolgreich gestartet und erreichbar.
+- Host-Bind: 192.168.124.5
+- Host-Port: 8181
+- Container-Port: 8080
+- Entwicklungsendpoint: http://192.168.124.5:8181
+- Der vorher geplante Host-Port 8081 wurde wegen einer bestehenden Portbelegung verworfen.
+
+
+13. Implementierungsstand v0.5.0 – Note Embeddings
+
+- Der Embedding-Service auf Ocean wurde erfolgreich getestet.
+- Endpoint: http://192.168.124.5:8181/v1/embeddings
+- Modell: Qwen3-Embedding-0.6B
+- bestätigte Vektordimension: 1024.
+- Notes erhalten eine Spalte embedding vector(1024).
+- Zusätzlich wird embedding_model gespeichert.
+- Jede neu über POST /api/notes oder automatische Capture-Erkennung erzeugte Note
+  wird vor dem Speichern embedded.
+- Der Embedding-Vektor wird direkt in PostgreSQL/pgvector gespeichert.
+- GET /api/notes gibt nicht den vollständigen Vektor zurück, sondern nur Modell und
+  Dimensionszahl zur Kontrolle.
+- Retrieval und Vektorindizes sind noch nicht implementiert.
+- Deduplizierung bleibt vor automatischer Tageskonsolidierung und als Schutz gegen
+  redundante Notes verpflichtend.
+
+
+14. Implementierungsstand v0.6.0 – Note Retrieval
+
+- Semantische Suche über gespeicherte Notes wurde ergänzt.
+- Neuer Endpoint: POST /api/search-notes
+- Query wird mit Qwen3-Embedding-0.6B embedded.
+- Für Queries wird eine Retrieval-Instruktion vorangestellt.
+- Suche erfolgt in PostgreSQL/pgvector über Cosine Distance (<=>).
+- API gibt similarity = 1 - cosine_distance zurück.
+- Standardlimit 5, technisch auf maximal 20 begrenzt.
+- Nur nicht archivierte Notes mit vorhandenem Embedding werden durchsucht.
+- Noch kein ANN-Index; bei der aktuell kleinen Datenmenge wird bewusst exakte Suche verwendet.
+- Noch keine automatische Übergabe der Suchergebnisse an die normale Chat-Antwort.
+
+
+15. Implementierungsstand v0.7.0 – Notes im Chat-Kontext
+
+- Vor jeder normalen Chat-Antwort wird automatisch search_notes() ausgeführt.
+- Maximal 5 Notes werden semantisch gesucht.
+- Für den ersten Prototyp werden nur Treffer mit similarity >= 0.35 in den
+  persönlichen Wissenskontext übernommen.
+- Relevante Notes werden als expliziter persönlicher Wissensblock in den Systemkontext
+  eingefügt.
+- Das LLM wird angewiesen, diese Notes nur bei tatsächlicher Relevanz zu verwenden
+  und keine zusätzlichen persönlichen Fakten zu erfinden.
+- Der Debug-Output zeigt unter retrieved_notes genau, welche Notes tatsächlich in den
+  Antwortkontext übernommen wurden.
+- Der Similarity-Schwellenwert ist vorläufig und muss mit wachsendem Datenbestand
+  empirisch kalibriert werden.
+
+
+16. Implementierungsstand v0.8.0 – Tasks als zeitlich begrenztes Gedächtnis
+
+- Tasks erhalten nun ebenfalls Qwen3-Embedding-0.6B Embeddings mit 1024 Dimensionen.
+- Neue Tasks werden sowohl bei manueller API-Erzeugung als auch bei automatischer
+  Capture-Erkennung embedded.
+- Neuer Endpoint: POST /api/search-tasks.
+- Semantische Task-Suche verwendet pgvector Cosine Similarity.
+- Es werden nur offene, nicht archivierte Tasks durchsucht.
+- Vor jeder Chat-Antwort werden sowohl relevante Notes als auch relevante offene Tasks
+  gesucht und als persönlicher Wissenskontext bereitgestellt.
+- Task-Kontext enthält die absolute Fälligkeit.
+- Debug zeigt retrieved_notes und retrieved_tasks getrennt.
+- Similarity-Schwellenwerte sind weiterhin vorläufig.
+- Deduplizierung bleibt als nächster größerer Wissensqualitätsbaustein vorgemerkt.
+- Nach Abschluss dieses Schritts folgt als nächster großer Integrationsblock die tägliche
+  Event-Konsolidierung mit Abgleich gegen bestehende Notes/Tasks und anschließender
+  Archivierung der Tages-Events.
+
+
+17. Implementierungsstand v0.9.0 – tägliche Event-Konsolidierung
+
+Neu:
+- Events besitzen archived und archived_at.
+- Neuer manueller Test-Endpunkt: POST /api/consolidate-today.
+- Der Konsolidierungslauf lädt alle noch nicht archivierten Events des aktuellen
+  Kalendertags in Europe/Berlin.
+- Die Events werden tageweise in einem LLM-Batch analysiert.
+- Das LLM darf mehrere Note- und Task-Kandidaten extrahieren und wiederholte Aussagen
+  zu prägnanten Kandidaten zusammenführen.
+- Relative Zeitreferenzen müssen anhand des Zeitstempels des jeweiligen Quell-Events
+  in absolute Datumsangaben umgewandelt werden.
+- Jeder Kandidat besitzt source_event_id zur Rückverfolgbarkeit.
+- Note-Kandidaten werden semantisch gegen die ähnlichsten vorhandenen Notes gesucht.
+- Ein separater LLM-Deduplizierungsschritt entscheidet zwischen skip,
+  update_existing und save_new.
+- update_existing konsolidiert neue materielle Information in einen vorhandenen
+  Eintrag und erzeugt anschließend ein neues Embedding.
+- Dasselbe Grundprinzip gilt für offene Tasks; dabei werden zusätzlich Inhalt und
+  Fälligkeit berücksichtigt.
+- Erst nach erfolgreicher Verarbeitung des gesamten Tages-Batches werden die
+  betrachteten Events archiviert.
+- Die tägliche Ausführung ist noch nicht zeitgesteuert; der Endpoint ist zunächst
+  bewusst manuell triggerbar, damit Extraktion und Deduplizierung kontrolliert
+  getestet werden können.
+- Die aktuelle source_event_id-Struktur erlaubt nur eine direkte Quellreferenz je
+  Note/Task. Für echte Mehrquellen-Provenienz kann später eine separate Relationstabelle
+  knowledge_sources eingeführt werden.
+
+
+18. Korrektur v0.9.1 – striktes Konsolidierungsschema
+
+- Das LLM-Ausgabeschema der täglichen Konsolidierung wurde in zwei getrennte Arrays
+  aufgeteilt: notes und tasks.
+- Note-Kandidaten besitzen nur content und source_event_id und können daher strukturell
+  kein due_at mehr enthalten.
+- Task-Kandidaten besitzen content, due_at und source_event_id; due_at bleibt für Tasks
+  verpflichtend.
+- Intern werden beide Arrays anschließend wieder in die bestehende gemeinsame
+  Kandidatenstruktur mit kind=note bzw. kind=task überführt.
+- Deduplizierung, Speichern/Aktualisieren und Event-Archivierung bleiben unverändert.
+
+
+19. Implementierungsstand v0.10.0 – Runtime-Deduplizierung
+
+- Die Deduplizierung findet nun zusätzlich direkt im automatischen Runtime-Capture statt.
+- Ablauf für automatisch erkannte Notes:
+  Event -> Capture-Klassifikation -> semantische Suche -> LLM-Deduplizierung ->
+  skip / update_existing / save_new.
+- Ablauf für automatisch erkannte Tasks:
+  Event -> Capture-Klassifikation -> Fälligkeitsnormalisierung -> semantische Suche ->
+  LLM-Deduplizierung -> skip / update_existing / save_new.
+- Bei skip wird kein neuer Wissenseintrag erzeugt.
+- Bei update_existing wird der bestehende Note-/Task-Inhalt konsolidiert und das
+  Embedding neu erzeugt.
+- Bei save_new wird wie bisher ein neuer Eintrag inklusive Embedding gespeichert.
+- Der Capture-Debug/Response enthält jetzt deduplication, deduplication_target_id,
+  updated_note_id und updated_task_id.
+- Die tägliche Konsolidierung bleibt als zweite Deduplizierungs- und Qualitätsschicht
+  bestehen.
+- Die manuellen POST-/api/notes- und POST-/api/tasks-Endpunkte deduplizieren absichtlich
+  noch nicht, damit gezielte Testdaten weiterhin direkt eingespeist werden können.
+- Bereits vorhandene Duplikate werden durch diesen Schritt nicht automatisch
+  zusammengeführt; ein separater Cleanup-/Merge-Lauf bleibt als spätere Aufgabe bestehen.
+
+
+20. Implementierungsstand v0.11.0 – Task-Lifecycle
+
+- Tasks besitzen nun explizite Lifecycle-Endpunkte.
+- POST /api/tasks/{task_id}/done setzt einen offenen Task auf done.
+- POST /api/tasks/{task_id}/archive setzt einen Task auf archived und archived=true.
+- POST /api/tasks/expire-overdue setzt alle überfälligen offenen, nicht archivierten
+  Tasks auf expired.
+- POST /api/tasks/archive-closed archiviert alle Tasks mit Status done oder expired.
+- Semantische Task-Suche und Chat-Retrieval berücksichtigen weiterhin ausschließlich
+  offene, nicht archivierte Tasks.
+- Dadurch verschwinden erledigte/abgelaufene Tasks sofort aus dem aktiven
+  Wissenskontext, bleiben aber bis zur Archivierung in PostgreSQL erhalten.
+- Die Lifecycle-Schritte sind zunächst bewusst manuell triggerbar. Eine spätere
+  geplante Hintergrundausführung kann expire-overdue und archive-closed regelmäßig
+  aufrufen.
+
+
+21. Implementierungsstand v0.12.0 – gebündelte tägliche Wartung
+
+- Neuer Endpunkt: POST /api/maintenance/daily.
+- Dieser Endpunkt bündelt die bisher einzeln testbaren Wartungsschritte in einer
+  festen Reihenfolge.
+- Reihenfolge:
+  1. consolidate_today(): unarchivierte Tages-Events analysieren, Wissen extrahieren,
+     deduplizieren und Events archivieren.
+  2. expire_overdue_tasks(): danach auch Tasks berücksichtigen, die während der
+     Konsolidierung neu erzeugt wurden und bereits überfällig sind.
+  3. archive_closed_tasks(): erledigte und abgelaufene Tasks archivieren.
+- Die Antwort enthält die Ergebnisse aller drei Teilbereiche getrennt.
+- Die bestehenden Einzel-Endpunkte bleiben für Debugging und gezielte Tests erhalten.
+- Noch kein interner Scheduler: Der neue Maintenance-Endpunkt ist bewusst die stabile
+  Schnittstelle, die später von Cron, einem Container-Scheduler oder einer anderen
+  externen Zeitsteuerung einmal täglich aufgerufen werden kann.
+
+
+22. Prioritätsänderung und Implementierungsstand v0.13.0 – Core API Surface
+
+Priorität:
+- Zeitsteuerung/Scheduler bleibt ausdrücklich ein späteres Problem.
+- Zuerst wird die API-Oberfläche des Smart Notebook vollständig und stabil aufgebaut,
+  damit Device, Audio/STT, CalDAV, Retrieval und spätere Agent-/Tool-Schichten auf
+  klaren Ressourcenendpunkten aufsetzen können.
+
+Neue Event-/Ingestion-Endpunkte:
+- POST /api/events
+  Speichert ein rohes Event ohne Capture und ohne Chat-Antwort.
+  created_at kann optional mitgegeben werden, damit spätere Offline-Synchronisation
+  den tatsächlichen Aufnahmezeitpunkt erhalten kann.
+  source kennzeichnet die Herkunft des Events.
+- POST /api/capture
+  Speichert ein Event und führt Runtime-Capture/Deduplizierung aus, erzeugt aber keine
+  Chat-Antwort. Dies ist für direkte Notiz-/Sprach-/Device-Eingaben vorgesehen.
+- GET /api/events/{event_id}
+- POST /api/events/{event_id}/archive
+- POST /api/events/{event_id}/unarchive
+- Events besitzen nun source TEXT; bestehende Datensätze erhalten standardmäßig chat.
+
+Neue Note-Endpunkte:
+- GET /api/notes/{note_id}
+- PATCH /api/notes/{note_id}
+  Inhalt kann korrigiert werden; das Embedding wird dabei neu erzeugt.
+- POST /api/notes/{note_id}/archive
+- POST /api/notes/{note_id}/unarchive
+- GET /api/notes unterstützt include_archived=true.
+
+Neue Task-Endpunkte:
+- GET /api/tasks/{task_id}
+- PATCH /api/tasks/{task_id}
+  Inhalt und/oder due_at können geändert werden; Embedding wird bei der Änderung
+  erneut erzeugt.
+- POST /api/tasks/{task_id}/reopen
+  setzt Status wieder auf open und entfernt archived=true.
+- GET /api/tasks unterstützt include_archived=true.
+- Bestehende done/archive/expire/archive-closed Endpunkte bleiben erhalten.
+
+API-Design:
+- Kein Hard-DELETE für Events/Notes/Tasks im Kernmodell; Archivierung erhält Provenienz
+  und Historie.
+- /api/message = Event + Capture + Assistant-Antwort.
+- /api/capture = Event + Capture ohne Assistant-Antwort.
+- /api/events = reines Rohdaten-Ingest.
+- Dadurch sind Chat, direkte Wissenseingabe und reine Sensor-/Device-Ingestion getrennt.
+
+
+23. Implementierungsstand v0.14.0 – Lists als eigene Wissensentität
+
+Grundmodell:
+- Lists sind veränderliche Wissenscontainer und werden nicht als normale Notes modelliert.
+- Neue Tabellen:
+  lists: title, description, timestamps, archived, embedding, embedding_model.
+  list_items: list_id, content, timestamps, source_event_id, status, archived,
+  embedding, embedding_model.
+- List-Item-Status: active, done, archived.
+- Kein spezieller harter Listentyp wie shopping/project; zunächst eine allgemeine
+  Listenstruktur.
+
+Embedding/Retrieval:
+- Jede Liste besitzt ein 1024-dimensionales Embedding.
+- Das Listen-Embedding basiert auf Titel, Beschreibung und bis zu 100 aktiven Items.
+- Nach Item-Erzeugung, Änderung oder Statusänderung wird das Listen-Embedding neu erzeugt.
+- Items besitzen zusätzlich eigene Embeddings.
+- Neuer Endpoint: POST /api/search-lists.
+- Relevante Listen werden jetzt auch automatisch in den Chat-Kontext aufgenommen.
+
+Runtime-Capture:
+- Neue Capture-Aktion: save_list_item.
+- Der Capture-Classifier erhält die Titel der zuletzt aktualisierten aktiven Listen als
+  zusätzlichen Hinweis.
+- list_title wird als kurzer stabiler Listenname extrahiert.
+- Für einen neuen Listenpunkt wird zuerst semantisch nach bestehenden Listen gesucht.
+- Ein separater LLM-Schritt entscheidet use_existing oder create_new.
+- Innerhalb der Ziel-Liste prüft ein zweiter Schritt auf Item-Duplikate:
+  skip / update_existing / save_new.
+- Bei neuer Liste wird diese automatisch erzeugt und anschließend das Item gespeichert.
+
+Tägliche Konsolidierung:
+- Das strukturierte Konsolidierungsschema besitzt nun notes, tasks und list_items.
+- Listeneinträge werden auch während der Tageskonsolidierung einer bestehenden Liste
+  zugeordnet oder erzeugen eine neue Liste.
+- Runtime- und Konsolidierungs-Deduplizierung gelten somit auch für Listenpunkte.
+
+Neue API-Endpunkte:
+- POST /api/lists
+- GET /api/lists
+- GET /api/lists/{list_id}
+- PATCH /api/lists/{list_id}
+- POST /api/lists/{list_id}/archive
+- POST /api/lists/{list_id}/unarchive
+- POST /api/lists/{list_id}/items
+- GET /api/lists/{list_id}/items
+- GET /api/list-items/{item_id}
+- PATCH /api/list-items/{item_id}
+- POST /api/list-items/{item_id}/done
+- POST /api/list-items/{item_id}/reopen
+- POST /api/list-items/{item_id}/archive
+- POST /api/search-lists
+
+Architektur:
+- /api/events bleibt reine Rohdaten-Ingestion.
+- /api/capture kann nun Notes, Tasks und List Items erzeugen.
+- /api/message verwendet denselben Capture-Pfad und erhält zusätzlich Notes, Tasks und
+  relevante Lists als Retrieval-Kontext.
+- Die gemeinsame Knowledge-/Retrieval-API wird erst im nächsten Schritt über diese drei
+  Wissensentitäten gelegt.
+
+
+24. Implementierungsstand v0.15.0 – einheitliche Knowledge-Suche
+
+Neue Endpunkte:
+- POST /api/search-knowledge
+- POST /api/search-list-items
+
+/api/search-knowledge:
+- durchsucht Notes, offene Tasks, aktive Lists und aktive List Items gemeinsam.
+- erzeugt nur ein Query-Embedding und verwendet denselben Vektor für alle vier
+  Wissensarten.
+- Ergebnisse werden anschließend global nach Cosine Similarity sortiert.
+- limit gilt für die gemeinsame Ergebnisliste und ist auf maximal 50 begrenzt.
+- optional kann über types eingeschränkt werden:
+  note, task, list, list_item.
+- optional kann min_similarity gesetzt werden.
+- jeder Treffer besitzt einen typübergreifend eindeutigen key wie note:3,
+  task:8, list:2 oder list_item:17.
+- List-Item-Treffer enthalten parent mit ID und Titel der übergeordneten Liste.
+- List-Treffer enthalten bis zu 20 aktive Items als Kontextvorschau.
+- archivierte Notes/Lists/Items sowie nicht offene Tasks werden nicht als aktives
+  Wissen zurückgegeben.
+
+/api/search-list-items:
+- ermöglicht zusätzlich die direkte globale Vektorsuche über einzelne aktive
+  Listeneinträge, unabhängig davon, ob die Ziel-Liste vorher bekannt ist.
+
+Kompatibilität:
+- /api/search-notes, /api/search-tasks und /api/search-lists bleiben erhalten.
+- Der bestehende Chat-Retrieval-Pfad wird in dieser Version noch nicht auf die
+  einheitliche Knowledge-Suche umgestellt. Die API wird zunächst isoliert getestet.
+
+
+25. Korrektur v0.15.1 – Knowledge-Retrieval-Grenzen
+
+- Die gemeinsame Knowledge-Suche erhält feste defensive Standardgrenzen.
+- Standardlimit: maximal 7 Ergebnisse.
+- Standardschwelle: similarity >= 0.30.
+- Auch wenn ein Client ein höheres limit anfordert, wird /api/search-knowledge intern
+  auf maximal 7 Treffer begrenzt.
+- min_similarity kann weiterhin explizit höher gesetzt werden; wenn null übergeben wird,
+  fällt die Suche auf 0.30 zurück.
+- Ziel: relevanten persönlichen Kontext bereitstellen, ohne den LLM-Kontext mit schwach
+  verwandten Treffern zu füllen.
+- Der nächste Schritt ist die Umstellung des normalen Chat-Retrieval-Pfads auf diese
+  gemeinsame Knowledge-Suche.
+
+
+26. Implementierungsstand v0.16.0 – einheitliches Chat-Retrieval
+
+- Der normale /api/message-Chatpfad verwendet jetzt nicht mehr drei getrennte
+  Retrieval-Läufe für Notes, Tasks und Lists.
+- Stattdessen wird pro User-Anfrage genau einmal search_knowledge() ausgeführt.
+- Standardgrenzen bleiben:
+  similarity >= 0.30 und maximal 7 gemeinsame Treffer.
+- Damit konkurrieren Notes, offene Tasks, Lists und aktive List Items direkt in einer
+  gemeinsamen Rangliste um den begrenzten LLM-Kontext.
+- Der Debug-Output enthält jetzt:
+  retrieved_knowledge = rohe gemeinsame Top-Treffer,
+  knowledge_context_results = tatsächlich in den LLM-Kontext übernommene Treffer.
+- Wenn eine komplette List bereits unter den Treffern ist, werden einzelne List-Item-
+  Treffer derselben Liste im Chat-Kontext unterdrückt, um redundanten Kontext zu
+  vermeiden. Die Roh-Treffer bleiben im Debug sichtbar.
+- List-Treffer werden im Chat-Kontext auf maximal 12 aktive Items begrenzt. Falls die
+  API-Vorschau mehr Items enthält, wird die Zahl der ausgelassenen Items angegeben.
+- Die spezialisierten Endpunkte search-notes, search-tasks, search-lists und
+  search-list-items bleiben weiterhin für Debugging und gezielte Clients bestehen.
+- Der Chat-Retrieval-Pfad ist damit erstmals vollständig typübergreifend vereinheitlicht.
+
+
+27. Implementierungsstand v0.17.0 – Note-Cleanup und Retrieval-Redundanzfilter
+
+Problem:
+- Historische/manuell erzeugte Notes können bereits echte Duplikate enthalten.
+- Runtime-Deduplizierung verhindert neue Duplikate, beseitigt Altbestand aber nicht.
+- Einheitliches Retrieval kann deshalb mehrere Varianten desselben Sachverhalts in die
+  Top-7 aufnehmen und unnötig Kontext verbrauchen.
+
+Chat-Schutzschicht:
+- Vor dem Einfügen der Knowledge-Treffer in den LLM-Kontext werden Note-Treffer
+  untereinander anhand ihrer gespeicherten Embeddings verglichen.
+- Nur sehr nahe Note-zu-Note-Treffer mit Similarity >= 0.88 werden als
+  Kontext-Redundanzgruppe betrachtet.
+- Pro Gruppe bleibt die inhaltlich reichere Note im Prompt; andere Varianten werden
+  nur aus dem Prompt unterdrückt, nicht aus PostgreSQL gelöscht oder archiviert.
+- Debug enthält suppressed_knowledge, sodass sichtbar bleibt, welche Treffer nur für
+  den Prompt unterdrückt wurden.
+- Die rohe gemeinsame Top-7-Liste bleibt unter retrieved_knowledge vollständig sichtbar.
+
+Bestands-Cleanup:
+- Neuer Endpunkt: POST /api/maintenance/deduplicate-notes.
+- Standardmäßig dry_run=true.
+- Kandidatengruppen werden über Note-zu-Note-Cosine-Similarity >= 0.78 gebildet.
+- Ein separater LLM-Schritt prüft jede Gruppe und darf null, eine oder mehrere echte
+  Merge-Gruppen vorschlagen.
+- Verwandte Themen allein dürfen nicht zusammengeführt werden.
+- Bei dry_run=false wird je Merge-Gruppe eine canonical Note mit dem konsolidierten
+  Inhalt aktualisiert und neu embedded.
+- Die übrigen Notes dieser Merge-Gruppe werden archiviert, nicht gelöscht.
+- Dadurch bleibt die historische Provenienz in den archivierten Datensätzen erhalten.
+- Aktuell besitzt die canonical Note weiterhin nur ihre bestehende einzelne
+  source_event_id; Mehrquellen-Provenienz bleibt ein späterer Datenmodell-Ausbau.
+
+Sicherheits-/Testprinzip:
+- Cleanup wird noch nicht automatisch in daily maintenance ausgeführt.
+- Zuerst soll der dry-run gegen die vorhandenen Testduplikate geprüft werden.
+
+
+28. Implementierungsstand v0.18.0 – einheitliche Knowledge-Detail-API
+
+Neuer Endpunkt:
+- GET /api/knowledge/{key}
+
+Unterstützte Schlüssel:
+- note:<id>
+- task:<id>
+- list:<id>
+- list_item:<id>
+
+Ziel:
+- Clients müssen nach einer gemeinsamen Knowledge-Suche nicht mehr selbst entscheiden,
+  welchen ressourcenspezifischen GET-Endpunkt sie verwenden müssen.
+- search_knowledge liefert bereits typisierte keys; derselbe key kann nun direkt zum
+  Lesen des vollständigen Objekts verwendet werden.
+
+Einheitliches Grundformat:
+- key
+- type
+- id
+- title
+- content
+- created_at
+- updated_at
+- archived
+- source_event_id
+- metadata
+
+Typabhängige metadata:
+- Note: Embedding-Modell und Dimensionen.
+- Task: due_at, status, Embedding-Modell und Dimensionen.
+- List: Embedding-Metadaten plus sämtliche List Items.
+- List Item: status, Embedding-Metadaten und Parent-Liste.
+
+API-Design:
+- Die gemeinsame Knowledge-API vereinheitlicht zunächst nur Suche und Lesen.
+- Typabhängige Mutationen bleiben weiterhin bei den spezialisierten Ressourcen-Endpunkten
+  wie /api/tasks/{id}/done oder /api/list-items/{id}/done.
+- Dadurch bleibt die Fassade einfach, ohne unterschiedliche Domänenaktionen künstlich
+  in einen universellen Mutationsendpoint zu pressen.
+
+
+29. Implementierungsstand v0.19.0 – Hybrid Retrieval
+
+Entscheidung:
+- Kein Elasticsearch/OpenSearch für die erste Hybrid-Stufe.
+- PostgreSQL bleibt alleiniger Source of Truth und Suchdienst.
+- Hybrid Retrieval kombiniert drei vorhandene PostgreSQL-Signale:
+  1. pgvector / Qwen3-Embedding für semantische Ähnlichkeit.
+  2. PostgreSQL Full-Text Search mit Konfiguration simple.
+  3. pg_trgm für technische Begriffe, Namen, IDs und ähnliche Zeichenfolgen.
+- pg_trgm wird beim Start mit CREATE EXTENSION IF NOT EXISTS pg_trgm aktiviert.
+
+Kandidaten:
+- Jeder Kanal erzeugt zunächst bis zu 20 globale Kandidaten über alle gewählten
+  Knowledge-Typen.
+- Die Vector-Seite wird vor der Fusion nicht mehr hart bei 0.30 abgeschnitten.
+- Dadurch können schwache Vector-Treffer durch starke lexikalische Signale gerettet werden.
+
+Suchtexte:
+- Note: content.
+- Task: content.
+- List: title + description + alle aktiven Items.
+- List Item: Parent-Listentitel + Item-Inhalt.
+
+Fusion:
+- Reciprocal Rank Fusion (RRF) mit k=60.
+- Gleichgewichtete Beiträge:
+  1/(60 + vector_rank)
+  + 1/(60 + fts_rank)
+  + 1/(60 + trigram_rank)
+- Es werden Ränge statt nicht vergleichbarer Rohscores fusioniert.
+
+Finale Relevanzschranke:
+- Ein Kandidat bleibt erhalten, wenn mindestens eines gilt:
+  - semantic cosine similarity >= 0.30,
+  - Full-Text Search hat einen echten Match,
+  - trigram/substring score >= 0.35.
+- Damit bleibt die bisherige semantische 0.30-Schranke als Schutz bestehen, ohne
+  exakte lexikalische Treffer wie USB-C-Kabel auszuschließen.
+- Finale Knowledge-Ausgabe bleibt auf maximal 7 Treffer begrenzt.
+
+API:
+- POST /api/search-knowledge bleibt unverändert nutzbar.
+- Ergebnisse enthalten weiterhin similarity als backward-kompatiblen semantischen
+  Cosine-Wert.
+- Neu: rrf_score und retrieval.ranks/scores für vector, fts und trigram.
+- Die API-Antwort weist retrieval_mode=hybrid_rrf aus.
+- /api/message nutzt automatisch dieselbe search_knowledge()-Funktion und damit ab
+  dieser Version ebenfalls Hybrid Retrieval.
+
+Indizes:
+- Noch keine GIN/GiST/HNSW-Indizes. Bei der aktuellen kleinen Datenmenge werden
+  zunächst Korrektheit und Ranking getestet.
+- Spätere Performance-Indizes verändern die API oder Ranking-Logik nicht.
+
+
+30. Implementierungsstand v0.20.0 – Mehrquellen-Provenienz
+
+Datenmodell:
+- Neue Relationstabelle knowledge_sources.
+- Felder: knowledge_type, knowledge_id, event_id, relation, created_at.
+- Unterstützte Typen: note, task, list, list_item.
+- Pro Knowledge-Objekt/Event-Paar existiert maximal eine Relation.
+- event_id besitzt einen echten FK auf events; knowledge_id bleibt wegen der
+  polymorphen Wissensarten bewusst ohne direkten SQL-FK.
+- Die bisherigen source_event_id-Felder bleiben vorerst als Legacy-/Kompatibilitätsfeld
+  erhalten. knowledge_sources ist ab dieser Version die kanonische Mehrquellen-Provenienz.
+
+Migration/Backfill:
+- Bestehende source_event_id-Werte von Notes, Tasks und List Items werden automatisch
+  als legacy_source in knowledge_sources übernommen.
+- Bestehende Lists erhalten aus den Source-Events ihrer Items item_source-Relationen.
+- Backfill ist idempotent über UNIQUE(knowledge_type, knowledge_id, event_id).
+
+Runtime-Capture:
+- Neue Notes/Tasks/List Items schreiben automatisch ihre Quell-Events.
+- Bei skip oder update_existing wird das neue Event als supporting-Provenienz an das
+  vorhandene Knowledge-Objekt angehängt.
+- Lists werden mit den Events ihrer hinzugefügten Items verknüpft.
+
+Tageskonsolidierung:
+- Das LLM-Schema verwendet source_event_ids[] statt einer einzigen source_event_id.
+- Mehrere Events können denselben konsolidierten Sachverhalt gemeinsam belegen.
+- Das erste Event bleibt zusätzlich im Legacy-Feld source_event_id.
+- Alle Quellen werden in knowledge_sources geschrieben.
+- Bei update_existing oder skip werden neue Events als supporting verknüpft.
+
+Note-Cleanup:
+- Vor dem Archivieren von Duplikat-Notes werden deren Quellen auf die canonical Note
+  übertragen.
+- Neue übertragene Quellen erhalten relation=merged_source.
+- Bereits vorhandene Event-Quellen werden nicht dupliziert.
+
+Neue API:
+- GET /api/knowledge/{key}/sources
+  Liefert alle Quell-Events inklusive Relation, Event-Text, Zeitpunkt, Herkunft und
+  Archivstatus.
+- GET /api/events/{event_id}/knowledge
+  Reverse Lookup auf aus einem Event entstandene Knowledge-Objekte.
+- GET /api/knowledge/{key} enthält zusätzlich sources[].
+
+Architektur:
+- Knowledge kann damit nachvollziehbar aus mehreren Gesprächen, Listening-Mode-
+  Segmenten, späteren Bestätigungen und Merge-Vorgängen entstehen.
+- Dies bildet die Provenienzgrundlage für spätere STT-/Listening-Mode- und externe
+  Ingestion-Quellen.
+
+
+31. Implementierungsstand v0.21.0 – Offline-/Device-Ingestion
+
+Ziel:
+- Sichere Offline-Synchronisation bereits auf API-Ebene vorbereiten.
+- Ein späteres Notebook kann dieselben lokal erzeugten Events nach Verbindungsabbrüchen
+  mehrfach senden, ohne Events oder Capture-Ergebnisse zu duplizieren.
+
+Event-Erweiterungen:
+- client_event_id TEXT als vom Client erzeugter stabiler Idempotency Key.
+- Unique Index auf client_event_id; normale Events dürfen weiterhin NULL verwenden.
+- capture_processed_at speichert, ob die Capture-Schicht bereits lief.
+- capture_result JSONB speichert das Capture-/Deduplizierungsergebnis.
+
+Idempotenz:
+- create_event_record() gibt bei wiederholter client_event_id das vorhandene Event zurück.
+- Bereits verarbeitete Events werden nicht nochmals durch Capture geschickt.
+- Das persistierte capture_result wird zurückgegeben.
+
+Neue Endpunkte:
+- POST /api/events/batch
+  Rohes Batch-Ingest bis maximal 100 Events.
+- POST /api/capture/batch
+  Batch-Ingest plus Capture/Deduplizierung.
+- POST /api/events/{event_id}/capture
+  Nachträgliche Capture-Verarbeitung eines bereits gespeicherten Roh-Events.
+- GET /api/events/by-client-id/{client_event_id}
+  Lookup über den Client-/Device-Identifier.
+
+Bestehende Endpunkte:
+- POST /api/events und POST /api/capture akzeptieren optional client_event_id.
+- /api/message persistiert sein Capture-Ergebnis ebenfalls im Event.
+- Event-Ausgaben enthalten client_event_id und capture_processed_at.
+- Provenienz-Ausgaben enthalten für Quell-Events ebenfalls client_event_id.
+
+Architektur:
+- Offline Clients können zunächst Roh-Events synchronisieren und später verarbeiten.
+- Oder sie verwenden direkt /api/capture/batch.
+- Das originale created_at bleibt erhalten, wodurch relative Zeitangaben weiterhin
+  gegen den tatsächlichen Aufnahmezeitpunkt normalisiert werden können.
+
+
+32. Scope-Erweiterung – Live Ingestion, Session Memory, Evidenz, Questions und Recovery
+
+32.1 Leitbild für lange Audio-/Text-Streams
+
+Längere Eingaben wie Voice Notes, Meetings oder fortlaufende Gespräche werden nicht erst am Ende vollständig verarbeitet. Das System soll bereits während der laufenden Session inkrementell verwertbare Ergebnisse erzeugen.
+
+Zielbild:
+- Ein laufender Datenstrom wird in Chunks aufgenommen und dauerhaft gespeichert.
+- Bereits verfügbare Chunks werden pipelineartig verarbeitet.
+- Aus neuen Transkriptabschnitten werden semantische Events extrahiert.
+- Ein fortlaufender Session-State kennt bereits erzeugte Erkenntnisse.
+- Neue Informationen können bestehende Session-Artefakte erweitern, korrigieren, bestätigen oder superseden.
+- Bereits während des Meetings stehen Notes, Tasks, Lists, relevante bestehende Knowledge-Treffer und Questions für ein späteres Live-Dashboard zur Verfügung.
+- Am Ende der Session wird der temporäre Session-State in dauerhaftes Personal Knowledge konsolidiert.
+
+Wichtige Trennung:
+1. Raw Evidence: Audio, Transcript, Chunks und unveränderte Events.
+2. Live Session Memory: vorläufige, während der Session veränderliche Erkenntnisse.
+3. Durable Personal Knowledge: langfristige Notes, Tasks, Lists und List Items.
+4. Retrieved Context: passend zum laufenden Thema abgerufenes bestehendes Wissen und Antworten.
+
+32.2 Ingestion Sessions und Chunks
+
+Neue konzeptionelle Ebene oberhalb von Events:
+- ingestion_sessions: Container für zusammengehörige lange Eingaben, z. B. Meeting, Voice Note, importiertes Transkript oder später kontinuierlichen Listening Mode.
+- ingestion_chunks: einzelne zeitlich geordnete Eingabeblöcke mit stabiler Client-ID, sequence number, Zeitbereich und optional Hash.
+
+Session-Verarbeitung soll inkrementell beginnen, sobald ausreichend Material vorliegt, z. B. nach ungefähr zwei Minuten oder nach einem semantisch sinnvollen Schwellenwert. Die genaue Chunkgröße bleibt konfigurierbar.
+
+Chunking ist technisch und nicht identisch mit semantischer Event-Segmentierung. Semantische Aussagen dürfen Chunk-Grenzen überschreiten. Deshalb sollen Analysefenster einen begrenzten Transcript-Overlap bzw. vorherigen Kontext erhalten.
+
+32.3 Persistente Job Queue
+
+Für STT, Segmentierung, Session-Analyse, Question Resolution und Finalisierung wird eine persistente Queue benötigt.
+
+Erste Implementierung soll PostgreSQL nutzen, keine zusätzliche Redis-, RabbitMQ- oder Kafka-Infrastruktur.
+
+Konzept processing_jobs:
+- id
+- job_type
+- ingestion_session_id
+- chunk_id
+- sequence
+- status: queued | running | done | failed
+- payload JSONB
+- result JSONB
+- attempts
+- available_at
+- locked_at
+- started_at
+- completed_at
+- error
+
+Worker-Claiming später über PostgreSQL-Mechanismen wie FOR UPDATE SKIP LOCKED. Jobs sind Infrastrukturzustand und ausdrücklich keine Knowledge Events.
+
+Ordering:
+- Unabhängige Sessions dürfen parallel verarbeitet werden.
+- STT einzelner Chunks darf teilweise parallel laufen.
+- Kontextabhängige Session-State-Updates müssen innerhalb einer Session geordnet angewendet werden.
+
+32.4 Watermarks und Recovery
+
+Sessions müssen ihren Verarbeitungsfortschritt nachvollziehbar abbilden, z. B.:
+- received_until
+- transcribed_until
+- segmented_until
+- analyzed_until
+
+Jeder Chunk besitzt nachvollziehbare Verarbeitungszustände.
+
+Ein späterer Session Reconciler prüft:
+- welche Rohdaten dauerhaft vorliegen,
+- welche Verarbeitungsschritte bereits abgeschlossen sind,
+- welche Jobs fehlen oder fehlgeschlagen sind,
+- und erzeugt fehlende Jobs erneut.
+
+Ziel:
+- Client-Absturz, Server-Neustart, Worker-Crash, Timeout, verspätete oder doppelte Chunks dürfen keine Aufnahme unbrauchbar machen.
+- Der Client löscht lokale Rohdaten erst nach bestätigter persistenter Speicherung.
+- Wiederholte Uploads werden durch stabile IDs/Hashes idempotent.
+- Unvollständig verarbeitete Sessions können serverseitig repariert und nachträglich finalisiert werden.
+- Geplanter späterer Endpoint: POST /api/ingestion-sessions/{id}/repair
+
+32.5 Session Artifacts
+
+Während einer laufenden Session sollen noch nicht zwingend endgültige Notes/Tasks geschrieben werden. Stattdessen existiert ein Live-Arbeitsgedächtnis.
+
+Konzept session_artifacts:
+- id
+- session_id
+- artifact_type: note | task | list | list_item | fact | decision o. ä.
+- content
+- status
+- confidence
+- source_event_ids
+- created_at
+- updated_at
+
+Neue Chunks können:
+- create
+- update
+- confirm
+- supersede
+- dismiss
+
+Dadurch kann eine frühe Aussage während desselben Meetings später korrigiert werden, ohne sofort das langfristige Personal Knowledge zu verunreinigen.
+
+Bei Session-Finalisierung werden die relevanten Artefakte durch die bestehende Capture-/Dedupe-/Knowledge-Pipeline in Durable Knowledge überführt.
+
+32.6 Direkte Zitat-/Evidenzspeicherung
+
+Knowledge-Provenienz soll über reine Event-IDs hinausgehen. Jede verarbeitete Information soll möglichst auf konkrete Text-/Transkriptspannen zurückführbar sein.
+
+Konzept knowledge_evidence:
+- id
+- knowledge_type
+- knowledge_id
+- event_id
+- ingestion_session_id
+- quote_text
+- source_start_ms
+- source_end_ms
+- spoken_at
+- evidence_type
+- created_at
+
+Damit kann eine Note später mehrere konkrete Zitate aus verschiedenen Sessions besitzen.
+
+Beispiel:
+Eine Note zum Audiosystem: "Für das geplante Projekt sollen Frequenzen zwischen 25 und 100 Hz verstärkt werden."
+Mögliche Evidenz: Zitat aus Session A, B und C.
+
+Die Originalzitate bleiben erhalten und ermöglichen:
+- Nachvollziehbarkeit
+- Evidenzstärke
+- spätere UI-Anzeige "Warum weiß das System das?"
+- unabhängige Bestätigungen
+- Widerspruchsanalyse
+
+Wichtig: Mehrere Zitate innerhalb derselben Session sind nicht gleichwertig mit mehreren unabhängigen Bestätigungen über verschiedene Sessions/Tage.
+
+32.7 Knowledge Activity, Aktivierung, Zugriff und Trends
+
+Knowledge soll zusätzlich eine Nutzungs-/Aktivierungshistorie erhalten.
+
+Konzept knowledge_activity:
+- id
+- knowledge_type
+- knowledge_id
+- activity_type, z. B. retrieved | activated | displayed | opened | cited | updated
+- session_id
+- created_at
+- metadata JSONB
+
+Begriffe:
+- Activation: Ein Knowledge-Objekt wird durch aktuellen Kontext als relevant erkannt/retrieved, auch ohne expliziten Benutzerzugriff.
+- Access: Das Objekt wird tatsächlich angezeigt, geöffnet oder konkret verwendet.
+
+Später ableitbare Signale:
+- evidence_count
+- independent_session_count
+- activation_count
+- last_activated_at
+- access_count
+- last_accessed_at
+- trend over time
+
+Diese Signale dürfen die Suche später moderat gewichten. Primäres Ranking-Signal bleibt Query-Relevanz; Popularität darf keine exakt passende neue Information verdrängen.
+
+32.8 Questions – explizit und implizit
+
+Questions sind abgeleitete Arbeitsobjekte und keine Raw Events.
+
+Konzept question:
+- id
+- session_id
+- text
+- origin: explicit | implicit
+- status: open | answering | answered | dismissed | expired
+- confidence
+- priority/utility
+- source_event_ids
+- answer
+- answer_sources
+- created_at
+- updated_at
+
+Explizite Questions: im Gespräch direkt ausgesprochene Fragen.
+Implizite Questions: logisch aus einer Entscheidung, Unsicherheit oder offenen Abhängigkeit hervorgehende Fragestellungen.
+
+Question-Lifecycle: open -> answering -> answered. Optional später answered -> reopened, wenn neue Evidenz/Widerspruch entsteht.
+
+32.9 Question Control / Question Budget
+
+Implizite Questions müssen stark begrenzt werden. Das System soll nicht aus jedem Satz zahlreiche spekulative Fragen erzeugen.
+
+Geplante Gates:
+- direkte Relevanz für aktuelle Entscheidung, Aufgabe oder Thema
+- Confidence Threshold
+- semantische Deduplizierung ähnlicher Questions
+- Utility/Priority Score
+- Budget pro Session bzw. Thema
+- bereits offene ähnliche Questions berücksichtigen
+- spekulative/geringwertige Questions verwerfen oder intern halten
+
+Question Budget bleibt konfigurierbar; konkrete Grenzwerte werden empirisch getestet.
+
+Wichtige Korrektur:
+Eine bereits in Personal Knowledge oder zuvor beantworteten Questions vorhandene Antwort bedeutet NICHT, dass die Question unterdrückt werden soll.
+
+Stattdessen:
+1. Question wird weiterhin als relevant erkannt und darf im Live-Kontext erscheinen.
+2. Zuerst wird Personal Knowledge durchsucht.
+3. Ist dort eine adäquate Antwort vorhanden, kann sie direkt und kostengünstig präsentiert werden.
+4. Eine komplexere Reference-/Webrecherche wird zunächst übersprungen oder nur bei Bedarf durchgeführt.
+5. Der Benutzer könnte die Information vergessen haben oder sie bewusst erneut abrufen wollen; vorhandenes Wissen ist daher ein Fast Path, kein Suppression-Kriterium.
+
+Zusätzlich kann eine offene Question später durch das laufende Gespräch selbst beantwortet werden. Dann wird die Antwort aus neuen Events/Evidenz übernommen und die Question aus der aktiven Dashboard-Ansicht entfernt, historisch aber erhalten.
+
+32.10 Proaktives Retrieval und späteres Dashboard
+
+Der laufende Session-State soll Themen und aktuelle Bedürfnisse erkennen und bereits bestehendes Personal Knowledge proaktiv abrufen.
+
+Späteres Dashboard kann u. a. anzeigen:
+- aktuelle Session Notes/Facts
+- Entscheidungen
+- aktive Tasks
+- relevante Lists
+- offene Questions
+- bereits beantwortete Questions
+- direkt passende bestehende Personal Notes
+- Knowledge mit hoher aktueller Aktivierung
+- später Reference-/Web-Antworten
+
+Ziel: Das portable Gerät soll relevante Informationen möglichst bereits anzeigen, bevor der Benutzer eine explizite Suchanfrage stellen muss.
+
+32.11 Externe Antworten / Web Research – Scope, aber später
+
+Question Resolution soll langfristig eine abgestufte Quellenhierarchie verwenden:
+1. Personal Knowledge
+2. kuratierte/reference Knowledge
+3. aktuelle Webrecherche
+
+Webrecherche bleibt bewusst zurückgestellt. Die Question-, Evidence- und Answer-Strukturen werden aber so geplant, dass externe Quellen später ergänzt werden können.
+
+33. Überarbeiteter Bearbeitungsplan – engmaschige Iterationen
+
+Die nächsten Schritte werden wieder bewusst klein gehalten. Nach jedem Schritt erfolgt ein Funktionstest bzw. Review, bevor der nächste Block implementiert wird.
+
+Phase A – Ingestion Foundation
+
+A1. Ingestion Sessions
+- Tabelle ingestion_sessions
+- Create/Get/List/Finish-Grundendpunkte
+- noch keine Worker oder Audioverarbeitung
+Prüfung: Session anlegen, Status lesen, Session sauber beenden.
+
+A2. Ingestion Chunks
+- Tabelle ingestion_chunks
+- sequence, client_chunk_id, Zeitbereiche, payload/raw text
+- idempotenter Upload
+Prüfung: Chunks in Reihenfolge und doppelt senden; Reihenfolge/Idempotenz kontrollieren.
+
+A3. Processing Jobs
+- PostgreSQL processing_jobs
+- queued/running/done/failed
+- generische enqueue/claim/complete/fail-Helfer
+Prüfung: mehrere Jobs, Retry, atomisches Claiming.
+
+A4. Session Watermarks + Repair
+- abgeleitete/gespeicherte Verarbeitungsstände
+- erster Reconciler/Repair-Endpunkt
+Prüfung: absichtlich unvollständige Session erzeugen; Repair erkennt fehlende Verarbeitungsschritte.
+
+Phase B – Semantic Live Processing
+
+B1. Semantic Event Segmentation
+- zunächst nur Text-/Fake-Transcript-Chunks
+- Transcript-Kontext + Overlap
+- stabile Event-IDs
+Prüfung: mehrere Notes/Tasks/Lists in einem langen Chunk; Aussage über Chunk-Grenze hinweg.
+
+B2. Session Artifacts
+- Live Notes/Tasks/Facts statt sofortiger Durable Writes
+- create/update/confirm/supersede
+Prüfung: Aussage in Chunk 1, Ergänzung in Chunk 2, Korrektur in Chunk 3.
+
+B3. Evidence Quotes
+- konkrete Quote-/Zeitspannen an Events/Artifacts/Knowledge
+Prüfung: Note auf mehrere konkrete Zitate zurückführen.
+
+B4. Questions
+- explicit/implicit
+- dedupe, confidence, status
+Prüfung: explizite Frage, sinnvolle implizite Frage, keine triviale/spekulative Frage.
+
+B5. Question Budget + Fast Answer Path
+- Utility Ranking/Budget
+- Personal Knowledge zuerst
+- vorhandene Antwort präsentieren, nicht suppressen
+Prüfung: bereits bekannte Frage wird sofort aus Notes beantwortet; keine unnötige externe/komplexe Recherche; zu viele implizite Fragen werden priorisiert.
+
+Phase C – Session Finalization
+
+C1. Final Consolidation
+- Session Artifacts -> Durable Knowledge
+- bestehende Dedupe-/Provenienz-Pipeline weiterverwenden
+Prüfung: Session endet; endgültige Notes/Tasks/Lists korrekt übernommen.
+
+C2. Knowledge Activity
+- retrieved/activated/displayed/opened/cited
+- noch ohne Ranking-Änderung
+Prüfung: Activity History nachvollziehbar.
+
+C3. Importance/Trend Signals
+- aggregierte Statistiken
+- zunächst nur messen, nicht stark ranken
+Prüfung: häufig aktivierte Themen erkennbar.
+
+Phase D – Audio
+D1. Audio Chunk Storage/API
+D2. STT Worker
+D3. Streaming/Incremental STT Integration
+D4. Client-Robustheit und Audio-ACK
+D5. Recovery unter echten Audiofehlern
+
+Phase E – Proactive Interaction
+E1. Session Topic/Context Detection
+E2. Proactive Personal Knowledge Retrieval
+E3. Live Dashboard Feed/API
+E4. Question Resolver mit Reference Knowledge
+E5. später Web Research
+
+Phase F – Device / Operations
+F1. Device Cache + Sync Protocol
+F2. Push/Poll/Connectivity
+F3. E-Ink UI
+F4. Listening Mode Controls/VAD
+F5. Scheduler/Maintenance Automation
+F6. CalDAV
+F7. Hardware Finalisierung
+
+34. Dokumentationsanforderung für spätere Fortführung
+
+Vor größeren Arbeiten in anderen Chats soll eine eigenständige technische Dokumentation des aktuellen Systems erstellt werden.
+
+Sie soll mindestens enthalten:
+- Projektziele und Architekturprinzipien
+- Server-/Service-Topologie
+- Datenmodell und Tabellen
+- Event/Capture/Message-Flows
+- Knowledge-Typen
+- Retrieval/Hybrid-Ranking
+- Deduplizierung
+- Provenienz
+- Offline-/Device-Ingestion
+- vollständige API-Endpunktübersicht mit Request-/Response-Beispielen
+- Konfiguration und wichtige Konstanten
+- bekannte Einschränkungen
+- Migrations-/Versionshistorie
+- Testanweisungen
+- geplante nächste Schritte
+
+Diese Dokumentation ist ein eigener späterer Arbeitsschritt und wird versioniert erzeugt.
+
+
+35. Implementierungsstand v0.22.0 – A1 Ingestion Sessions
+
+A1 der neuen engmaschigen Ingestion-Roadmap ist umgesetzt.
+
+Neue Tabelle ingestion_sessions:
+- id BIGSERIAL
+- title optional
+- source_type
+- source optional
+- status
+- started_at
+- ended_at optional
+- created_at
+- updated_at
+
+Statusmodell ist bereits zukunftsfähig vorbereitet:
+- open
+- finished
+- processing
+- completed
+- failed
+
+In A1 werden jedoch nur open und finished aktiv verwendet.
+Processing/Completed/Failed sind für spätere Job-/Finalisierungsphasen reserviert.
+
+Neue API:
+- POST /api/ingestion-sessions
+- GET /api/ingestion-sessions
+- GET /api/ingestion-sessions/{session_id}
+- POST /api/ingestion-sessions/{session_id}/finish
+
+Create Request:
+- source_type erforderlich
+- title optional
+- source optional
+- started_at optional; Standard ist aktuelle Europe/Berlin-Zeit
+
+Finish:
+- setzt status=finished
+- setzt ended_at
+- aktualisiert updated_at
+- ist idempotent: erneutes Finish einer bereits finished Session gibt dieselbe Session
+  zurück.
+- andere nicht-offene Zustände werden mit Conflict abgewiesen.
+
+A1 enthält bewusst noch nicht:
+- Ingestion Chunks
+- Job Queue
+- Watermarks
+- STT
+- Semantic Segmentation
+- Session Artifacts
+- Questions
+
+Nächster Roadmap-Schritt nach erfolgreichem Test:
+A2 – Ingestion Chunks mit sequence, client_chunk_id, Zeitbereich und idempotentem Upload.
+
+
+36. Implementierungsstand v0.22.1 – Modularisierung (A1.5)
+
+Vor A2 wurde der bisherige FastAPI-Monolith modularisiert. Dies ist ein reiner
+Refactoring-Schritt; die fachliche API und Datenbanklogik bleiben unverändert.
+
+Neue Paketstruktur: smart_notebook_v0_22_1/
+- app.py: FastAPI-Erzeugung und Router-Registrierung.
+- config.py: operative Konfiguration und Thresholds.
+- prompts.py: LLM-Systemprompts.
+- database.py: DB-Verbindung, Schema, Migrationen und Backfills.
+- schemas.py: Pydantic-Modelle.
+- utils.py: kleine allgemeine Helfer.
+
+Services:
+- embeddings.py
+- events.py
+- ingestion.py
+- provenance.py
+- notes.py
+- tasks.py
+- lists.py
+- retrieval.py
+- dedupe.py
+- capture.py
+- consolidation.py
+- maintenance.py
+- chat.py
+
+Router:
+- system.py
+- ingestion.py
+- events.py
+- notes.py
+- tasks.py
+- lists.py
+- knowledge.py
+- maintenance.py
+
+Kompatibler Einstiegspunkt:
+- main_v0.22.1_modular.py exportiert `app`.
+
+Refactoring-Validierung:
+- alle Module syntaktisch valide.
+- modulare FastAPI-App ohne echten DB-Zugriff importierbar.
+- exakt dieselben 56 Smart-Notebook-Routen wie v0.22.0.
+- alle 151 Top-Level-Funktionen/Klassen aus v0.22.0 sind genau einmal in der modularen
+  Struktur vorhanden.
+- struktureller AST-Vergleich der Funktionen/Klassen ist identisch; lediglich
+  process_stored_event_capture enthält einen lokalen Import zur Entkopplung der Module.
+- statische Prüfung auf fehlende globale Imports ergab 0 Probleme.
+
+Noch ausstehend:
+- lokaler Funktionstest gegen die reale PostgreSQL-/Embedding-/LLM-Infrastruktur des
+  Benutzers.
+- Erst danach A2 Ingestion Chunks.
+
+
+36. Implementierungsstand v0.23.0 – A2 Ingestion Chunks (Code bereit, Live-Test ausstehend)
+
+A2 erweitert die modulare v0.22.1-Struktur, ohne Jobs/STT/Semantic Segmentation einzuführen.
+
+Neue Tabelle ingestion_chunks:
+- id BIGSERIAL
+- session_id FK -> ingestion_sessions ON DELETE CASCADE
+- sequence INTEGER >= 0
+- client_chunk_id TEXT
+- text TEXT (in A2 bewusst Text/Fake-Transcript, noch kein Audio-BLOB)
+- source_start_ms / source_end_ms optional als Paar
+- content_hash SHA-256
+- created_at / updated_at
+
+Constraints:
+- UNIQUE(session_id, client_chunk_id)
+- UNIQUE(session_id, sequence)
+- source_start_ms und source_end_ms müssen entweder beide NULL oder beide gesetzt sein.
+- Wenn gesetzt: source_start_ms >= 0 und source_end_ms > source_start_ms.
+
+Idempotenz und Konfliktregeln:
+- Wiederholung desselben client_chunk_id mit identischem Chunk-Inhalt liefert das bestehende Objekt zurück und created=false.
+- Derselbe client_chunk_id mit verändertem Inhalt liefert HTTP 409.
+- Dieselbe sequence mit einer anderen client_chunk_id liefert HTTP 409.
+- Der Hash umfasst sequence, exakten Text und optionalen Zeitbereich.
+- Der Raw-Text wird nicht normalisiert/umgeschrieben; nur Leertext wird abgewiesen.
+
+Offline-/Recovery-Regel:
+- Chunks dürfen auch noch an eine bereits status=finished markierte Session angehängt werden.
+- finished bedeutet "Aufnahme beendet", nicht "alle Daten vollständig synchronisiert/verarbeitet".
+- Dies erlaubt verspätete Uploads nach Offline-Phasen und wird später für Repair/Reconciliation benötigt.
+
+Neue API:
+- POST /api/ingestion-sessions/{session_id}/chunks
+- GET /api/ingestion-sessions/{session_id}/chunks
+- GET /api/ingestion-chunks/{chunk_id}
+
+POST Request:
+{
+  "sequence": 0,
+  "client_chunk_id": "meeting-42-chunk-0000",
+  "text": "Erster Transcriptabschnitt ...",
+  "source_start_ms": 0,
+  "source_end_ms": 120000
+}
+
+Response enthält zusätzlich:
+- content_hash
+- created=true bei neuem Chunk
+- created=false bei idempotentem Retry
+
+List-Sortierung:
+- Chunks werden strikt nach sequence ASC ausgegeben.
+
+Versionierung/Modularisierung:
+- Neues Paket: smart_notebook_v0_23_0
+- Launcher: main_v0_23_0_modular.py
+- Bestehendes v0.22.1-Paket bleibt unverändert als Referenz.
+- Statische OpenAPI-Prüfung: 48 Paths / 59 Operationen (56 bisherige + 3 neue).
+
+A2 gilt erst nach realem PostgreSQL-Test als vollständig abgeschlossen.
+Danach folgt A3: persistente PostgreSQL Processing Jobs.

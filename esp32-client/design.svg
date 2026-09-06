@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="830" viewBox="0 0 1100 830">
+<rect width="1100" height="830" fill="#eeeae2"/>
+<style>text{font-family:Arial,sans-serif;fill:#171918}.small{font-size:15px}.title{font-size:27px;font-weight:bold}.label{font-size:18px}.body{font-size:21px}.screen{fill:#fafbf5;stroke:#171918;stroke-width:3}.line{stroke:#171918;stroke-width:1}</style>
+<text x="40" y="44" class="title">Smart Notebook · erster Bedienentwurf</text>
+<text x="40" y="72" class="small">Beispieldaten · Querformat 800 × 480, hier verkleinert · kein laufender Gerätestatus</text>
+<g transform="translate(40 110)">
+<rect class="screen" width="490" height="294" rx="8"/>
+<text x="20" y="30" class="small">14:32    Online                         2 Uploads offen    Akku 82 %</text>
+<path d="M20 44H470" class="line"/>
+<text x="20" y="80" class="title">Heute</text><text x="20" y="112" class="body">15:00 · Angebot prüfen</text>
+<rect x="14" y="127" width="462" height="47" fill="#171918"/>
+<text x="26" y="157" class="body" style="fill:white">› Projektplanung · neue Antwort</text>
+<text x="20" y="206" class="body">Listen                                      ›</text>
+<text x="20" y="246" class="label">Meeting starten                             ›</text>
+<text x="20" y="278" class="small">↑↓ Auswählen   ·   Mitte öffnen   ·   Memo-Taste halten</text>
+</g>
+<g transform="translate(570 110)">
+<rect class="screen" width="490" height="294" rx="8"/>
+<text x="20" y="30" class="small">14:32    Offline                                           Akku 82 %</text>
+<path d="M20 44H470" class="line"/><circle cx="35" cy="85" r="12" fill="#171918"/>
+<text x="62" y="94" class="title">Memo wird aufgenommen</text>
+<text x="20" y="161" font-size="50">00:12</text>
+<text x="20" y="205" class="body">Loslassen zum Speichern</text>
+<text x="20" y="247" class="label">Upload automatisch bei Verbindung.</text>
+<text x="20" y="278" class="small">Zeit in groben Intervallen aktualisieren; kein blinkendes Symbol.</text>
+</g>
+<g transform="translate(40 460)">
+<rect class="screen" width="490" height="294" rx="8"/>
+<text x="20" y="30" class="small">Einrichtung</text><path d="M20 44H470" class="line"/>
+<text x="20" y="84" class="title">Mit WLAN verbinden</text>
+<text x="20" y="126" class="label">1. Am Handy „Notebook-Setup“ öffnen</text>
+<text x="20" y="161" class="label">2. Gerätepasswort: [zufälliges Passwort]</text>
+<text x="20" y="196" class="label">3. http://192.168.4.1 öffnen</text>
+<text x="20" y="249" class="small">WLAN und Serveradresse im Browser eintragen.</text>
+<text x="20" y="278" class="small">Im ersten Prototyp stehen diese Angaben in der USB-Konsole.</text>
+</g>
+<g transform="translate(570 460)">
+<rect class="screen" width="490" height="294" rx="8"/>
+<text x="20" y="30" class="small">Listen / Einkauf                  Stand: heute, 14:25</text>
+<path d="M20 44H470" class="line"/><text x="20" y="84" class="title">Einkauf</text>
+<text x="20" y="131" class="body">Milch</text><text x="20" y="171" class="body">Kaffee</text><text x="20" y="211" class="body">Äpfel</text>
+<text x="20" y="251" class="small">Änderungen als Sprachmemo. Kein lokales Abhaken.</text>
+<text x="20" y="278" class="small">↑↓ Blättern   ·   Zurück                     Seite 1 / 1</text>
+</g>
+<text x="40" y="800" class="small">Offen: physische Memo-Taste, Zurück-Geste und Taschensperre. Inhalte und Priorität kommen vom Backend.</text>
+</svg>

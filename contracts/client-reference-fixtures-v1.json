@@ -1,0 +1,608 @@
+{
+  "contract_version": "1",
+  "description": "Normative shape and fallback fixtures; identifiers and timestamps are illustrative.",
+  "error": {
+    "code": "SESSION_STATE_CONFLICT",
+    "message": "The requested transition is not valid.",
+    "retry_class": "user_action",
+    "request_id": "fixture-request-1",
+    "details": {},
+    "timestamp": "2026-08-26T12:00:00+02:00"
+  },
+  "session_states": [
+    "created",
+    "recording",
+    "paused",
+    "draining",
+    "processing",
+    "completed",
+    "attention_required",
+    "aborted"
+  ],
+  "completion_states": [
+    "uploads_pending",
+    "processing",
+    "completed",
+    "failed",
+    "attention_required",
+    "aborted"
+  ],
+  "audio_ack": {
+    "client_session_id": "00000000-0000-4000-8000-000000000100",
+    "chunk": {
+      "sequence": 1,
+      "client_chunk_id": "segment-0001",
+      "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "byte_length": 83182,
+      "mime_type": "audio/mp4",
+      "codec": "aac-lc",
+      "sample_rate_hz": 48000,
+      "channels": 1,
+      "duration_ms": 10000,
+      "source_start_ms": 0,
+      "source_end_ms": 10000,
+      "captured_at": "2026-08-26T12:00:00+02:00",
+      "status": "stored",
+      "retain_until": "2026-09-02T12:00:01+02:00",
+      "retain_permanently": false,
+      "created_at": "2026-08-26T12:00:01+02:00",
+      "updated_at": "2026-08-26T12:00:01+02:00"
+    },
+    "durable_ack": true
+  },
+  "reconciliation": {
+    "client_session_id": "00000000-0000-4000-8000-000000000100",
+    "state": "draining",
+    "expected_final_sequence": 3,
+    "received_sequences": [
+      1,
+      3
+    ],
+    "missing_sequences": [
+      2
+    ],
+    "chunks": [
+      {
+        "sequence": 1,
+        "client_chunk_id": "segment-0001",
+        "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "durable_ack": true
+      },
+      {
+        "sequence": 3,
+        "client_chunk_id": "segment-0003",
+        "content_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "durable_ack": true
+      }
+    ],
+    "conflicts": [],
+    "upload_complete": false
+  },
+  "dashboard": {
+    "schema_version": "1",
+    "scope": "home",
+    "mode": "idle",
+    "primary_live_session": null,
+    "sessions": [],
+    "sections": [
+      {
+        "component": "section",
+        "required": false,
+        "id": "capture",
+        "title": "Neue Eingabe",
+        "reason_code": "capture_suggestion",
+        "reason_text": "Neue Eingabe",
+        "rank": 90,
+        "layout": {
+          "preferred_span": "full"
+        },
+        "items": [
+          {
+            "component": "input_prompt",
+            "required": false,
+            "id": "main-capture",
+            "title": "Memo oder Frage erfassen",
+            "modes": [
+              "auto",
+              "memo",
+              "query"
+            ],
+            "default_mode": "auto",
+            "icon": "microphone"
+          }
+        ]
+      },
+      {
+        "component": "future_optional_component",
+        "required": false,
+        "id": "ignore-this-fixture"
+      },
+      {
+        "component": "future_required_component",
+        "required": true,
+        "id": "show-incompatible-region-fixture"
+      }
+    ],
+    "revision": 1,
+    "generated_at": "2026-08-26T12:00:00+02:00",
+    "server_time": "2026-08-26T12:00:01+02:00"
+  },
+  "dashboard_component_types": [
+    "section",
+    "status_banner",
+    "text_block",
+    "entity_card",
+    "card_list",
+    "timeline",
+    "metric",
+    "alert",
+    "input_prompt",
+    "chat_preview",
+    "action_group",
+    "empty_state"
+  ],
+  "dashboard_actions": [
+    "open_entity",
+    "open_conversation",
+    "open_session",
+    "open_clarification",
+    "submit_capture",
+    "retry_operation",
+    "dismiss_local",
+    "open_settings",
+    "open_external_https"
+  ],
+  "knowledge_changes": [
+    {
+      "operation": "upsert",
+      "entity": {
+        "id": "00000000-0000-4000-8000-000000000201",
+        "revision": 4,
+        "type": "fact",
+        "library_id": "00000000-0000-4000-8000-000000000001",
+        "title": "Der Messwert beträgt 42.",
+        "content": "Der Messwert beträgt 42.",
+        "status": "active",
+        "created_at": "2026-08-25T12:00:00+02:00",
+        "updated_at": "2026-08-26T12:00:00+02:00",
+        "search": {
+          "normalized_text": "der messwert beträgt 42.",
+          "keywords": [
+            "der",
+            "messwert",
+            "beträgt"
+          ]
+        },
+        "topics": [],
+        "evidence": {
+          "score": 0.92,
+          "level": "high",
+          "conflict_status": "none",
+          "independent_sources": 2,
+          "quotes": []
+        }
+      }
+    },
+    {
+      "operation": "delete",
+      "entity": {
+        "id": "00000000-0000-4000-8000-000000000202",
+        "revision": 3,
+        "type": "note",
+        "reason": "archived"
+      }
+    },
+    {
+      "operation": "redirect",
+      "entity": {
+        "id": "00000000-0000-4000-8000-000000000203",
+        "revision": 2,
+        "type": "topic",
+        "target_id": "00000000-0000-4000-8000-000000000204",
+        "target_type": "topic",
+        "reason": "topic_merged"
+      }
+    }
+  ],
+  "chat_events": [
+    {
+      "sequence": 1,
+      "type": "started",
+      "payload": {
+        "status": "running"
+      }
+    },
+    {
+      "sequence": 2,
+      "type": "delta",
+      "payload": {
+        "text": "Teilantwort"
+      }
+    },
+    {
+      "sequence": 3,
+      "type": "citation",
+      "payload": {
+        "source_ref": {
+          "type": "fact",
+          "id": "00000000-0000-4000-8000-000000000201"
+        }
+      }
+    },
+    {
+      "sequence": 4,
+      "type": "action",
+      "payload": {
+        "type": "open_entity",
+        "params": {
+          "entity_type": "fact",
+          "entity_id": "00000000-0000-4000-8000-000000000201"
+        }
+      }
+    },
+    {
+      "sequence": 5,
+      "type": "completed",
+      "payload": {
+        "status": "completed"
+      }
+    }
+  ],
+  "retention": {
+    "server_raw_audio_days": 7,
+    "local_dashboard_hours": 10,
+    "local_chat_hours": 24,
+    "server_ephemeral_chat_hours": 48,
+    "server_technical_log_hours": 48
+  },
+  "response_examples": {
+    "AudioAckResponse": {
+      "client_session_id": "00000000-0000-4000-8000-000000000001",
+      "chunk": {
+        "sequence": 1,
+        "client_chunk_id": "fixture",
+        "content_hash": "fixture",
+        "byte_length": 1,
+        "mime_type": "fixture",
+        "codec": "fixture",
+        "sample_rate_hz": 1,
+        "channels": 1,
+        "duration_ms": 1,
+        "source_start_ms": 1,
+        "source_end_ms": 1,
+        "captured_at": "2026-08-27T12:00:00+02:00",
+        "status": "fixture",
+        "retain_until": "2026-08-27T12:00:00+02:00",
+        "retain_permanently": false,
+        "created_at": "2026-08-27T12:00:00+02:00",
+        "updated_at": "2026-08-27T12:00:00+02:00"
+      },
+      "durable_ack": true
+    },
+    "AudioDiagnosticResponse": {
+      "compatible": false,
+      "profile_id": "fixture",
+      "declared_mime_type": "fixture",
+      "detected_container": "fixture",
+      "detected_codec": "fixture",
+      "sample_rate_hz": 1,
+      "channels": 1,
+      "bitrate_bps": 1,
+      "duration_ms": 1,
+      "byte_length": 1,
+      "reason_codes": [],
+      "durable_state_created": false
+    },
+    "CapabilitiesResponse": {
+      "contract": {
+        "current": "fixture",
+        "supported": [],
+        "api_base": "fixture"
+      },
+      "server": {
+        "version": "fixture",
+        "time": "2026-08-27T12:00:00+02:00"
+      },
+      "status": "fixture",
+      "status_message": "fixture",
+      "features": {
+        "audio_upload": false,
+        "audio_upload_diagnostics": false,
+        "session_recovery": false,
+        "dashboard_snapshot": false,
+        "dashboard_sse": false,
+        "offline_knowledge_sync": false,
+        "chat": false,
+        "unified_push": false
+      },
+      "audio_profiles": [],
+      "limits": {
+        "request_timeout_seconds": 1,
+        "dashboard_cards_per_section": 1,
+        "live_transcript_max_segments": 1,
+        "live_transcript_window_seconds": 1,
+        "dashboard_history_hours": 1,
+        "dashboard_cache_max_age_seconds": 7200,
+        "dashboard_title_max_chars": 1,
+        "dashboard_preview_max_chars": 1,
+        "dashboard_detail_max_chars": 1,
+        "server_raw_audio_retention_days": 1,
+        "server_ephemeral_chat_retention_hours": 1,
+        "server_technical_log_retention_hours": 1
+      },
+      "session_states": [],
+      "completion_states": [],
+      "dashboard": {
+        "schema_version": "fixture",
+        "component_types": [],
+        "actions": [],
+        "color_roles": [],
+        "icon_tokens": [],
+        "border_roles": [],
+        "spacing_roles": [],
+        "preferred_spans": [],
+        "unknown_optional_component": "fixture",
+        "unknown_required_component": "fixture"
+      },
+      "transports": {
+        "rest": false,
+        "sse": false,
+        "unified_push": false,
+        "foreground_refresh": "fixture",
+        "background_refresh": "fixture",
+        "fallback_refresh": "fixture",
+        "sse_proxy_buffering": false
+      }
+    },
+    "CaptureResponse": {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "mode": "fixture",
+      "resolved_intent": "fixture",
+      "content": "fixture",
+      "context_ref": {},
+      "event_id": 1,
+      "conversation_id": "00000000-0000-4000-8000-000000000001",
+      "turn_id": "00000000-0000-4000-8000-000000000001",
+      "status": "fixture",
+      "result": {},
+      "error": "fixture",
+      "created_at": "2026-08-27T12:00:00+02:00",
+      "updated_at": "2026-08-27T12:00:00+02:00"
+    },
+    "ChatSSEEvent": {
+      "sequence": 1,
+      "type": "started",
+      "payload": {},
+      "created_at": "2026-08-27T12:00:00+02:00"
+    },
+    "ClientSessionResponse": {
+      "client_session_id": "00000000-0000-4000-8000-000000000001",
+      "state": "created",
+      "device_metadata": {},
+      "capture_mode": "fixture",
+      "sequence_base": 0,
+      "context_ref": {},
+      "capture_result": {},
+      "expected_final_sequence": 1,
+      "final_source_end_ms": 1,
+      "paused_at": "2026-08-27T12:00:00+02:00",
+      "finish_requested_at": "2026-08-27T12:00:00+02:00",
+      "finalized_at": "2026-08-27T12:00:00+02:00",
+      "aborted_at": "2026-08-27T12:00:00+02:00",
+      "last_error": "fixture",
+      "local_audio_release_allowed": false,
+      "local_audio_release_at": "2026-08-27T12:00:00+02:00",
+      "created_at": "2026-08-27T12:00:00+02:00",
+      "updated_at": "2026-08-27T12:00:00+02:00"
+    },
+    "ConversationCreatedResponse": {
+      "conversation": {
+        "id": "00000000-0000-4000-8000-000000000001",
+        "title": "fixture",
+        "status": "fixture",
+        "revision": 1,
+        "agent": {
+          "key": "fixture",
+          "display_name": "fixture"
+        },
+        "created_at": "2026-08-27T12:00:00+02:00",
+        "last_activity_at": "2026-08-27T12:00:00+02:00",
+        "dashboard_until": "2026-08-27T12:00:00+02:00"
+      },
+      "turn": {
+        "id": "00000000-0000-4000-8000-000000000001",
+        "conversation_id": "00000000-0000-4000-8000-000000000001",
+        "client_turn_id": "00000000-0000-4000-8000-000000000001",
+        "user_message_id": "00000000-0000-4000-8000-000000000001",
+        "assistant_message_id": "00000000-0000-4000-8000-000000000001",
+        "status": "fixture",
+        "attempts": 1,
+        "error": "fixture",
+        "created_at": "2026-08-27T12:00:00+02:00",
+        "started_at": "2026-08-27T12:00:00+02:00",
+        "completed_at": "2026-08-27T12:00:00+02:00",
+        "updated_at": "2026-08-27T12:00:00+02:00"
+      }
+    },
+    "ConversationDetailResponse": {
+      "conversation": {
+        "id": "00000000-0000-4000-8000-000000000001",
+        "title": "fixture",
+        "status": "fixture",
+        "revision": 1,
+        "agent": {
+          "key": "fixture",
+          "display_name": "fixture"
+        },
+        "created_at": "2026-08-27T12:00:00+02:00",
+        "last_activity_at": "2026-08-27T12:00:00+02:00",
+        "dashboard_until": "2026-08-27T12:00:00+02:00"
+      },
+      "messages": []
+    },
+    "ConversationListResponse": {
+      "conversations": []
+    },
+    "DashboardEntityResponse": {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "type": "fixture",
+      "status": "fixture",
+      "created_at": "2026-08-27T12:00:00+02:00",
+      "updated_at": "2026-08-27T12:00:00+02:00"
+    },
+    "DashboardResponse": {
+      "schema_version": "fixture",
+      "scope": "fixture",
+      "mode": "live",
+      "primary_live_session": {
+        "client_session_id": "00000000-0000-4000-8000-000000000001",
+        "state": "created"
+      },
+      "sessions": [],
+      "sections": [],
+      "revision": 1,
+      "generated_at": "2026-08-27T12:00:00+02:00",
+      "server_time": "2026-08-27T12:00:00+02:00"
+    },
+    "DashboardSSEEvent": {
+      "id": 1,
+      "event": "dashboard",
+      "data": {
+        "schema_version": "fixture",
+        "scope": "fixture",
+        "mode": "live",
+        "primary_live_session": {
+          "client_session_id": "00000000-0000-4000-8000-000000000001",
+          "state": "created"
+        },
+        "sessions": [],
+        "sections": [],
+        "revision": 1,
+        "generated_at": "2026-08-27T12:00:00+02:00",
+        "server_time": "2026-08-27T12:00:00+02:00"
+      }
+    },
+    "DeviceCredentialResponse": {
+      "client_installation_id": "00000000-0000-4000-8000-000000000001",
+      "credential": "fixture",
+      "expires_at": "2026-08-27T12:00:00+02:00",
+      "rotate_after": "2026-08-27T12:00:00+02:00"
+    },
+    "FinishResponse": {
+      "session": {
+        "client_session_id": "00000000-0000-4000-8000-000000000001",
+        "state": "created",
+        "device_metadata": {},
+        "capture_mode": "fixture",
+        "sequence_base": 0,
+        "context_ref": {},
+        "capture_result": {},
+        "expected_final_sequence": 1,
+        "final_source_end_ms": 1,
+        "paused_at": "2026-08-27T12:00:00+02:00",
+        "finish_requested_at": "2026-08-27T12:00:00+02:00",
+        "finalized_at": "2026-08-27T12:00:00+02:00",
+        "aborted_at": "2026-08-27T12:00:00+02:00",
+        "last_error": "fixture",
+        "local_audio_release_allowed": false,
+        "local_audio_release_at": "2026-08-27T12:00:00+02:00",
+        "created_at": "2026-08-27T12:00:00+02:00",
+        "updated_at": "2026-08-27T12:00:00+02:00"
+      },
+      "completion_status": "uploads_pending",
+      "reconciliation": {
+        "client_session_id": "00000000-0000-4000-8000-000000000001",
+        "state": "created",
+        "expected_final_sequence": 1,
+        "received_sequences": [],
+        "missing_sequences": [],
+        "chunks": [],
+        "conflicts": [],
+        "upload_complete": false
+      }
+    },
+    "HealthResponse": {
+      "status": "ok",
+      "server_version": "fixture",
+      "contract_version": "fixture",
+      "time": "2026-08-27T12:00:00+02:00"
+    },
+    "KnowledgeDeltaResponse": {
+      "mode": "delta",
+      "changes": [],
+      "next_cursor": "fixture",
+      "has_more": false
+    },
+    "KnowledgeEntityResponse": {
+      "operation": "upsert",
+      "entity": {}
+    },
+    "KnowledgeSnapshotResponse": {
+      "mode": "snapshot",
+      "items": [],
+      "next_cursor": "fixture",
+      "complete_cursor": "fixture",
+      "has_more": false,
+      "snapshot_sequence": 1
+    },
+    "LibrariesResponse": {
+      "libraries": []
+    },
+    "PushRegistration": {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "client_installation_id": "00000000-0000-4000-8000-000000000001",
+      "distributor": "fixture",
+      "status": "fixture",
+      "created_at": "2026-08-27T12:00:00+02:00",
+      "updated_at": "2026-08-27T12:00:00+02:00",
+      "last_success_at": "2026-08-27T12:00:00+02:00",
+      "failure_count": 1
+    },
+    "PushRegistrationCreateResponse": {
+      "registration": {
+        "id": "00000000-0000-4000-8000-000000000001",
+        "client_installation_id": "00000000-0000-4000-8000-000000000001",
+        "distributor": "fixture",
+        "status": "fixture",
+        "created_at": "2026-08-27T12:00:00+02:00",
+        "updated_at": "2026-08-27T12:00:00+02:00",
+        "last_success_at": "2026-08-27T12:00:00+02:00",
+        "failure_count": 1
+      },
+      "challenge_delivery": "delivered"
+    },
+    "PushRegistrationListResponse": {
+      "registrations": []
+    },
+    "ReconciliationResponse": {
+      "client_session_id": "00000000-0000-4000-8000-000000000001",
+      "state": "created",
+      "expected_final_sequence": 1,
+      "received_sequences": [],
+      "missing_sequences": [],
+      "chunks": [],
+      "conflicts": [],
+      "upload_complete": false
+    },
+    "SessionListResponse": [],
+    "TurnResponse": {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "conversation_id": "00000000-0000-4000-8000-000000000001",
+      "client_turn_id": "00000000-0000-4000-8000-000000000001",
+      "user_message_id": "00000000-0000-4000-8000-000000000001",
+      "assistant_message_id": "00000000-0000-4000-8000-000000000001",
+      "status": "fixture",
+      "attempts": 1,
+      "error": "fixture",
+      "created_at": "2026-08-27T12:00:00+02:00",
+      "started_at": "2026-08-27T12:00:00+02:00",
+      "completed_at": "2026-08-27T12:00:00+02:00",
+      "updated_at": "2026-08-27T12:00:00+02:00"
+    },
+    "UsageResponse": {
+      "batch_id": "00000000-0000-4000-8000-000000000001",
+      "accepted_count": 1,
+      "idempotent": false
+    }
+  }
+}
