@@ -142,8 +142,9 @@ War hier als Diskrepanz notiert: `create_session()` sendete den Wert nur in
 (`JOURNAL_SEQUENCE_BASE` aus `main/journal.h`), `response_matches_session()`
 prüft einen zurückgelieferten Wert über die neue `number_matches_or_absent()`
 (fehlendes Feld bleibt akzeptiert). `docs/BACKEND_REQUIREMENTS.md` korrigiert.
-Build und Flash gegen COM9 verifiziert; ein Live-Create ließ sich wegen des
-DNS-Problems unten nicht mehr gegenprüfen.
+Build und Flash gegen COM9 verifiziert; **live gegen den echten Server
+bestätigt** (`sync complete: create_ok=1 … finish=1`, siehe DNS-Abschnitt
+unten für den Verlauf dorthin).
 
 Weiterhin offen: ein fehlgeschlagener Create wird nur geloggt und gezählt
 (`create_failed`), nicht dauerhaft sichtbar als `attention` eingeordnet.
@@ -299,32 +300,40 @@ Drei Beobachtungen aus dieser Runde, chronologisch:
    Branch-Code. Widerlegt die Erklärung aus (2): Das Werkzeug war nicht die
    Ursache.
 
-Auffällig zwischen (2) und (3): unterschiedliche Basisstation.
-Lauf (2) verband sich mit `rssi: -60`, Lauf (3) mit einer anderen BSSID auf
-einem anderen Kanal bei `rssi: -79` — deutlich schwächer, vermutlich ein
-anderer Knoten in einem Mesh. Ein schwaches Signal, das UDP-DNS-Antworten
-verliert, ist eine naheliegende Erklärung für ein Muster, das mal auftritt und
-mal nicht — **aber das ist eine Hypothese aus zwei Datenpunkten, kein
-belegter Befund.** Nach dem eigenen Grundsatz dieses Dokuments (`memo-why`
-statt Zählerraten) braucht das mehr als zwei Beobachtungen, bevor es als
-Ursache gilt: mehrere Läufe, jeweils mit notierter BSSID/RSSI, oder ein Blick
-ins Reverse-Proxy-/DNS-Serverlog für exakt die fehlgeschlagenen Zeitfenster.
+4. Ein weiterer Erfolg des Nutzers, diesmal ausdrücklich gegen den
+   Branch-Code (`git pull` im Worktree, dann `idf.py build flash monitor`):
+   `sync complete: create_ok=1 … finish=1`. Verbunden war das Gerät dabei mit
+   derselben BSSID wie der Fehlschlag in (3) (`50:e6:36:91:e5:f3`), aber bei
+   `rssi: -66` statt `-79`.
 
-In jedem der drei Fälle kam der Sync nie bis zum Session-Create — `sequence_base`
-und die `surface`-Ergänzung sind deshalb weiterhin nur quellcodeseitig und am
-Kommandodispatcher verifiziert, nicht mit einem Server-Roundtrip auf diesem
-Branch.
+Damit ist der Server-Roundtrip für `sequence_base` jetzt **live bestätigt**:
+Der Server akzeptiert das Top-Level-Feld, `response_matches_session()` prüft
+den zurückgelieferten Wert korrekt, ohne den Create abzulehnen. Siehe Punkt 1
+oben. Nicht mitbestätigt: der `surface`-Parameter bei
+`GET /sessions/{id}/dashboard` — der feuert nur beim Öffnen einer Session aus
+der Verlaufsliste, nicht beim passiven Sync.
+
+Zur DNS-Frage bleibt es bei vier Datenpunkten, nicht bei einer Ursache: eine
+feste BSSID hat sowohl einmal versagt (`rssi -79`) als auch einmal
+funktioniert (`rssi -66`). Das passt eher zu einer Signalqualitäts- bzw.
+Paketverlustschwelle als zu „diese eine Basisstation ist kaputt", ist aber
+weiterhin eine Hypothese, keine Ursache — vier Beobachtungen unter
+unkontrollierten Bedingungen reichen nach dem eigenen Grundsatz dieses
+Dokuments (`memo-why` statt Zählerraten) nicht für mehr.
 
 ## Reihenfolge für den nächsten Chat
 
-1. DNS-Hypothese entweder mit mehreren dokumentierten Läufen (BSSID/RSSI je
-   Versuch) erhärten oder verwerfen — kein Firmwarethema, aber Voraussetzung
-   für jeden weiteren Live-Test.
-2. Sobald ein Server-Roundtrip gelingt: `worktree-esp32-cleanup` mergen oder
-   gezielt gegenprüfen (Create, Chunk-Upload, Finish mit dem Branch-Code).
-3. Die tote Session serverseitig abbrechen (Punkt 6), sobald der Server
-   erreichbar ist.
-4. Die dauerhaft sichtbare `attention`-Markierung eines fehlgeschlagenen
+1. `worktree-esp32-cleanup` ist jetzt live gegen den echten Server bestätigt
+   (Create, Response-Validierung, Finish) — bereit zum Merge, sobald der Diff
+   durchgesehen ist.
+2. DNS-Hypothese bleibt offen, ist aber kein Blocker mehr für weitere
+   Live-Tests, da drei von vier Läufen erfolgreich waren. Bei Gelegenheit mit
+   mehr dokumentierten BSSID/RSSI-Paaren erhärten oder verwerfen.
+3. Den `surface`-Parameter am Gerät gezielt bestätigen: Verlaufsliste öffnen,
+   eine Session antippen, `dashboard: snapshot accepted` für die
+   Session-Ansicht im Log prüfen.
+4. Die tote Session serverseitig abbrechen (Punkt 6).
+5. Die dauerhaft sichtbare `attention`-Markierung eines fehlgeschlagenen
    Create ergänzen (Rest von Punkt 1).
-5. Restliche Retryklassen (`immediate`, `backoff`, `network`, `never`) über
+6. Restliche Retryklassen (`immediate`, `backoff`, `network`, `never`) über
    alle Aufrufe hinweg, nicht nur den Chunk-Upload.

@@ -50,6 +50,15 @@ verifiziert. Bezug: `docs/CLIENT_SERVER_STATE.md`, Abschnitt „Offene Punkte".
   desselben Mesh) — eine naheliegende, aber unbewiesene Spur. Ursache bleibt
   offen; Details und die nötigen nächsten Schritte in
   `docs/CLIENT_SERVER_STATE.md`.
+- **Live-Bestätigung, noch am selben Tag:** Ein Nutzerlauf mit `git pull` im
+  Worktree plus `idf.py build flash monitor` — also ausdrücklich gegen den
+  Branch-Code — schloss mit `sync complete: create_ok=1 … finish=1`. Damit ist
+  `sequence_base` jetzt live gegen den echten Server bestätigt, nicht mehr nur
+  quellcodeseitig. Verbunden war das Gerät dabei mit derselben Basisstation,
+  die zwei Einträge zuvor noch scheiterte (`50:e6:36:91:e5:f3`), diesmal bei
+  `rssi: -66` statt `-79` — ein vierter Datenpunkt für „Signalqualität", kein
+  Beleg. Der `surface`-Parameter ist damit weiterhin nicht live bestätigt, weil
+  er nur beim Öffnen einer Session aus der Verlaufsliste feuert.
 
 ## 2026-09-06 – Eine Aufnahme, die es nie gab, wird nicht mehr angeboten
 
