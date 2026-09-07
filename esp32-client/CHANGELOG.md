@@ -41,6 +41,12 @@ verifiziert. Bezug: `docs/CLIENT_SERVER_STATE.md`, Abschnitt „Offene Punkte".
   sichtbare `attention`-Markierung eines fehlgeschlagenen Create, die tote
   Session serverseitig (Punkt 6) und die Backendbefunde (Punkt 5) — alles
   weiterhin offen, teils außerhalb dieses Ordners.
+- **Korrektur nach diesem Eintrag:** Ein hier zunächst als anhaltend
+  dokumentierter DNS-Fehlschlag war ein Aussetzer, wahrscheinlich durch ein
+  eigenes Testskript ausgelöst (serieller Port ohne DTR/RTS-Unterdrückung
+  geöffnet, siehe `docs/DEVELOPMENT_GUIDE.md`). Ein unabhängiger Nutzerlauf
+  im selben Netz lief sofort fehlerfrei durch (Zertifikat, Dashboard, Create,
+  Finish). Details in `docs/CLIENT_SERVER_STATE.md`.
 
 ## 2026-09-06 – Eine Aufnahme, die es nie gab, wird nicht mehr angeboten
 

@@ -272,22 +272,47 @@ bekannten Abschnitt per Edit zu ersetzen, deckte die Abweichung auf. Vor einer
 der Ausgangs-Arbeitskopie, wenn dort unversionierte Änderungen an genau der
 Datei stehen, die als Grundlage diente.
 
-## DNS bleibt offen, 7. September, zweite Runde
+**Ein Aussetzer als Befund festgeschrieben, 7. September, zweite Runde.** Zwei
+DNS-Fehlschläge direkt nach einem Flash wurden hier zunächst als anhaltender,
+offener Punkt dokumentiert — ohne einen dritten, unabhängigen Durchlauf
+abzuwarten. Ein davon unabhängiger Nutzerlauf im selben Netz widerlegte das
+sofort. Wahrscheinliche eigene Ursache: der serielle Port wurde testweise ohne
+DTR/RTS-Unterdrückung geöffnet, was laut `docs/DEVELOPMENT_GUIDE.md` einen
+Reset auslöst. Derselbe Grundsatz wie bei `memo-why`: aus zwei Beobachtungen
+unter unbekannten Nebenbedingungen eine Ursache zu behaupten, ist genau das
+Muster, das dieses Dokument an anderer Stelle für Zählerstände beschreibt.
 
-`living-notebook.heusgenradig.de` ließ sich am Gerät weiterhin nicht auflösen
-(`cannot resolve … the network is up but DNS is not answering`), obwohl WLAN
-verbunden war. Kein Firmwarebefund — passt zu der oben dokumentierten
-Entscheidung, dass das Gerät ausschließlich den öffentlichen Namen fragt und
-NAT-Reflection bzw. der Reverse-Proxy-Pfad dafür stehen müssen. Ein lokal
-gestartetes `uvicorn` auf Port 8000 allein macht den Server für das Gerät nicht
-erreichbar, solange der öffentliche Name nicht dorthin auflöst. Deshalb blieb
-`sequence_base` und die `surface`-Ergänzung diese Runde nur quellcodeseitig und
-am Kommandodispatcher verifiziert, nicht mit einem echten Server-Roundtrip.
+## Ein DNS-Aussetzer, keine Diskrepanz — 7. September, zweite Runde, korrigiert
+
+In dieser Runde scheiterte `living-notebook.heusgenradig.de` zweimal kurz nach
+einem Flash über ein eigenes Testskript (`cannot resolve … the network is up
+but DNS is not answering`). Das wurde hier zunächst als anhaltender Befund
+festgeschrieben — falsch: ein direkt anschließender, sauberer
+`idf.py build flash monitor`-Lauf des Nutzers im selben Netz lief auf Anhieb
+durch, inklusive `esp-x509-crt-bundle: Certificate validated`, `dashboard:
+snapshot accepted: sections=5` und `sync complete: create_ok=1 finish=1`.
+
+Wahrscheinlichste Ursache der zwei Aussetzer: Das Testskript öffnete den
+seriellen Port mit `pyserial`, ohne DTR/RTS vorher auf `false` zu setzen —
+genau das Muster, vor dem `docs/DEVELOPMENT_GUIDE.md` warnt
+(„Öffnen eines seriellen Ports kann über DTR/RTS einen Reset auslösen“). Ein
+Reset mitten in WLAN-Assoziation/DNS-Aufbau erklärt einen einzelnen Aussetzer
+ohne jeden Code-Befund. Nicht ausgeschlossen, aber unbelegt: ein echter,
+transienter Router-DNS-Aussetzer, den `resolve_server()` laut Doku ohnehin
+abfedern soll.
+
+Der erfolgreiche Nutzerlauf lief nach aktuellem Stand gegen den
+**unveränderten** Code der Hauptarbeitskopie (nicht gegen den Branch
+`worktree-esp32-cleanup`), bestätigt also nur, dass Create/Finish über den
+Legacy-Pfad weiterhin funktionieren — genau das, was Punkt 1 oben ohnehin
+beschreibt. Der `sequence_base`-Fix und die `surface`-Ergänzung sind damit
+weiterhin nur quellcodeseitig und am Kommandodispatcher verifiziert, nicht mit
+einem Server-Roundtrip auf dem Branch selbst.
 
 ## Reihenfolge für den nächsten Chat
 
-1. DNS/Reverse-Proxy-Erreichbarkeit klären, sonst bleibt jeder weitere
-   Live-Test blockiert.
+1. `worktree-esp32-cleanup` mergen oder gezielt gegenprüfen, dann einen echten
+   Server-Roundtrip mit dem Branch-Code fahren (Create, Chunk-Upload, Finish).
 2. Die tote Session serverseitig abbrechen (Punkt 6), sobald der Server
    erreichbar ist.
 3. Die dauerhaft sichtbare `attention`-Markierung eines fehlgeschlagenen
