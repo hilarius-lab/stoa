@@ -393,6 +393,12 @@ static void fetch_dashboard(void) {
         cJSON *sections=cJSON_GetObjectItemCaseSensitive(root,"sections");
         if(cJSON_IsString(schema)&&strcmp(schema->valuestring,"1")==0&&cJSON_IsArray(sections)){
             ESP_LOGI("dashboard","snapshot accepted: sections=%d",cJSON_GetArraySize(sections));
+            /* Temporary diagnostic for the "Tasks view still shows a completed
+             * task" report: names the specific entity so a single fetch tells
+             * us whether the body this device actually received still lists
+             * it, before looking anywhere else. */
+            ESP_LOGI("dashboard", "diag: body_len=%d contains_b3ccd40d=%d",
+                     (int)strlen(body), strstr(body, "b3ccd40d") != NULL);
             screen_snapshot_received(body, cJSON_GetArraySize(sections) == 0);
             /* Recording is local truth and owns the panel while it runs. A
              * snapshot that arrives mid-recording is accepted but not drawn;
