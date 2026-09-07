@@ -1,5 +1,18 @@
 # Änderungen
 
+## 2026-09-07 – Refresh durch weiteres „Auf" auf dem Menü-Icon
+
+Neue Geste: In einer Dashboard-Familien-Ansicht (Dashboard/Tasks/Listen) ist
+`focus == -1` bereits der oberste Punkt (das Menü-Icon). Wird von dort aus
+weiter „auf" gedrückt, bliebe der Fokus bisher einfach stehen. Jetzt löst der
+zusätzliche Druck einen sofortigen Dashboard-Refresh aus: `move_focus()` in
+`screen.c` erkennt den Fall (`next < -1`) und ruft die neue
+`api_client_request_sync()` auf, die den Upload-Worker-Task aufweckt — der
+läuft in jedem Wachzyklus `synchronize()` und damit `fetch_dashboard()`,
+unabhängig von Warteschlange oder Netzwerk-Reconnect, genau wie
+`api_client_queue_changed()`/`api_client_network_up()` es für ihre jeweiligen
+Anlässe schon tun. Build/Flash/Boot auf dem realen Gerät (COM9) verifiziert.
+
 ## 2026-09-07 – Ansichtswähler verfeinert: echter Fokus-Bug behoben, ständige Icon-Zeile
 
 Direkte Rückmeldung nach dem ersten Test des Ansichtswählers.

@@ -579,7 +579,13 @@ static void move_focus(int delta) {
     if (!delta) return;   /* a plain redraw request */
     int *focus = active_focus_ptr(), *scroll = active_scroll_ptr();
     int next = *focus + delta;
-    if (next < -1) next = -1;
+    if (next < -1) {
+        /* Already on the menu icon and still pulling up: nothing left to
+         * focus, so the gesture is repurposed as "fetch the current view
+         * again now" instead of doing nothing. */
+        next = -1;
+        api_client_request_sync();
+    }
     if (next >= plan.focusable) next = plan.focusable ? plan.focusable - 1 : -1;
     *focus = next;
     *scroll = next < 0 ? 0

@@ -8,6 +8,9 @@ void api_client_network_up(void);
 
 /* Schedule a sync after a locally completed recording. */
 void api_client_queue_changed(void);
+/* Ask for an immediate dashboard resync, independent of the queue or the
+ * network coming back — the "pull past the top" refresh gesture. */
+void api_client_request_sync(void);
 /* Fetch one entity for the detail view. The result is handed back through
  * screen_entity_received; the request itself is queued for the worker, because
  * HTTP belongs to the worker and drawing belongs to the display task. */

@@ -1437,6 +1437,7 @@ void api_client_open_session(const char *session_id) {
 
 void api_client_network_up(void) { if (worker) xTaskNotifyGive(worker); }
 void api_client_queue_changed(void) { if (worker) xTaskNotifyGive(worker); }
+void api_client_request_sync(void) { if (worker) xTaskNotifyGive(worker); }
 
 void api_client_report(void) {
     printf("@API configured=%d authenticated=%d compatible=%d gate_ok=%u gate_failed=%u sessions=%u create_ok=%u create_failed=%u replay_failed=%u settled=%u abandoned=%u acked=%u upload_failed=%u reconciled=%u resynced=%u unresyncable=%u released=%u refused=%u withheld=%u finish=%u last_http=%d\n",
