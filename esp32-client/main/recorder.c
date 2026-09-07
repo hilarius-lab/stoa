@@ -560,6 +560,14 @@ static bool record_memo(bool diagnostic) {
      * directory was created earlier in this very call and has not been
      * offered to the sync worker yet, so nothing can be "deliverable" here. */
     if(ok && samples*1000/48000<MEMO_MIN_DURATION_MS) {
+        /* Every completed segment above already ran memo_queue_note_ready(),
+         * which put it in the `ready` bucket the status bar counts. Deleting
+         * the files without leaving that bucket the same way it is normally
+         * left (mark_chunk() -> memo_queue_note_transition()) would strand
+         * the counter above zero forever — the exact cache-drift failure
+         * memo_queue.c's own history warns about, just for `ready` instead
+         * of `attention` this time. */
+        for(unsigned i=0;i<sequence;i++) memo_queue_note_transition(CHUNK_READY,CHUNK_UNKNOWN);
         free(journal);
         DIR *d=opendir(dir);
         if(d) {

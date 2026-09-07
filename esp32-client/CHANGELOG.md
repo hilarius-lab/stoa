@@ -1,5 +1,28 @@
 # Änderungen
 
+## 2026-09-07 – `ready`-Zähler driftete nach dem Verwerfen kurzer Aufnahmen
+
+Vom Nutzer bemerkt: das Warteschlangen-Symbol in der Statusleiste zeigte
+dauerhaft „2", obwohl `memo-list` für beide vorhandenen Sessions `ready=0`
+auswies — derselbe Cache-Drift-Fehler, vor dem `memo_queue.c` im eigenen
+Kommentar warnt (6. September, dort für `attention`), diesmal für `ready`,
+durch den eigenen Fix von vorhin verursacht.
+
+Ursache: Der Zu-kurz-Filter (`record_memo()`) löscht die Dateien eines
+verworfenen Segments, aber jedes bereits fertig geschriebene Segment hatte
+zuvor `memo_queue_note_ready()` durchlaufen und `status.ready` erhöht. Ohne
+Gegenbuchung blieb der Zähler dauerhaft zu hoch — für jede zu kurze Aufnahme,
+die noch ein Segment fertigstellte, bevor sie verworfen wurde, um eins.
+
+Fix: vor dem Löschen wird `memo_queue_note_transition(CHUNK_READY,
+CHUNK_UNKNOWN)` einmal je fertig geschriebenem Segment aufgerufen — derselbe
+Mechanismus, den `mark_chunk()` für jeden regulären Zustandswechsel nutzt,
+nur ohne Zielzustand, weil das Segment nicht in einen anderen Eimer wandert,
+sondern verschwindet. Build, Flash und `queue-status` nach dem Neustart
+bestanden (`ready=0`, passend zu `memo-list`). Ob der Zähler bei künftigen
+zu kurzen Aufnahmen jetzt stabil bleibt, ist noch nicht erneut am Gerät
+geprüft.
+
 ## 2026-09-07 – Dashboard bleibt während der Aufnahme sichtbar
 
 Der Aufnahme-Bildschirm (`SCREEN_RECORDING`) und der Zustand direkt danach
