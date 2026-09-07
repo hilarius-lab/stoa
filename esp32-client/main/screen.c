@@ -86,8 +86,17 @@ static atomic_uint status_pending, status_attention;
 static atomic_bool status_storage_low, status_storage_block;
 static atomic_bool status_network, status_recording;
 static atomic_uint status_minutes; /* minutes since midnight, or UINT_MAX */
-static atomic_bool snapshot_seen, snapshot_empty, header_focused = true;
+static atomic_bool snapshot_seen, snapshot_empty;
 static _Atomic int64_t snapshot_at_us;
+/* Set from the upload worker's task when a new snapshot arrives, consumed
+ * exactly once by the display task (see screen_task's message loop) to reset
+ * the three dashboard-family focuses to the header. Not touched directly from
+ * there: dashboard_focus/tasks_focus/lists_focus belong to the display task
+ * alone, the same reason move_focus() etc. are never called from outside it.
+ * Focus identity across revisions is a later step; until then a new snapshot
+ * returns to the menu button rather than pointing at a card that may no
+ * longer exist. */
+static atomic_bool snapshot_focus_reset = true;
 /* The server decides when its own snapshot stops being trustworthy; the value
  * comes from `limits.dashboard_cache_max_age_seconds` in the capabilities. 0
  * means the server did not say, in which case the local fallback applies. */
@@ -204,11 +213,15 @@ static void draw_glyph_portrait(unsigned char *buffer,int glyph,int logical_x,in
 static void draw_header(unsigned char *buffer) {
     /* While the list is open the header button is its way out, so it carries
      * the focus marker whenever the selection sits on it. Otherwise the marker
-     * follows the dashboard focus. One button, one meaning, in both views. */
+     * follows whichever dashboard-family view is active. One button, one
+     * meaning, in every view — read directly rather than through a cached
+     * flag, since this runs in the same task that owns all four focuses. */
     header_state state = {.focused = history_open ? history_focus < 0
-                                                  : atomic_load(&header_focused),
+                                                  : *active_focus_ptr() < 0,
                           .selector_open = selector_open,
-                          .selector_focus = selector_focus};
+                          .selector_focus = selector_focus,
+                          .active_view = tasks_open ? 1 : lists_open ? 2
+                                       : history_open ? 3 : 0};
     /* What ages is the contact, not the content: `snapshot_at_us` is set on
      * every accepted poll, including one that returns an unchanged dashboard.
      * A snapshot the server keeps confirming stays current no matter how old
@@ -445,7 +458,11 @@ static void open_selector(void) {
 }
 
 static void move_selector_focus(int delta) {
-    int next = selector_focus + delta;
+    /* The row runs left to right; the up button sends delta=-1 everywhere
+     * else, which would move the cursor left. Flipped here only — reported
+     * as more intuitive for a horizontal row than the vertical convention it
+     * would otherwise inherit unchanged. */
+    int next = selector_focus - delta;
     /* Same non-wrapping ring as the history list: a wrap past either end
      * looks like a jump on a panel that takes half a second to redraw. */
     if (next < 0) next = 0;
@@ -546,7 +563,6 @@ static void move_focus(int delta) {
     *focus = next;
     *scroll = next < 0 ? 0
         : dashboard_scroll_for(&plan, next, *scroll, BODY_BOTTOM - BODY_TOP);
-    atomic_store(&header_focused, next < 0);
     ESP_LOGI("dashboard", "surface=%d focus=%d of %d scroll=%d", surface, next,
              plan.focusable, *scroll);
 }
@@ -595,6 +611,14 @@ static void screen_task(void *unused) {
     screen_message message;
     while (xQueueReceive(queue, &message, portMAX_DELAY)) {
         if (message.ambient) atomic_store(&redraw_pending, false);
+        /* Test-and-clear: fires exactly once per snapshot that actually
+         * arrived, however many redraws happen between checks. Safe to touch
+         * the three focuses directly here — this is the one task that owns
+         * them. */
+        if (atomic_exchange(&snapshot_focus_reset, false)) {
+            dashboard_focus = tasks_focus = lists_focus = -1;
+            dashboard_scroll = tasks_scroll = lists_scroll = 0;
+        }
         if (message.window_test) {
             /* The probe writes into the live framebuffer instead of reloading a
              * background, so the panel keeps whatever it currently shows and
@@ -1025,10 +1049,7 @@ void screen_snapshot_received(const char *json, bool empty) {
     atomic_store(&snapshot_empty, empty);
     atomic_store(&snapshot_at_us, esp_timer_get_time());
     atomic_store(&snapshot_seen, true);
-    /* Focus identity across revisions is a later step; until then a new
-     * snapshot returns to the history button rather than pointing at a card
-     * that may no longer exist. */
-    atomic_store(&header_focused, true);
+    atomic_store(&snapshot_focus_reset, true);
 }
 void screen_focus_move(int delta) {
     screen_message message = {.focus_move=true, .focus_delta=delta};

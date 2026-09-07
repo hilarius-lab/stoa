@@ -1,5 +1,38 @@
 # Änderungen
 
+## 2026-09-07 – Ansichtswähler verfeinert: echter Fokus-Bug behoben, ständige Icon-Zeile
+
+Direkte Rückmeldung nach dem ersten Test des Ansichtswählers.
+
+- **Echter Bug, nicht nur kosmetisch:** Der Menü-Button zeigte sich manchmal
+  gefüllt/invertiert, obwohl er nicht fokussiert war — typischerweise nach
+  einem Dashboard-Refresh. Ursache: `screen_snapshot_received()` (läuft im
+  Upload-Worker-Task) setzte das atomare `header_focused` bei jedem neuen
+  Snapshot hart auf `true`, ohne den tatsächlichen `dashboard_focus` (gehört
+  ausschließlich dem Display-Task) zurückzusetzen — beide liefen auseinander.
+  Fix: `header_focused` entfernt, `draw_header()` liest den echten Fokus
+  jetzt direkt (sicher, weil im selben Task wie `move_focus()` & Co.). Für
+  das eigentlich beabsichtigte Verhalten („neuer Snapshot springt zurück zum
+  Menü") gibt es jetzt `snapshot_focus_reset` — ein Flag, das der
+  Upload-Worker setzt und das der Display-Task einmal pro echtem neuem
+  Snapshot konsumiert (`atomic_exchange`) und dabei `dashboard_focus`,
+  `tasks_focus` und `lists_focus` sauber auf -1 zurücksetzt.
+- Die vier Ansichts-Icons stehen jetzt **dauerhaft** in der Kopfzeile, nicht
+  nur während der Auswahl — ein Zustand, der nur für ein paar Tastendrücke
+  sichtbar ist, geht leicht unter. Die aktuell aktive Ansicht bekommt eine
+  **Umrandung** (neu: `icon_outline()` in `icons.c`/`icons.h`, zeichnet nur
+  den Rahmen statt der Fläche wie `icon_invert()`); während der Auswahl weicht
+  die Umrandung dem wandernden Fokus-Cursor, damit nie beide Markierungen auf
+  demselben Icon konkurrieren.
+- Navigation innerhalb der Auswahlzeile umgedreht: „Auf" bewegt jetzt nach
+  rechts, „Ab" nach links (`move_selector_focus()`) — für eine horizontale
+  Zeile passender als die von der vertikalen Kartenliste geerbte Richtung,
+  die dort unverändert bleibt.
+
+Build und Flash bestanden, kein Absturz. Die eigentliche optische Wirkung
+(Umrandung sichtbar, Menü-Button nur bei echtem Fokus schwarz, Auf/Ab-Gefühl
+in der Auswahlzeile) ist noch nicht am Gerät bestätigt.
+
 ## 2026-09-07 – Ansichtswähler: Dashboard/Tasks/Listen/Verlauf als eigene Ansichten
 
 Größter Umbau der Runde, auf Wunsch des Nutzers. Das 3-Punkte-Menü zwischen

@@ -91,3 +91,13 @@ void icon_invert(unsigned char *canvas, int x, int y, int width, int height) {
         for (int column = 0; column < width; column++)
             set(canvas, x + column, y + row, !get(canvas, x + column, y + row));
 }
+
+void icon_outline(unsigned char *canvas, int x, int y, int width, int height,
+                  int thickness) {
+    for (int row = 0; row < height; row++)
+        for (int column = 0; column < width; column++) {
+            bool border = row < thickness || row >= height - thickness ||
+                         column < thickness || column >= width - thickness;
+            if (border) set(canvas, x + column, y + row, true);
+        }
+}

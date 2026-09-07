@@ -26,11 +26,16 @@ typedef struct {
     unsigned age_minutes;
     bool focused; /* the menu button carries the focus */
     /* The menu button opens a view selector rather than jumping straight to
-     * the recording list. While it is open, this row shows the four view
-     * icons instead of the freshness text; `selector_focus` (0=dashboard,
-     * 1=tasks, 2=lists, 3=history) marks which one a press would activate. */
+     * the recording list. The four view icons (0=dashboard, 1=tasks,
+     * 2=lists, 3=history) sit in this row all the time, not only while
+     * picking one — a marker that only exists for a few button presses is
+     * easy to miss entirely. `active_view` always names which one is
+     * currently showing and gets a standing outline. While `selector_open`,
+     * that outline steps aside for the moving cursor at `selector_focus`, so
+     * the two marks never compete on the same icon. */
     bool selector_open;
     int selector_focus;
+    int active_view;
 } header_state;
 
 /* Draw the row directly below the status bar. */
