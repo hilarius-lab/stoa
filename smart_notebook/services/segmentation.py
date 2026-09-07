@@ -434,14 +434,15 @@ async def run_text_processing_once(worker_id: str, mode: str = "llm", ingestion_
         from .topic_detection import detect_topics_for_segments
         topic_matches=await detect_topics_for_segments(chunk["session_id"],stored)
     except Exception as exc:
+        message = str(exc) or type(exc).__name__
         failed = fail_processing_job_record(
             job_id=job["id"],
             worker_id=worker_id,
-            error=str(exc)
+            error=message
         )
         synchronize_processing_step_for_job(job["id"])
         refresh_session_watermarks(job["ingestion_session_id"])
-        return {"outcome": "failed", "job": failed, "segments": [], "error": str(exc)}
+        return {"outcome": "failed", "job": failed, "segments": [], "error": message}
 
     completed = complete_processing_job_record(
         job_id=job["id"],

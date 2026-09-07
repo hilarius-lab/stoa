@@ -379,10 +379,11 @@ async def run_session_artifact_worker_once(worker_id,mode="llm",ingestion_sessio
             "artifacts": [get_session_artifact_record(i) for i in artifact_ids]
         }
     except Exception as exc:
-        failed = fail_processing_job_record(job["id"], worker_id, str(exc))
+        message = str(exc) or type(exc).__name__
+        failed = fail_processing_job_record(job["id"], worker_id, message)
         synchronize_processing_step_for_job(job["id"])
         refresh_session_watermarks(job["ingestion_session_id"])
-        return {"outcome": "failed", "job": failed, "artifacts": [], "error": str(exc)}
+        return {"outcome": "failed", "job": failed, "artifacts": [], "error": message}
 
 
 def update_session_artifact_record(artifact_id, content=None, confidence=None):

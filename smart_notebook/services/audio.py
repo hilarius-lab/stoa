@@ -253,7 +253,8 @@ async def run_stt_once(worker_id,mode='ocean',session_id=None,deterministic_text
         settle_client_session_for_ingestion(job['ingestion_session_id'])
         return {"outcome":"completed","job":done,"transcript_window_id":wid,"response":response}
     except Exception as exc:
-        failed=fail_processing_job_record(job['id'],worker_id,str(exc));return {"outcome":"failed","job":failed,"error":str(exc)}
+        message=str(exc) or type(exc).__name__
+        failed=fail_processing_job_record(job['id'],worker_id,message);return {"outcome":"failed","job":failed,"error":message}
 
 def list_transcripts(session_id):
     with get_db_connection() as c:rows=c.execute("SELECT id,window_id,segment_index,text,source_start_ms,source_end_ms,confidence,status,superseded_by_segment_id,materialized_chunk_id,created_at,updated_at FROM transcript_segments WHERE session_id=%s ORDER BY source_start_ms,id",(session_id,)).fetchall()
