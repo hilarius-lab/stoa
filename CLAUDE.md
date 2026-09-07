@@ -20,6 +20,30 @@ freigegebenen Vertrag, stoppe die betroffene Arbeit und dokumentiere einen
 präzisen Readiness-Bericht. Erfinde keine Backendsemantik, DTOs, Endpoints,
 Zustände oder Produktfunktionen.
 
+Für den **ESP32-Client** (`esp32-client/`) gilt eine eigene Reihenfolge:
+
+1. `esp32-client/docs/BACKEND_REQUIREMENTS.md` — was der Client vom Backend
+   verlangt, und was das Backend ausdrücklich nicht liefern muss
+2. `esp32-client/docs/API_INTERACTION.md` — was das Gerät sendet, empfängt,
+   persistiert und anzeigt
+3. `CLIENT_BACKEND_CONTRACT.md` und `CLIENT_CONTRACT_MATRIX.md` — die
+   fachliche Wire-Semantik, gemeinsam mit der Android-App
+4. `esp32-client/docs/DASHBOARD_UI.md` — Katalog, Fokus, Blättern, Fallbacks
+5. `esp32-client/docs/IMPLEMENTATION_DECISIONS.md` — Refresh-, Retention- und
+   Freigaberegeln
+6. `esp32-client/docs/CLIENT_SERVER_STATE.md` — der jeweils aktuelle Stand samt
+   offener Punkte; **zuerst lesen**, es ist das Übergabedokument
+7. `esp32-client/docs/ROADMAP.md`
+
+`contracts/client-openapi-v1.json` ist die maschinenlesbare Quelle für beide
+Clients und wird nur in einem ausdrücklich getrennten Contract-Task geändert.
+
+Zwei Eigenheiten dieses Clients, die wiederholt Zeit gekostet haben: Doku und
+Code sind hier mehrfach auseinandergelaufen — was ein Dokument als „umgesetzt"
+führt, ist am Code zu prüfen, bevor darauf aufgebaut wird. Und Zählerstände
+beantworten keine Ursachenfrage; dafür gibt es die Diagnosebefehle am Gerät,
+allen voran `memo-why`.
+
 ## Unveränderliche Grenzen
 
 - App-Agenten ändern nur Dateien im erlaubten App- und Client-Bereich.
@@ -31,7 +55,18 @@ Zustände oder Produktfunktionen.
   Lesequelle der App.
 - Die App rendert nur den geschlossenen Server-Driven-UI-Katalog und führt kein
   HTML, JavaScript, CSS oder beliebigen Servercode aus.
-- Tasks und Listen werden weder angezeigt noch verwaltet.
+- **Korrigiert 7. September 2026, zweite Runde:** Dieser Punkt stand hier lange
+  als „Tasks und Listen werden weder angezeigt noch verwaltet" — im
+  nachweisbaren Widerspruch zum tatsächlichen Code (`services/client_dashboard.py`,
+  Sektionen `today`/`lists` in `_idle_content()`) und zu
+  `esp32-client/docs/API_INTERACTION.md`, das die Projektion ausdrücklich als
+  Feature beschreibt. Aktueller Stand: Die ESP32-Surface **zeigt** Tasks und
+  Listen bereits als eigene Sektionen an. **Verwaltung** (Abhaken einzelner
+  Tasks, Löschen einzelner Listen-Einträge, Löschen ganzer Listen zunächst nur
+  per Sprachbefehl) ist eine in Arbeit befindliche Erweiterung — Stand und
+  offene Punkte dazu in `esp32-client/docs/CLIENT_SERVER_STATE.md`. Für die
+  Android-App ungeprüft; dort gilt weiterhin `android/docs/APP_FUNCTIONAL_BOUNDARY.md`
+  vorrangig vor dieser Datei.
 - Audio verwendet persistente Dateien, Multipart-HTTPS und durable ACK.
   Flüchtige WebSocket-Audiostreams sind verboten.
 - Logs enthalten keine Audioinhalte, Transkripte, Notes, Facts, Chats, Tokens,
@@ -144,6 +179,37 @@ Portabilität:
 
 ```powershell
 .\.venv\Scripts\python.exe scripts/portability-check.py
+```
+
+ESP32-Firmware bauen und flashen. Nicht `export.ps1` benutzen — das sucht das
+venv unter `C:\Espressif\python_env\`, die EIM-Installation legt es aber unter
+`IDF_TOOLS_PATH` ab und bricht deshalb ab. In einem frischen Fenster, und nie
+gleichzeitig mit dem Projekt-`.venv`:
+
+```powershell
+C:\Espressif\tools\Microsoft.v5.5.2.PowerShell_profile.ps1
+cd esp32-client
+idf.py build flash monitor
+```
+
+Hosttests der Firmware, ohne Hardware und ohne ESP-IDF:
+
+```sh
+cd esp32-client && sh tools/run_ui_test.sh
+```
+
+Der Test deckt `text.c`, `icons.c`, `card.c`, `dashboard_map.c` und `history.c`
+mit `-Wall -Wextra -Werror` ab, **nicht** `dashboard.c` — das braucht cJSON.
+Wer daran arbeitet, baut es mit `libcjson` und einem Shim-Header dazu; das
+Rezept steht in `esp32-client/docs/CLIENT_SERVER_STATE.md`.
+
+Backend- und Vertragstests, vom Repository-Root:
+
+```powershell
+.\.venv\Scripts\python.exe m8_esp_dashboard_projection_test.py
+.\.venv\Scripts\python.exe device_auth_test.py
+.\.venv\Scripts\python.exe m8_esp_backend_requirements_test.py
+.\.venv\Scripts\python.exe m8_release_gate_test.py
 ```
 
 Dokumentation:
