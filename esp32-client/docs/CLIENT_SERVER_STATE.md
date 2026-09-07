@@ -133,65 +133,106 @@ Server, der sein Fenster verkürzt, wird ohne Firmwareänderung befolgt.
 
 ## Offene Punkte
 
-### 1. `sequence_base`: Code und Doku widersprechen sich
+### 1. `sequence_base` — erledigt, 7. September, zweite Runde
 
-`main/api_client.c::create_session()` sendet `sequence_base` **nur** in
-`device_metadata`, also über den Legacy-Pfad, nicht als Top-Level-Feld.
-`response_matches_session()` prüft den zurückgelieferten Wert **nicht**.
-`docs/BACKEND_REQUIREMENTS.md` führt beide Punkte als „umgesetzt" — das stimmt
-nicht. Die Konstante `JOURNAL_SEQUENCE_BASE 0` in `main/journal.h` existiert und
-wird nirgends verwendet.
+War hier als Diskrepanz notiert: `create_session()` sendete den Wert nur in
+`device_metadata`, `response_matches_session()` prüfte ihn nicht,
+`docs/BACKEND_REQUIREMENTS.md` behauptete fälschlich „umgesetzt". Jetzt behoben:
+`create_session()` sendet `sequence_base` als Top-Level-Feld
+(`JOURNAL_SEQUENCE_BASE` aus `main/journal.h`), `response_matches_session()`
+prüft einen zurückgelieferten Wert über die neue `number_matches_or_absent()`
+(fehlendes Feld bleibt akzeptiert). `docs/BACKEND_REQUIREMENTS.md` korrigiert.
+Build und Flash gegen COM9 verifiziert; **live gegen den echten Server
+bestätigt** (`sync complete: create_ok=1 … finish=1`, siehe DNS-Abschnitt
+unten für den Verlauf dorthin).
 
-Es funktioniert heute nur, weil das Backend den Legacy-Pfad hat: bei
-`sequence_base == None` fällt `create_client_session` auf
-`metadata.get("sequence_base") == 0` zurück. Das ist die letzte Stelle, an der
-sich die Firmware auf etwas verlässt, das die Doku anders beschreibt.
+**Nachtrag, 7. September, dritte Runde: jetzt ebenfalls erledigt.** Ein
+fehlgeschlagener Create ist jetzt dauerhaft sichtbar. Neuer Journal-Record-Typ
+`session_state` (`journal.h`/`journal.c`, Feld `journal_session::create_attention`
++ `create_reason`) neben dem bestehenden Chunk-Mechanismus, weil ein
+fehlschlagender Create oft eine Session mit null Segmenten trifft — die früh
+angelegte laufende Aufnahme hat noch kein Chunk-Objekt, an dem sich etwas
+befestigen ließe. `create_session()` markiert nur bei einer **erreichten**
+Serverantwort, die nicht der erwartete Erfolg ist (`response_mismatch` bei
+201 mit ungültigem Body, `create_http_<code>` sonst) — eine reine
+Transportstörung (DNS, Timeout) löst nichts aus, sonst würde ausgerechnet die
+Session markiert, die beim nächsten Versuch ohnehin durchläuft. Fließt in
+denselben `attention`-Zähler wie Chunk-Attention ein (`memo_queue_note_session_transition()`,
+dieselbe Lösch-bei-Erfolg-Regel wie bei Chunks) und erscheint in `memo-list`
+(`@MEMO ... attention=N`) sowie neu in `memo-why` (`@WHY ... create_attention=0|1
+create_reason=…`). Build, Flash und Regressionscheck gegen die zwei
+bestehenden Sessions bestanden (`attention=0` unverändert, neue Felder korrekt
+formatiert). Der eigentliche Ablehnungsfall (`response_mismatch`/`create_http_*`
+tatsächlich auslösen) ist nicht live geprüft — dafür müsste der Server eine
+Session aktiv ablehnen, was sich ohne Mitwirkung des Backends nicht erzwingen
+lässt.
 
-### 2. Doku beschreibt Befehle, die es nicht gibt
+### 2. Doku beschrieb Befehle, die es nicht gab — erledigt, 7. September, zweite Runde
 
-`docs/DEVELOPMENT_GUIDE.md` führt `epd-clear`, `epd-window`, `text-test`,
-`icon-test`, `pattern-test`, `status-test` und `header-test` als serielle
-Befehle auf. **Keiner existiert in `main.c`.** Die zugehörigen Renderer
-(`screen_icon_test`, `screen_pattern_test`, `screen_window_test`,
-`screen_refresh`, `screen_card_test`, `screen_header_test`,
-`screen_status_test`, `screen_text_test`) sind alle vorhanden und sauber
-implementiert — nur die Befehlsschicht fehlt. Ihre Zweige im `screen_task`
-(`window_test`, `card_demo`, `header_demo`) sind damit unerreichbar.
+`epd-clear`, `epd-window`, `text-test`, `icon-test`, `pattern-test`,
+`status-test`, `header-test` und `card-test` waren in
+`docs/DEVELOPMENT_GUIDE.md` spezifiziert und die Renderer fertig, nur die
+Befehlsschicht fehlte in `main.c`. Jetzt verdrahtet und alle acht am Gerät
+geprüft (Log-Zeilen wie erwartet, u. a. `pattern-test` ohne Argument korrekt im
+Bänder-Modus `step=5`).
 
-`memo-discard <id>` steht in vier Dokumenten, einschließlich der
-Diagnosetabelle. Es gibt nur `recorder_discard_all`. Eine Eingabe von
-`memo-discard <id>` trifft den `strncmp(..., "memo-discard-all", 16)`-Vergleich
-nicht und tut kommentarlos nichts. Das fehlt praktisch: `memo-discard-all`
-verwirft alles, was „kaputt oder bereits zugestellt" ist — also auch eine
-frisch zugestellte Memo, deren Audio der Server noch nicht freigegeben hat.
+`memo-discard <id>` war ebenfalls schon fertig implementiert
+(`recorder_discard()`/`discard_memo()` in `recorder.c`, inklusive
+`@DISCARDED`/`@ERROR still_deliverable`) — nur nicht in `recorder.h` deklariert
+und nicht im Kommandodispatcher verdrahtet. Jetzt verdrahtet; am Gerät nur mit
+einer unbekannten ID geprüft (`@ERROR unknown_memo`), nicht destruktiv gegen
+eine echte Session getestet.
 
-`docs/PROJECT_STATUS.md` behauptet, der Textrenderer nutze als erster regulärer
-Code das Fensterupdate. `logical_push` wird ausschließlich aus den toten
-Diagnosezweigen gerufen; der reguläre Pfad nutzt `EPD_Display_Partial_Frame`
-über die volle Fläche und **loggt** das berechnete Differenzrechteck nur.
-Dasselbe Dokument widerspricht sich zwei Stichpunkte später selbst.
+`docs/PROJECT_STATUS.md` widersprach sich tatsächlich selbst (eine Zeile
+behauptete das Fensterupdate im Regelpfad, die nächsten Zeilen im selben
+Dokument beschrieben korrekt das Gegenteil). Die falsche Zeile ist entfernt.
+Wichtig dabei: `main/screen.c` blieb unangetastet — die volle Flächenübertragung
+über `EPD_Display_Partial_Frame` ist laut denselben, korrekten Zeilen ein
+belegter Fix für einen realen Positionsfehler (`EPD_Display_Partial` verliert
+per `EPD_Reset()` die Controllerbasis), kein Bug.
 
-Entweder die Befehlsschicht bauen oder die Doku korrigieren. Beides ist
-vertretbar; der jetzige Zustand nicht.
+### 3. Retryklassen — erweitert, 7. September, dritte Runde
 
-### 3. Retryklassen sind noch nicht ausgewertet
+Wichtige Korrektur zur eigenen früheren Einordnung: die `retry_class`-Tabelle
+in `API_INTERACTION.md` steht ausdrücklich unter „Segmentupload" — sie gilt
+für `POST /audio-chunks`, nicht für `create_session()`/`finish_session()`. Die
+vorige Fassung dieses Punkts behauptete das Gegenteil.
 
-Seit der Reverse Proxy schnell scheitert, kommen echte Statuscodes an (504 statt
-`http=0`). Damit wird die `retry_class`-Tabelle aus dem Vertrag zum ersten Mal
-auswertbar: `immediate`, `backoff`, `network`, `user_action`, `never`. Der
-Client behandelt heute jeden Nicht-200 gleich.
+`upload_chunk()` wertet jetzt vier der fünf Klassen aus, nur bei einer
+**erreichten** Serverantwort (nie bei einem Transportfehler, sonst würde
+ausgerechnet ein DNS-Aussetzer als Serverablehnung markiert):
 
-Besonders relevant mit scharfer Auth: `401 DEVICE_CREDENTIAL_REVOKED` ist
-`user_action` — Uploads sollen stoppen und sichtbar als `attention` erscheinen,
-lokale Aufnahme und Queue bleiben bestehen. Heute würde das Gerät stumm weiter
-backoffen.
+- `never`/`user_action`: Segment `attention`, Grund aus `ErrorResponse.code`
+  (`credential_revoked` für den bekannten Fall, sonst der Code selbst,
+  gekürzt) — ersetzt die bisherige feste 401-Sonderbehandlung durch die
+  allgemeine Regel, aus der sie eigentlich hätte folgen sollen.
+- `immediate`: bis zu zwei sofortige, synchrone Zusatzversuche mit fester
+  500-ms-Pause, dann Rückfall auf die normale Behandlung — bewusst
+  begrenzt, damit ein Server, der dauerhaft `immediate` antwortet, nicht
+  ununterbrochen angefragt wird.
+- `backoff`/`network`/unbekannt/nicht lesbar: unverändert der bisherige
+  Standardpfad (`ready`, erneuter Versuch im nächsten Durchlauf).
 
-### 4. `GET /sessions/{id}/dashboard` wird nicht projiziert
+**Bewusst nicht umgesetzt:** ein echtes, pro Segment gestaffeltes
+Backoff-Timing für die Klasse `backoff`. Jedes `ready`-Segment teilt sich
+weiterhin denselben ~5-Sekunden-Takt des Workers, unabhängig von
+`retry_class` — eine `backoff`-Klassifizierung wirkt sich heute nicht anders
+aus als `network` oder ein unbekannter Wert. Ein echtes Pro-Segment-Timing
+bräuchte einen weiteren persistierten oder zumindest In-Memory-Zustand pro
+Chunk (nächster zulässiger Versuchszeitpunkt) — vergleichbar im Umfang mit der
+Journal-Erweiterung aus Punkt 1, hier aus Zeitgründen zurückgestellt statt
+blind mitgebaut.
 
-Die Route kennt keinen `surface`-Parameter, bekommt also die volle Projektion
-nicht. Heute passt die Antwort in die 16384 Byte, aber ein Live-Snapshot führt
-bis zu fünfzig Transkriptblöcke mit. Die Route wird seit dem 6. September
-häufiger benutzt, weil Sessionkarten im Dashboard dorthin führen.
+Build, Flash und Regressionscheck (unveränderter Zustand der zwei
+bestehenden, bereits abgeschlossenen Sessions) bestanden. Der eigentliche
+`immediate`/`never`/`user_action`-Pfad ist nicht live gegen eine echte
+Serverablehnung geprüft — dieselbe Einschränkung wie bei Punkt 1.
+
+### 4. `GET /sessions/{id}/dashboard` — erledigt, 7. September, zweite Runde
+
+`fetch_session()` hängt jetzt `?surface=esp32_epaper` an, analog zum
+Hauptdashboard. Live gegen einen Snapshot mit vielen Transkriptblöcken nicht
+nachprüfbar, weil in dieser Runde kein Server erreichbar war (siehe unten).
 
 ### 5. Kleinere Backendbefunde
 
@@ -202,6 +243,9 @@ statt 404.
 `services/unified_push.py::broadcast_invalidation` hat **keinen Aufrufer**.
 Registrierung und Challenge funktionieren, es wird nie ein Push gesendet. In
 `ROADMAP.md:353` und `CLIENT_BACKEND_CONTRACT.md:176` als `[x]` abgehakt.
+
+Nicht angefasst: liegt in `smart_notebook/` bzw. `routers/`, `services/` —
+Backendcode, außerhalb dessen, was ein App-/Client-Task ändern darf.
 
 ### 6. Aufzuräumen
 
@@ -215,7 +259,9 @@ curl -X POST -H "Authorization: Bearer <operator-token>" \
   https://living-notebook.heusgenradig.de/api/client/v1/sessions/<uuid>/abort
 ```
 
-Die UUID steht in `memo-why 63497897`.
+Die UUID steht in `memo-why 63497897`. Nicht ausgeführt in dieser Runde: der
+Server war wegen des DNS-Problems unten nicht erreichbar, und das ist ein
+Live-Eingriff auf Produktionsdaten, kein Codewechsel.
 
 ### 7. A2/A3: Freigabe und verlorene ACKs
 
@@ -258,12 +304,77 @@ danach genauso. Die Änderung bleibt trotzdem richtig; sie kostet fast nichts un
 hat eine Fehlerquelle sauber ausgeschlossen. Eine widerlegte Hypothese ist ein
 Ergebnis, kein verlorener Zug.
 
+**Worktree-Fallgrube, 7. September, zweite Runde.** Ein neuer Arbeits-Worktree
+wurde vom letzten Commit erzeugt, nicht von der unversionierten Arbeitskopie —
+er enthielt deshalb eine ältere Fassung genau dieser Datei, die `memo-discard
+<id>` noch ungeprüft als funktionierend auflistete. Erst der Versuch, einen
+bekannten Abschnitt per Edit zu ersetzen, deckte die Abweichung auf. Vor einer
+Übernahme in eine isolierte Arbeitskopie lohnt ein Blick auf `git status` in
+der Ausgangs-Arbeitskopie, wenn dort unversionierte Änderungen an genau der
+Datei stehen, die als Grundlage diente.
+
+**Ein Aussetzer als Befund festgeschrieben, 7. September, zweite Runde.** Zwei
+DNS-Fehlschläge direkt nach einem Flash wurden hier zunächst als anhaltender,
+offener Punkt dokumentiert — ohne einen dritten, unabhängigen Durchlauf
+abzuwarten. Ein davon unabhängiger Nutzerlauf im selben Netz widerlegte das
+sofort. Wahrscheinliche eigene Ursache: der serielle Port wurde testweise ohne
+DTR/RTS-Unterdrückung geöffnet, was laut `docs/DEVELOPMENT_GUIDE.md` einen
+Reset auslöst. Derselbe Grundsatz wie bei `memo-why`: aus zwei Beobachtungen
+unter unbekannten Nebenbedingungen eine Ursache zu behaupten, ist genau das
+Muster, das dieses Dokument an anderer Stelle für Zählerstände beschreibt.
+
+## DNS-Aussetzer, Ursache offen — 7. September, zweite Runde, zweimal korrigiert
+
+Drei Beobachtungen aus dieser Runde, chronologisch:
+
+1. Zwei Fehlschläge über ein eigenes Testskript (`pyserial` ohne
+   DTR/RTS-Unterdrückung vor dem Öffnen). Hier zunächst als anhaltender Befund
+   notiert — voreilig.
+2. Ein Erfolg über einen unabhängigen `idf.py build flash monitor`-Lauf des
+   Nutzers (`bssid = 80:af:ca:6a:3a:22`, Kanal 6, `rssi: -60`), **gegen den
+   unveränderten Code der Hauptarbeitskopie**, nicht gegen diesen Branch. Das
+   wurde hier als Widerlegung von (1) gewertet und auf „eigenes Skript war
+   schuld" zurückgeführt.
+3. Ein erneuter Fehlschlag mit demselben Symptom, diesmal über `idf.py -p COM9
+   monitor` als Standardwerkzeug (kein eigenes Skript mehr), gegen den
+   Branch-Code. Widerlegt die Erklärung aus (2): Das Werkzeug war nicht die
+   Ursache.
+
+4. Ein weiterer Erfolg des Nutzers, diesmal ausdrücklich gegen den
+   Branch-Code (`git pull` im Worktree, dann `idf.py build flash monitor`):
+   `sync complete: create_ok=1 … finish=1`. Verbunden war das Gerät dabei mit
+   derselben BSSID wie der Fehlschlag in (3) (`50:e6:36:91:e5:f3`), aber bei
+   `rssi: -66` statt `-79`.
+
+Damit ist der Server-Roundtrip für `sequence_base` jetzt **live bestätigt**:
+Der Server akzeptiert das Top-Level-Feld, `response_matches_session()` prüft
+den zurückgelieferten Wert korrekt, ohne den Create abzulehnen. Siehe Punkt 1
+oben. Nicht mitbestätigt: der `surface`-Parameter bei
+`GET /sessions/{id}/dashboard` — der feuert nur beim Öffnen einer Session aus
+der Verlaufsliste, nicht beim passiven Sync.
+
+Zur DNS-Frage bleibt es bei vier Datenpunkten, nicht bei einer Ursache: eine
+feste BSSID hat sowohl einmal versagt (`rssi -79`) als auch einmal
+funktioniert (`rssi -66`). Das passt eher zu einer Signalqualitäts- bzw.
+Paketverlustschwelle als zu „diese eine Basisstation ist kaputt", ist aber
+weiterhin eine Hypothese, keine Ursache — vier Beobachtungen unter
+unkontrollierten Bedingungen reichen nach dem eigenen Grundsatz dieses
+Dokuments (`memo-why` statt Zählerraten) nicht für mehr.
+
 ## Reihenfolge für den nächsten Chat
 
-1. `sequence_base` geradeziehen — Code oder Doku, aber die Divergenz auflösen.
-2. Die tote Session serverseitig abbrechen (Punkt 6), sofern noch nicht
-   geschehen.
-3. Doku-Drift bei den Diagnosebefehlen entscheiden: bauen oder streichen.
-4. Retryklassen, mit `user_action` bei widerrufenem Credential zuerst.
-5. `/sessions/{id}/dashboard` projizieren, bevor die erste lange Aufnahme sie
-   sprengt.
+1. `worktree-esp32-cleanup` gemerged nach `main` (PR #1) — erledigt.
+2. Die tote Session serverseitig abbrechen (Punkt 6) — vom Nutzer selbst
+   ausgeführt, per `memo-why` bestätigt identifiziert
+   (`b4395a68-1f8c-42b2-83c1-b20d657aaeed`), Erfolg nicht weiter verfolgt.
+3. Die dauerhaft sichtbare `attention`-Markierung eines fehlgeschlagenen
+   Create — erledigt, siehe Punkt 1 oben (Nachtrag dritte Runde).
+4. `immediate`/`never`/`user_action` beim Chunk-Upload — erledigt, siehe
+   Punkt 3 oben (dritte Runde). Echtes Pro-Segment-Backoff-Timing für die
+   Klasse `backoff` bleibt bewusst offen.
+5. Den `surface`-Parameter am Gerät gezielt bestätigen: Verlaufsliste öffnen,
+   eine Session antippen, `dashboard: snapshot accepted` für die
+   Session-Ansicht im Log prüfen.
+6. DNS-Hypothese bleibt offen, ist aber kein Blocker mehr für weitere
+   Live-Tests, da die meisten Läufe erfolgreich waren. Bei Gelegenheit mit
+   mehr dokumentierten BSSID/RSSI-Paaren erhärten oder verwerfen.

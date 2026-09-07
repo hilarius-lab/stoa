@@ -231,6 +231,17 @@ int journal_build_finish(char *out, size_t capacity, unsigned final_sequence,
     return ok ? (int)at : -1;
 }
 
+int journal_build_session_state(char *out, size_t capacity, bool attention,
+                                const char *reason) {
+    size_t at = 0;
+    bool ok = write_raw(out, capacity, &at, "{");
+    if (ok) ok = write_number_field(out, capacity, &at, "a", attention ? 1 : 0, true);
+    if (ok) ok = write_text_field(out, capacity, &at, "r", reason ? reason : "", false);
+    if (ok) ok = write_text_field(out, capacity, &at, "t", "session_state", false);
+    if (ok) ok = write_raw(out, capacity, &at, "}");
+    return ok ? (int)at : -1;
+}
+
 /* ---------------------------------------------------------------- framing */
 
 static void put32(uint8_t *out, uint32_t value) {
@@ -301,6 +312,13 @@ static void apply_payload(journal_session *session, const char *json) {
         if (read_number(json, "fs", &final_sequence)) session->final_sequence = (unsigned)final_sequence;
         if (read_number(json, "fe", &final_end)) session->final_source_end_ms = final_end;
         session->finished = true;
+        return;
+    }
+    if (strcmp(type, "session_state") == 0) {
+        uint64_t attention = 0;
+        read_number(json, "a", &attention);
+        session->create_attention = attention != 0;
+        read_text(json, "r", session->create_reason, sizeof(session->create_reason));
         return;
     }
     uint64_t sequence = 0;

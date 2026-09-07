@@ -33,7 +33,6 @@ Stand: 2026-09-06
   `i`, `l`, `h`, `k`, `n`, `r`, `D`, `R` und `f` stehen gleichmäßig schwarz,
   Punzen bleiben offen. Der Vorschauschnitt ist die bestätigte Untergrenze der
   Lesbarkeit; maßgeblich ist die Strichstärke, nicht die Größe.
-- Der Textrenderer nutzt als erster regulärer Code das Fensterupdate.
 - Zum Refreshverhalten, damit die obige Zahl nicht falsch gelesen wird:
   Partiell ist bislang ausschließlich die Wellenform, nicht die Fläche.
   `EPD_Display_Partial_Frame` setzt das Controllerfenster bewusst auf den vollen

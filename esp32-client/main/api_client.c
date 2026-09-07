@@ -240,6 +240,48 @@ static bool boolean_is(cJSON *object, const char *name, bool expected) {
     return cJSON_IsBool(value) && cJSON_IsTrue(value) == expected;
 }
 
+/* A server that says nothing does not contradict us; see BACKEND_REQUIREMENTS.md
+ * §1. Only a present, differing value is a conflict. */
+static bool number_matches_or_absent(cJSON *object, const char *name, double expected) {
+    cJSON *value = cJSON_GetObjectItemCaseSensitive(object, name);
+    if (!cJSON_HasObjectItem(object, name)) return true;
+    return cJSON_IsNumber(value) && value->valuedouble == expected;
+}
+
+/* `ErrorResponse` per contracts/client-openapi-v1.json: a flat top-level
+ * object with `code`, not nested under an `error` key. */
+static bool error_code_is(const char *text, const char *code) {
+    cJSON *root = cJSON_Parse(text);
+    bool match = cJSON_IsObject(root) && string_is(root, "code", code);
+    cJSON_Delete(root);
+    return match;
+}
+
+static bool response_retry_class_is(const char *text, const char *retry_class) {
+    cJSON *root = cJSON_Parse(text);
+    bool match = cJSON_IsObject(root) && string_is(root, "retry_class", retry_class);
+    cJSON_Delete(root);
+    return match;
+}
+
+/* A short chunk-attention reason from the error envelope. `credential_revoked`
+ * is kept as the specific, already-documented word for the one code this
+ * device treats by name; anything else falls back to the server's own `code`
+ * verbatim (truncated to fit), since inventing a mapping for codes this
+ * project has not seen would be exactly the kind of guessed backend semantics
+ * CLAUDE.md rules out. */
+static void reason_from_error_code(const char *text, char *out, size_t capacity) {
+    if (error_code_is(text, "DEVICE_CREDENTIAL_REVOKED")) {
+        snprintf(out, capacity, "credential_revoked");
+        return;
+    }
+    cJSON *root = cJSON_Parse(text);
+    cJSON *code = cJSON_GetObjectItemCaseSensitive(root, "code");
+    if (cJSON_IsString(code)) snprintf(out, capacity, "%s", code->valuestring);
+    else snprintf(out, capacity, "server_rejected");
+    cJSON_Delete(root);
+}
+
 static bool server_available(cJSON *root) {
     return string_is(root, "status", "ready") || string_is(root, "status", "degraded");
 }
@@ -364,21 +406,38 @@ static bool response_matches_session(const char *text, const char *session_id) {
     bool valid = cJSON_IsObject(root) && string_is(root, "client_session_id", session_id) &&
         cJSON_IsString(state) && cJSON_HasObjectItem(root, "device_metadata") &&
         cJSON_HasObjectItem(root, "capture_mode") && cJSON_HasObjectItem(root, "created_at") &&
-        cJSON_HasObjectItem(root, "updated_at");
+        cJSON_HasObjectItem(root, "updated_at") &&
+        number_matches_or_absent(root, "sequence_base", JOURNAL_SEQUENCE_BASE);
     cJSON_Delete(root);
     return valid;
 }
 
-static bool create_session(const journal_session *session) {
+/* Persists the session-level defect flag, idempotently — a state that already
+ * matches is not rewritten, or every failed pass would grow the journal. */
+static bool mark_session(journal_session *session, bool attention, const char *reason) {
+    if (session->create_attention == attention &&
+        strcmp(session->create_reason, reason ? reason : "") == 0) return true;
+    char payload[JOURNAL_MAX_PAYLOAD];
+    int length = journal_build_session_state(payload, sizeof(payload), attention, reason);
+    if (length <= 0 || !journal_append(session, payload, (size_t)length)) return false;
+    memo_queue_note_session_transition(session->create_attention, attention);
+    session->create_attention = attention;
+    snprintf(session->create_reason, sizeof(session->create_reason), "%s", reason ? reason : "");
+    return true;
+}
+
+static bool create_session(journal_session *session) {
     cJSON *request = cJSON_CreateObject();
     cJSON *metadata = cJSON_CreateObject();
     if (!request || !metadata) { cJSON_Delete(request); cJSON_Delete(metadata); return false; }
     cJSON_AddStringToObject(request, "client_session_id", session->session_id);
     cJSON_AddStringToObject(request, "capture_mode", session->capture_mode);
     cJSON_AddStringToObject(request, "source_type", "esp32_epaper_audio");
+    /* Session identity per BACKEND_REQUIREMENTS.md §1: sequence_base is a
+     * top-level field, immutable once the server has stored it. */
+    cJSON_AddNumberToObject(request, "sequence_base", JOURNAL_SEQUENCE_BASE);
     cJSON_AddStringToObject(metadata, "client", "waveshare-esp32-s3-epaper-3.97");
     cJSON_AddStringToObject(metadata, "firmware_version", MEMO_FIRMWARE);
-    cJSON_AddNumberToObject(metadata, "sequence_base", 0);
     cJSON_AddItemToObject(request, "device_metadata", metadata);
     char *json = cJSON_PrintUnformatted(request);
     cJSON_Delete(request);
@@ -386,10 +445,21 @@ static bool create_session(const journal_session *session) {
     char *body = malloc(API_RESPONSE_MAX);
     if (!body) { cJSON_free(json); return false; }
     int http = 0;
-    bool ok = call(HTTP_METHOD_POST, "/api/client/v1/sessions", json,
-                   body, API_RESPONSE_MAX, &http) && http == 201 &&
-              response_matches_session(body, session->session_id);
+    bool reached = call(HTTP_METHOD_POST, "/api/client/v1/sessions", json,
+                        body, API_RESPONSE_MAX, &http);
+    bool ok = reached && http == 201 && response_matches_session(body, session->session_id);
     status.last_http = http;
+    /* Mark only on a definitive answer from the server, never on a transport
+     * failure — a DNS or connectivity gap must not light this up, or it would
+     * flag exactly the sessions that will succeed on the next retry. */
+    if (reached && !ok) {
+        char reason[24];
+        if (http == 201) snprintf(reason, sizeof(reason), "response_mismatch");
+        else snprintf(reason, sizeof(reason), "create_http_%d", http);
+        mark_session(session, true, reason);
+    } else if (ok && session->create_attention) {
+        mark_session(session, false, "");
+    }
     memset(json, 0, strlen(json));
     cJSON_free(json);
     memset(body, 0, API_RESPONSE_MAX);
@@ -584,6 +654,16 @@ static bool upload_chunk(journal_session *session, journal_chunk *chunk) {
     int http = 0;
     bool request_ok = upload_request(session, chunk, body, API_RESPONSE_MAX, &http);
     bool durable = request_ok && http == 201 && ack_matches(body, session, chunk);
+    /* retry_class immediate per API_INTERACTION.md's Segmentupload table: a
+     * few tight, synchronous attempts, then fall through to the ordinary
+     * ready-and-retry-next-pass cadence below — bounded, so a server that
+     * keeps answering "immediate" is not hammered forever. */
+    for (int attempt = 0; !durable && request_ok && http != 201 &&
+         response_retry_class_is(body, "immediate") && attempt < 2; attempt++) {
+        vTaskDelay(pdMS_TO_TICKS(500));
+        request_ok = upload_request(session, chunk, body, API_RESPONSE_MAX, &http);
+        durable = request_ok && http == 201 && ack_matches(body, session, chunk);
+    }
     if (!durable && reconciliation_has(session, chunk)) {
         durable = true;
         status.reconciled++;
@@ -596,7 +676,21 @@ static bool upload_chunk(journal_session *session, journal_chunk *chunk) {
     } else if (http == 409) {
         persisted = mark_chunk(session, chunk, CHUNK_ATTENTION, "server_conflict");
         status.uploads_failed++;
+    } else if (request_ok && (response_retry_class_is(body, "never") ||
+                              response_retry_class_is(body, "user_action"))) {
+        /* Stop and surface it instead of backing off forever. Local recording
+         * and the rest of the queue are untouched; only this segment is
+         * marked. */
+        char reason[24];
+        reason_from_error_code(body, reason, sizeof(reason));
+        persisted = mark_chunk(session, chunk, CHUNK_ATTENTION, reason);
+        status.uploads_failed++;
     } else {
+        /* backoff, network, unclassified or unreadable: the conservative
+         * default, retried on the next pass. Per-chunk backoff timing
+         * distinct from the immediate loop above is not implemented — every
+         * ready segment shares the same ~5 s retry cadence regardless of
+         * retry_class here; see docs/CLIENT_SERVER_STATE.md. */
         persisted = mark_chunk(session, chunk, CHUNK_READY, "");
         status.uploads_failed++;
     }
@@ -1038,7 +1132,8 @@ static void fetch_history(void) {
 static void fetch_session(void) {
     if (!atomic_load(&session_pending)) return;
     char path[128];
-    snprintf(path, sizeof(path), "/api/client/v1/sessions/%s/dashboard", session_id_wanted);
+    snprintf(path, sizeof(path), "/api/client/v1/sessions/%s/dashboard?surface=esp32_epaper",
+             session_id_wanted);
     char *body = malloc(API_RESPONSE_MAX);
     int http = 0;
     bool ok = body && call(HTTP_METHOD_GET, path, NULL, body, API_RESPONSE_MAX, &http) &&

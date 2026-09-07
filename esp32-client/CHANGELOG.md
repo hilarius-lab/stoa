@@ -1,5 +1,176 @@
 # Änderungen
 
+## 2026-09-07 – `ready`-Zähler driftete nach dem Verwerfen kurzer Aufnahmen
+
+Vom Nutzer bemerkt: das Warteschlangen-Symbol in der Statusleiste zeigte
+dauerhaft „2", obwohl `memo-list` für beide vorhandenen Sessions `ready=0`
+auswies — derselbe Cache-Drift-Fehler, vor dem `memo_queue.c` im eigenen
+Kommentar warnt (6. September, dort für `attention`), diesmal für `ready`,
+durch den eigenen Fix von vorhin verursacht.
+
+Ursache: Der Zu-kurz-Filter (`record_memo()`) löscht die Dateien eines
+verworfenen Segments, aber jedes bereits fertig geschriebene Segment hatte
+zuvor `memo_queue_note_ready()` durchlaufen und `status.ready` erhöht. Ohne
+Gegenbuchung blieb der Zähler dauerhaft zu hoch — für jede zu kurze Aufnahme,
+die noch ein Segment fertigstellte, bevor sie verworfen wurde, um eins.
+
+Fix: vor dem Löschen wird `memo_queue_note_transition(CHUNK_READY,
+CHUNK_UNKNOWN)` einmal je fertig geschriebenem Segment aufgerufen — derselbe
+Mechanismus, den `mark_chunk()` für jeden regulären Zustandswechsel nutzt,
+nur ohne Zielzustand, weil das Segment nicht in einen anderen Eimer wandert,
+sondern verschwindet. Build, Flash und `queue-status` nach dem Neustart
+bestanden (`ready=0`, passend zu `memo-list`). Ob der Zähler bei künftigen
+zu kurzen Aufnahmen jetzt stabil bleibt, ist noch nicht erneut am Gerät
+geprüft.
+
+## 2026-09-07 – Dashboard bleibt während der Aufnahme sichtbar
+
+Der Aufnahme-Bildschirm (`SCREEN_RECORDING`) und der Zustand direkt danach
+(`SCREEN_MEMO_SAVED`) tauschten den Dashboard-Körper bislang gegen ein
+vorgerechnetes, weitgehend leeres Hintergrundbild aus und zeichneten
+stattdessen — nur bei `SCREEN_MEMO_SAVED` — eine dreistellige Sekundenzahl
+über die Statusleiste. Ein Rest aus H1/H2, vor dem Dashboard entstanden, nie
+an die dashboard-zentrierte Oberfläche angepasst.
+
+Der Aufnahmepunkt in der Statusleiste (`status_recording`/`ICON_RECORDING`)
+existierte bereits vollständig und wurde unabhängig vom Body korrekt gesetzt
+— es fehlte nur, den Dashboard-Körper (bzw. offene Detail-/Session-/
+Verlaufsansicht) auch in diesen beiden Zuständen weiterzuzeichnen.
+`draw_dashboard()` räumt seinen Bereich über `dashboard_walk()` selbst auf,
+das darunterliegende Hintergrundbild spielt also keine Rolle. Die
+Sekundenzahl ist entfernt (`message.state==SCREEN_MEMO_SAVED`-Sonderfall
+gestrichen) — sie hätte jetzt sichtbar mit der wieder sichtbaren Statusleiste
+kollidiert und hatte laut Rückmeldung ohnehin keine Funktion mehr.
+
+Build und Flash bestanden. Optische Abnahme am Gerät steht noch aus
+(`docs/DEVELOPMENT_GUIDE.md` Regel 10).
+
+## 2026-09-07 – Zu kurze Aufnahmen erzeugen keine Session mehr
+
+Live am Gerät gefunden nach Start des Verarbeitungs-Workers: `memo-list` zeigte
+zwei leere „incomplete"-Geisterschnipsel (0 Segmente) von versehentlich kurzen
+Tastendrücken.
+
+`record_memo()` legt Verzeichnis und Session-Journaleintrag absichtlich sofort
+an, bevor überhaupt feststeht, wie lange gehalten wird (Absturzsicherheit).
+Neu: direkt nach dem Schließen von Mikrofon und Encoder, vor dem Schreiben von
+`COMPLETE.TXT`, wird die Gesamtdauer geprüft (`MEMO_MIN_DURATION_MS 1500`,
+klar über der ~500-ms-Gestenerkennung in `main.c`). Darunter wird das gerade
+erst angelegte Verzeichnis samt Journal sofort wieder entfernt — anders als
+`discard_one()`, das ein bereits als `ready` markiertes Segment aus gutem
+Grund verweigert, ist das hier sicher: Der Sync-Worker hat diese Aufnahme
+noch nie gesehen, nichts kann „deliverable" sein. Build und Flash bestanden;
+der eigentliche kurze Tastendruck ist noch nicht am Gerät gegengeprüft.
+
+## 2026-09-07 – Drei weitere Retryklassen beim Chunk-Upload
+
+Punkt 4 der Reihenfolge. Korrektur zur eigenen Vorrunde: die
+`retry_class`-Tabelle in `docs/API_INTERACTION.md` steht unter
+„Segmentupload" — sie gilt für `POST /audio-chunks`, nicht für
+`create_session()`/`finish_session()`, wie hier zuvor behauptet.
+
+- `upload_chunk()` erkennt jetzt `never`/`user_action` allgemein über
+  `ErrorResponse.retry_class` und markiert `attention` mit dem Serverwert aus
+  `code` als Grund (`credential_revoked` bleibt der bekannte Sonderfall) —
+  ersetzt die bisherige feste 401-Sonderbehandlung durch die Regel, aus der
+  sie eigentlich folgen sollte.
+- `immediate`: bis zu zwei sofortige Zusatzversuche mit fester 500-ms-Pause,
+  dann Rückfall auf den Standardpfad — begrenzt, damit ein dauerhaft
+  „immediate" antwortender Server nicht ununterbrochen angefragt wird.
+- **Bewusst nicht umgesetzt:** echtes Pro-Segment-Timing für `backoff`. Jedes
+  `ready`-Segment teilt sich weiterhin denselben ~5-Sekunden-Takt,
+  unabhängig von `retry_class` — bräuchte einen weiteren Zustand pro Chunk,
+  vergleichbar im Umfang mit der Journal-Erweiterung von Punkt 3.
+- Build, Flash und Regressionscheck (zwei bestehende Sessions unverändert)
+  bestanden. Die eigentlichen Pfade sind nicht live gegen eine echte
+  Serverablehnung geprüft.
+
+## 2026-09-07 – Fehlgeschlagener Create wird jetzt dauerhaft sichtbar
+
+Nach dem Merge von `worktree-esp32-cleanup` (PR #1): der letzte Rest von
+Punkt 1 aus `docs/CLIENT_SERVER_STATE.md`, der nach dem Merge noch offen war.
+
+- Neuer Journal-Record-Typ `session_state` (`journal.h`/`journal.c`), weil ein
+  fehlgeschlagener Create oft eine Session mit null Segmenten trifft — kein
+  Chunk vorhanden, an dem sich die bestehende `CHUNK_ATTENTION`-Markierung
+  hätte befestigen lassen.
+- `create_session()` (`api_client.c`) markiert nur bei einer **erreichten**
+  Serverantwort, die nicht der erwartete Erfolg ist — reine Transportfehler
+  (DNS, Timeout) lösen nichts aus. Reasons: `response_mismatch` (201 mit
+  ungültigem Body) oder `create_http_<code>` (jeder andere Status).
+- Fließt in denselben `attention`-Zähler wie Chunk-Attention
+  (`memo_queue_note_session_transition()`, gleiche Lösch-bei-Erfolg-Regel);
+  sichtbar in `memo-list` (`@MEMO ... attention=N`) und neu in `memo-why`
+  (`@WHY ... create_attention=0|1 create_reason=…`).
+- Build, Flash und Regressionscheck gegen die zwei bestehenden Sessions
+  bestanden: `attention=0` unverändert, neue Felder korrekt formatiert. Der
+  tatsächliche Ablehnungsfall ist nicht live geprüft — dafür müsste der
+  Server eine Session aktiv ablehnen.
+- Nebenbei: vier verwaiste `idf_monitor`-Prozesse aus vorherigen
+  Hintergrund-Job-Versuchen blockierten COM9 nach dem Build und mussten vor
+  dem Flash beendet werden — `Stop-Job` tötet den PowerShell-Job-Wrapper,
+  nicht die von `idf.py monitor` gestarteten Kindprozesse.
+
+## 2026-09-07 – Vier Diskrepanzen aus dem Übergabedokument bereinigt
+
+Build/Flash/Monitor gegen das reale Gerät (COM9), alle Punkte unten dort
+verifiziert. Bezug: `docs/CLIENT_SERVER_STATE.md`, Abschnitt „Offene Punkte".
+
+- **`sequence_base` (Punkt 1).** `create_session()` sendet den Wert jetzt als
+  eigenes Top-Level-Feld (`JOURNAL_SEQUENCE_BASE` aus `journal.h`), nicht mehr
+  nur in `device_metadata`. `response_matches_session()` prüft ein
+  zurückgeliefertes `sequence_base` gegen diese Konstante über die neue
+  `number_matches_or_absent()`; ein fehlendes Feld wird weiterhin akzeptiert.
+  `docs/BACKEND_REQUIREMENTS.md` entsprechend korrigiert.
+- **Fehlende Diagnosebefehle (Punkt 2, Teil 1).** `epd-clear`, `epd-window`,
+  `text-test`, `icon-test`, `pattern-test`, `status-test`, `header-test` und
+  `card-test` waren in `docs/DEVELOPMENT_GUIDE.md` exakt spezifiziert und die
+  Renderer (`screen_icon_test()` usw.) fertig, aber in `main.c` nicht
+  verdrahtet. Jetzt verdrahtet, alle acht am Gerät geprüft.
+- **`memo-discard <id>` (Punkt 2, Teil 2).** `recorder_discard()` samt
+  `discard_memo()` war bereits vollständig implementiert (inklusive
+  `@DISCARDED`/`@ERROR still_deliverable`), fehlte nur in `recorder.h` und im
+  Kommandodispatcher. Jetzt verdrahtet; am Gerät mit einer unbekannten ID
+  geprüft (`@ERROR unknown_memo`), nicht destruktiv gegen eine echte Session
+  getestet.
+- **`401 DEVICE_CREDENTIAL_REVOKED` (Punkt 3, Teilausschnitt).** `upload_chunk()`
+  erkennt jetzt diesen einen Fall am `ErrorResponse.code`
+  (`contracts/client-openapi-v1.json`) und markiert das Segment `attention`
+  mit Grund `credential_revoked`, statt es wie jeden anderen Fehler auf
+  `ready` zurückzusetzen und endlos zu backoffen. Die übrige `retry_class`-
+  Tabelle (`immediate`, `backoff`, `network`, `never`) bleibt offen — das war
+  der einzige Fall, den die Doku als „besonders relevant" markiert hatte.
+- **`GET /sessions/{id}/dashboard` ohne `surface` (Punkt 4).** Ergänzt um
+  `?surface=esp32_epaper`, analog zum Hauptdashboard.
+- **`docs/PROJECT_STATUS.md` widersprach sich selbst.** Eine Zeile behauptete,
+  der reguläre Zeichenpfad nutze das Fensterupdate; die nächsten Zeilen im
+  selben Dokument beschrieben korrekt das Gegenteil (`EPD_Display_Partial_Frame`
+  überträgt bewusst die volle Fläche, weil die geclippte Vendorvariante per
+  `EPD_Reset()` Text sichtbar verschob). Das ist ein belegter Hardware-Fix, kein
+  Bug — nur die falsche Zeile wurde entfernt. `main/screen.c` unverändert.
+- **Nicht angefasst:** die restliche `retry_class`-Tabelle, die dauerhaft
+  sichtbare `attention`-Markierung eines fehlgeschlagenen Create, die tote
+  Session serverseitig (Punkt 6) und die Backendbefunde (Punkt 5) — alles
+  weiterhin offen, teils außerhalb dieses Ordners.
+- **Zweite Korrektur, noch am selben Tag:** Die erste Korrektur oben („eigenes
+  Testskript war schuld") war selbst voreilig. Ein erneuter Lauf mit
+  `idf.py -p COM9 monitor` als Standardwerkzeug — kein eigenes Skript mehr —
+  zeigte denselben DNS-Fehlschlag gegen den Branch-Code. Auffällig:
+  unterschiedliche Basisstation zwischen dem erfolgreichen und dem
+  fehlgeschlagenen Lauf (`rssi: -60` gegen `rssi: -79`, vermutlich zwei Knoten
+  desselben Mesh) — eine naheliegende, aber unbewiesene Spur. Ursache bleibt
+  offen; Details und die nötigen nächsten Schritte in
+  `docs/CLIENT_SERVER_STATE.md`.
+- **Live-Bestätigung, noch am selben Tag:** Ein Nutzerlauf mit `git pull` im
+  Worktree plus `idf.py build flash monitor` — also ausdrücklich gegen den
+  Branch-Code — schloss mit `sync complete: create_ok=1 … finish=1`. Damit ist
+  `sequence_base` jetzt live gegen den echten Server bestätigt, nicht mehr nur
+  quellcodeseitig. Verbunden war das Gerät dabei mit derselben Basisstation,
+  die zwei Einträge zuvor noch scheiterte (`50:e6:36:91:e5:f3`), diesmal bei
+  `rssi: -66` statt `-79` — ein vierter Datenpunkt für „Signalqualität", kein
+  Beleg. Der `surface`-Parameter ist damit weiterhin nicht live bestätigt, weil
+  er nur beim Öffnen einer Session aus der Verlaufsliste feuert.
+
 ## 2026-09-06 – Eine Aufnahme, die es nie gab, wird nicht mehr angeboten
 
 - Am Gerät gefunden, nachdem die Zähler nur die Richtung wiesen:

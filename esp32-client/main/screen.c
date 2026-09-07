@@ -785,15 +785,6 @@ static void screen_task(void *unused) {
             message.state == SCREEN_READY ? ready : message.state == SCREEN_RECORDING ? recording :
             message.state == SCREEN_MEMO_SAVED ? memo_saved : message.state == SCREEN_ERROR ? error : saved;
         memcpy(buffer, background, 48000);
-        /* Only for the saved message, which is drawn once and states how long
-         * the memo turned out. While recording there is no counter: the status
-         * bar carries the recording indicator, and a running number would need
-         * a refresh per second on a panel that takes half a second per
-         * refresh. */
-        if(message.state==SCREEN_MEMO_SAVED) {
-            char seconds[8]; snprintf(seconds,sizeof(seconds),"%03u",message.seconds%1000);
-            for(int c=0;c<3;c++)draw_glyph_portrait(buffer,seconds[c]-'0',300+c*24,8);
-        }
         if (message.state == SCREEN_ERROR) {
             /* The operating backgrounds are blank now, so this line is drawn
              * live instead of being baked into an asset. */
@@ -803,10 +794,17 @@ static void screen_task(void *unused) {
         }
         // Queue, network, clock and storage are local truth and stay visible.
         atomic_store(&status_recording, message.state == SCREEN_RECORDING);
+        /* Recording and the moment right after used to swap in a dedicated,
+         * mostly blank background and skip the body entirely — a holdover
+         * from before the dashboard existed. The status bar's recording dot
+         * (above) already says what changed; hiding the dashboard underneath
+         * it no longer serves a purpose, so the body stays exactly as it
+         * would in SCREEN_READY. */
         if(message.state>=SCREEN_READY){
             draw_status(buffer);
             draw_header(buffer);
-            if(message.state==SCREEN_READY){
+            if(message.state==SCREEN_READY || message.state==SCREEN_RECORDING ||
+               message.state==SCREEN_MEMO_SAVED){
                 if(detail_open)draw_detail(buffer);
                 else if(session_open)draw_session(buffer);
                 else if(history_open)draw_history(buffer);

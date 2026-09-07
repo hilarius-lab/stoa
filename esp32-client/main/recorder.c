@@ -97,7 +97,7 @@ static void memo_states(const char *id,unsigned *segments,unsigned *ready,unsign
         *segments=session->chunk_count;
         *ready=journal_count_state(session,CHUNK_READY)+journal_count_state(session,CHUNK_UPLOADING);
         *acked=journal_count_state(session,CHUNK_ACKED);
-        *attention=journal_count_state(session,CHUNK_ATTENTION);
+        *attention=journal_count_state(session,CHUNK_ATTENTION)+(session->create_attention?1:0);
         *known=true;
     }
     free(session);
@@ -257,8 +257,11 @@ static void explain_memo(const char *id) {
     journal_session_init(session,directory);
     if(!journal_replay(session)) { free(session); usb_line("@ERROR unknown_memo\n"); return; }
     char line[192];
-    snprintf(line,sizeof(line),"@WHY %.8s session=%.36s finished=%d segments=%u\n",
-             id,session->session_id,session->finished?1:0,session->chunk_count);
+    snprintf(line,sizeof(line),
+             "@WHY %.8s session=%.36s finished=%d segments=%u create_attention=%d create_reason=%s\n",
+             id,session->session_id,session->finished?1:0,session->chunk_count,
+             session->create_attention?1:0,
+             session->create_attention&&session->create_reason[0]?session->create_reason:"-");
     usb_line(line);
     for(unsigned i=0;i<session->chunk_count;i++) {
         journal_chunk *chunk=&session->chunks[i];
@@ -406,6 +409,10 @@ static bool note(journal_session *session,const char *payload,int length) {
     }
     return true;
 }
+// Below this, a hold is treated as an unintended button touch rather than a
+// memo. Chosen as comfortably above the ~500 ms gesture debounce in main.c
+// while still well under what anyone would deliberately hold for.
+#define MEMO_MIN_DURATION_MS 1500
 static bool record_memo(bool diagnostic) {
     char dir[40],partial[64],final[64];
     memo_queue_update_space();
@@ -544,6 +551,40 @@ static bool record_memo(bool diagnostic) {
     }
     if(opened && esp_codec_dev_close(mic)!=ESP_CODEC_DEV_OK) ok=false;
     esp_aac_enc_close(encoder); free(stereo); free(mono); free(encoded);
+    /* A touch that only briefly triggered the hold gesture still reaches here
+     * with a cleanly closed, possibly zero-segment recording — the directory
+     * and its session record were already written before the microphone ever
+     * opened. Below this duration it is treated as an unintended press, not a
+     * memo: discarded outright rather than left as a stub or a near-silent
+     * segment. Safe to remove unconditionally, unlike `discard_one()` — this
+     * directory was created earlier in this very call and has not been
+     * offered to the sync worker yet, so nothing can be "deliverable" here. */
+    if(ok && samples*1000/48000<MEMO_MIN_DURATION_MS) {
+        /* Every completed segment above already ran memo_queue_note_ready(),
+         * which put it in the `ready` bucket the status bar counts. Deleting
+         * the files without leaving that bucket the same way it is normally
+         * left (mark_chunk() -> memo_queue_note_transition()) would strand
+         * the counter above zero forever — the exact cache-drift failure
+         * memo_queue.c's own history warns about, just for `ready` instead
+         * of `attention` this time. */
+        for(unsigned i=0;i<sequence;i++) memo_queue_note_transition(CHUNK_READY,CHUNK_UNKNOWN);
+        free(journal);
+        DIR *d=opendir(dir);
+        if(d) {
+            struct dirent *entry; char path[96];
+            while((entry=readdir(d))) {
+                if(entry->d_name[0]=='.') continue;
+                if(strlen(entry->d_name)>=32) continue;
+                snprintf(path,sizeof(path),"%s/%.31s",dir,entry->d_name);
+                unlink(path);
+            }
+            closedir(d);
+            rmdir(dir);
+        }
+        ESP_LOGI("memo","recording too short (%llu ms); discarded, not offered",
+                 (unsigned long long)(samples*1000/48000));
+        return true;
+    }
     if(ok && sequence) {
         snprintf(partial,sizeof(partial),"%s/COMPLETE.TMP",dir);
         snprintf(final,sizeof(final),"%s/COMPLETE.TXT",dir);

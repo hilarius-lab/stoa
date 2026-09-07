@@ -15,6 +15,7 @@
 #include "nvs.h"
 #include "cJSON.h"
 #include "screen.h"
+#include "icons.h"
 #include "storage.h"
 #include "recorder.h"
 #include "api_client.h"
@@ -278,6 +279,7 @@ void app_main(void) {
                 }
                 if(!setup && strncmp(command,"memo-get ",9)==0) recorder_files(command+9);
                 if(!setup && strncmp(command,"memo-why ",9)==0) recorder_explain(command+9);
+                if(!setup && strncmp(command,"memo-discard ",13)==0) recorder_discard(command+13);
                 /* The count is mandatory and is checked against the card, so a
                  * stray line cannot wipe recordings: `memo-discard-all` without
                  * a number does nothing but say what it would have needed. */
@@ -290,6 +292,44 @@ void app_main(void) {
                         printf("@ERROR expected_count_required\n");
                     else recorder_discard_all((unsigned)expected);
                 }
+                /* Screen diagnostics from docs/DEVELOPMENT_GUIDE.md. Read-only:
+                 * they draw into the live framebuffer and never touch the
+                 * recorder, journal or network state. */
+                if(!setup && strcmp(command,"epd-clear")==0) screen_refresh();
+                if(!setup && strncmp(command,"epd-window ",11)==0) {
+                    unsigned bx,y,bw,h;
+                    if(sscanf(command+11,"%u %u %u %u",&bx,&y,&bw,&h)==4)
+                        screen_window_test(bx,y,bw,h);
+                    else printf("@ERROR usage: epd-window <bx> <y> <bw> <h>\n");
+                }
+                if(!setup && strncmp(command,"text-test ",10)==0) {
+                    unsigned which; int consumed=0;
+                    if(sscanf(command+10,"%u%n",&which,&consumed)==1 && which<=2) {
+                        const char *text=command+10+consumed;
+                        while(*text==' ') text++;
+                        screen_text_test(which,text);
+                    } else printf("@ERROR usage: text-test <0|1|2> <text>\n");
+                }
+                if(!setup && strcmp(command,"icon-test")==0) screen_icon_test();
+                if(!setup && strcmp(command,"pattern-test")==0) screen_pattern_test(STRIP_SOLID+1);
+                if(!setup && strncmp(command,"pattern-test ",13)==0) {
+                    unsigned step;
+                    if(sscanf(command+13,"%u",&step)==1 && step<=STRIP_SOLID) screen_pattern_test(step);
+                    else printf("@ERROR usage: pattern-test <0..4>\n");
+                }
+                if(!setup && strcmp(command,"status-test")==0) screen_status_test(0);
+                if(!setup && strncmp(command,"status-test ",12)==0) {
+                    unsigned demo;
+                    if(sscanf(command+12,"%u",&demo)==1 && demo>=1 && demo<=5) screen_status_test(demo);
+                    else printf("@ERROR usage: status-test <1..5>\n");
+                }
+                if(!setup && strcmp(command,"header-test")==0) screen_header_test(0);
+                if(!setup && strncmp(command,"header-test ",12)==0) {
+                    unsigned demo;
+                    if(sscanf(command+12,"%u",&demo)==1 && demo>=1 && demo<=6) screen_header_test(demo);
+                    else printf("@ERROR usage: header-test <1..6>\n");
+                }
+                if(!setup && strcmp(command,"card-test")==0) screen_card_test();
                 command_len=0;
             } else if(command_len<sizeof(command)-1) command[command_len++]=ch;
         }

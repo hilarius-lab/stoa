@@ -156,6 +156,16 @@ def finish_client_session(client_session_id,final_sequence,final_source_end_ms=N
         old,ingestion_id,previous=row
         if old in ("aborted","completed"):raise ClientSessionConflict(f"cannot finish a session in state {old}")
         if previous is not None and previous!=final_sequence:raise ClientSessionConflict("final_sequence conflicts with the previously closed upload horizon")
+        # The client is expected to keep retrying finish until it locally
+        # confirms completion (contract, not a bug) — a retry that lands after
+        # the session already reached processing must be a no-op, not a
+        # regression back to draining. Observed on the real device: twelve
+        # draining/processing round-trips for one session over roughly three
+        # hours, all from this exact path, before mark_settled() could ever
+        # fire client-side.
+        if old=="processing":
+            c.commit()
+            return get_client_session(client_session_id)
         c.execute("UPDATE client_sessions SET state='draining',expected_final_sequence=%s,final_source_end_ms=%s,finish_requested_at=COALESCE(finish_requested_at,%s),updated_at=%s WHERE client_session_id=%s",
                   (final_sequence,final_source_end_ms,now,now,client_session_id))
         _audit(c,client_session_id,"finish_requested",old,"draining",{"final_sequence":final_sequence});c.commit()

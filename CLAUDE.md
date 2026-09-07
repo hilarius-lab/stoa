@@ -55,7 +55,18 @@ allen voran `memo-why`.
   Lesequelle der App.
 - Die App rendert nur den geschlossenen Server-Driven-UI-Katalog und führt kein
   HTML, JavaScript, CSS oder beliebigen Servercode aus.
-- Tasks und Listen werden weder angezeigt noch verwaltet.
+- **Korrigiert 7. September 2026, zweite Runde:** Dieser Punkt stand hier lange
+  als „Tasks und Listen werden weder angezeigt noch verwaltet" — im
+  nachweisbaren Widerspruch zum tatsächlichen Code (`services/client_dashboard.py`,
+  Sektionen `today`/`lists` in `_idle_content()`) und zu
+  `esp32-client/docs/API_INTERACTION.md`, das die Projektion ausdrücklich als
+  Feature beschreibt. Aktueller Stand: Die ESP32-Surface **zeigt** Tasks und
+  Listen bereits als eigene Sektionen an. **Verwaltung** (Abhaken einzelner
+  Tasks, Löschen einzelner Listen-Einträge, Löschen ganzer Listen zunächst nur
+  per Sprachbefehl) ist eine in Arbeit befindliche Erweiterung — Stand und
+  offene Punkte dazu in `esp32-client/docs/CLIENT_SERVER_STATE.md`. Für die
+  Android-App ungeprüft; dort gilt weiterhin `android/docs/APP_FUNCTIONAL_BOUNDARY.md`
+  vorrangig vor dieser Datei.
 - Audio verwendet persistente Dateien, Multipart-HTTPS und durable ACK.
   Flüchtige WebSocket-Audiostreams sind verboten.
 - Logs enthalten keine Audioinhalte, Transkripte, Notes, Facts, Chats, Tokens,
