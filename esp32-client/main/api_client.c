@@ -257,6 +257,31 @@ static bool error_code_is(const char *text, const char *code) {
     return match;
 }
 
+static bool response_retry_class_is(const char *text, const char *retry_class) {
+    cJSON *root = cJSON_Parse(text);
+    bool match = cJSON_IsObject(root) && string_is(root, "retry_class", retry_class);
+    cJSON_Delete(root);
+    return match;
+}
+
+/* A short chunk-attention reason from the error envelope. `credential_revoked`
+ * is kept as the specific, already-documented word for the one code this
+ * device treats by name; anything else falls back to the server's own `code`
+ * verbatim (truncated to fit), since inventing a mapping for codes this
+ * project has not seen would be exactly the kind of guessed backend semantics
+ * CLAUDE.md rules out. */
+static void reason_from_error_code(const char *text, char *out, size_t capacity) {
+    if (error_code_is(text, "DEVICE_CREDENTIAL_REVOKED")) {
+        snprintf(out, capacity, "credential_revoked");
+        return;
+    }
+    cJSON *root = cJSON_Parse(text);
+    cJSON *code = cJSON_GetObjectItemCaseSensitive(root, "code");
+    if (cJSON_IsString(code)) snprintf(out, capacity, "%s", code->valuestring);
+    else snprintf(out, capacity, "server_rejected");
+    cJSON_Delete(root);
+}
+
 static bool server_available(cJSON *root) {
     return string_is(root, "status", "ready") || string_is(root, "status", "degraded");
 }
@@ -629,6 +654,16 @@ static bool upload_chunk(journal_session *session, journal_chunk *chunk) {
     int http = 0;
     bool request_ok = upload_request(session, chunk, body, API_RESPONSE_MAX, &http);
     bool durable = request_ok && http == 201 && ack_matches(body, session, chunk);
+    /* retry_class immediate per API_INTERACTION.md's Segmentupload table: a
+     * few tight, synchronous attempts, then fall through to the ordinary
+     * ready-and-retry-next-pass cadence below — bounded, so a server that
+     * keeps answering "immediate" is not hammered forever. */
+    for (int attempt = 0; !durable && request_ok && http != 201 &&
+         response_retry_class_is(body, "immediate") && attempt < 2; attempt++) {
+        vTaskDelay(pdMS_TO_TICKS(500));
+        request_ok = upload_request(session, chunk, body, API_RESPONSE_MAX, &http);
+        durable = request_ok && http == 201 && ack_matches(body, session, chunk);
+    }
     if (!durable && reconciliation_has(session, chunk)) {
         durable = true;
         status.reconciled++;
@@ -641,13 +676,21 @@ static bool upload_chunk(journal_session *session, journal_chunk *chunk) {
     } else if (http == 409) {
         persisted = mark_chunk(session, chunk, CHUNK_ATTENTION, "server_conflict");
         status.uploads_failed++;
-    } else if (http == 401 && request_ok && error_code_is(body, "DEVICE_CREDENTIAL_REVOKED")) {
-        /* retry_class user_action per API_INTERACTION.md: stop and surface it
-         * instead of backing off forever. Local recording and the rest of the
-         * queue are untouched; only this segment is marked. */
-        persisted = mark_chunk(session, chunk, CHUNK_ATTENTION, "credential_revoked");
+    } else if (request_ok && (response_retry_class_is(body, "never") ||
+                              response_retry_class_is(body, "user_action"))) {
+        /* Stop and surface it instead of backing off forever. Local recording
+         * and the rest of the queue are untouched; only this segment is
+         * marked. */
+        char reason[24];
+        reason_from_error_code(body, reason, sizeof(reason));
+        persisted = mark_chunk(session, chunk, CHUNK_ATTENTION, reason);
         status.uploads_failed++;
     } else {
+        /* backoff, network, unclassified or unreadable: the conservative
+         * default, retried on the next pass. Per-chunk backoff timing
+         * distinct from the immediate loop above is not implemented — every
+         * ready segment shares the same ~5 s retry cadence regardless of
+         * retry_class here; see docs/CLIENT_SERVER_STATE.md. */
         persisted = mark_chunk(session, chunk, CHUNK_READY, "");
         status.uploads_failed++;
     }

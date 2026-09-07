@@ -1,5 +1,28 @@
 # Änderungen
 
+## 2026-09-07 – Drei weitere Retryklassen beim Chunk-Upload
+
+Punkt 4 der Reihenfolge. Korrektur zur eigenen Vorrunde: die
+`retry_class`-Tabelle in `docs/API_INTERACTION.md` steht unter
+„Segmentupload" — sie gilt für `POST /audio-chunks`, nicht für
+`create_session()`/`finish_session()`, wie hier zuvor behauptet.
+
+- `upload_chunk()` erkennt jetzt `never`/`user_action` allgemein über
+  `ErrorResponse.retry_class` und markiert `attention` mit dem Serverwert aus
+  `code` als Grund (`credential_revoked` bleibt der bekannte Sonderfall) —
+  ersetzt die bisherige feste 401-Sonderbehandlung durch die Regel, aus der
+  sie eigentlich folgen sollte.
+- `immediate`: bis zu zwei sofortige Zusatzversuche mit fester 500-ms-Pause,
+  dann Rückfall auf den Standardpfad — begrenzt, damit ein dauerhaft
+  „immediate" antwortender Server nicht ununterbrochen angefragt wird.
+- **Bewusst nicht umgesetzt:** echtes Pro-Segment-Timing für `backoff`. Jedes
+  `ready`-Segment teilt sich weiterhin denselben ~5-Sekunden-Takt,
+  unabhängig von `retry_class` — bräuchte einen weiteren Zustand pro Chunk,
+  vergleichbar im Umfang mit der Journal-Erweiterung von Punkt 3.
+- Build, Flash und Regressionscheck (zwei bestehende Sessions unverändert)
+  bestanden. Die eigentlichen Pfade sind nicht live gegen eine echte
+  Serverablehnung geprüft.
+
 ## 2026-09-07 – Fehlgeschlagener Create wird jetzt dauerhaft sichtbar
 
 Nach dem Merge von `worktree-esp32-cleanup` (PR #1): der letzte Rest von

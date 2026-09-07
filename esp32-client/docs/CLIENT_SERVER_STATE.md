@@ -191,20 +191,42 @@ Wichtig dabei: `main/screen.c` blieb unangetastet — die volle Flächenübertra
 belegter Fix für einen realen Positionsfehler (`EPD_Display_Partial` verliert
 per `EPD_Reset()` die Controllerbasis), kein Bug.
 
-### 3. Retryklassen — teilweise erledigt, 7. September, zweite Runde
+### 3. Retryklassen — erweitert, 7. September, dritte Runde
 
-Der eine Fall, den diese Datei als „besonders relevant" markiert hatte, ist
-behoben: `upload_chunk()` erkennt `401` mit `ErrorResponse.code ==
-"DEVICE_CREDENTIAL_REVOKED"` (Schema aus `contracts/client-openapi-v1.json`)
-und markiert das Segment `attention` mit Grund `credential_revoked`, statt es
-wie jeden anderen Fehler auf `ready` zurückzusetzen und endlos zu backoffen.
-Lokale Aufnahme und die übrige Queue bleiben unangetastet.
+Wichtige Korrektur zur eigenen früheren Einordnung: die `retry_class`-Tabelle
+in `API_INTERACTION.md` steht ausdrücklich unter „Segmentupload" — sie gilt
+für `POST /audio-chunks`, nicht für `create_session()`/`finish_session()`. Die
+vorige Fassung dieses Punkts behauptete das Gegenteil.
 
-Weiterhin offen: die vollständige `retry_class`-Tabelle (`immediate`,
-`backoff`, `network`, `never`) ist nirgends ausgewertet; jeder andere
-Nicht-200/201/409/401-Fall landet weiterhin im uniformen Backoff. Das betrifft
-auch `create_session()`, `finish_session()` und die übrigen Aufrufe — nur der
-Chunk-Upload-Pfad wurde angefasst.
+`upload_chunk()` wertet jetzt vier der fünf Klassen aus, nur bei einer
+**erreichten** Serverantwort (nie bei einem Transportfehler, sonst würde
+ausgerechnet ein DNS-Aussetzer als Serverablehnung markiert):
+
+- `never`/`user_action`: Segment `attention`, Grund aus `ErrorResponse.code`
+  (`credential_revoked` für den bekannten Fall, sonst der Code selbst,
+  gekürzt) — ersetzt die bisherige feste 401-Sonderbehandlung durch die
+  allgemeine Regel, aus der sie eigentlich hätte folgen sollen.
+- `immediate`: bis zu zwei sofortige, synchrone Zusatzversuche mit fester
+  500-ms-Pause, dann Rückfall auf die normale Behandlung — bewusst
+  begrenzt, damit ein Server, der dauerhaft `immediate` antwortet, nicht
+  ununterbrochen angefragt wird.
+- `backoff`/`network`/unbekannt/nicht lesbar: unverändert der bisherige
+  Standardpfad (`ready`, erneuter Versuch im nächsten Durchlauf).
+
+**Bewusst nicht umgesetzt:** ein echtes, pro Segment gestaffeltes
+Backoff-Timing für die Klasse `backoff`. Jedes `ready`-Segment teilt sich
+weiterhin denselben ~5-Sekunden-Takt des Workers, unabhängig von
+`retry_class` — eine `backoff`-Klassifizierung wirkt sich heute nicht anders
+aus als `network` oder ein unbekannter Wert. Ein echtes Pro-Segment-Timing
+bräuchte einen weiteren persistierten oder zumindest In-Memory-Zustand pro
+Chunk (nächster zulässiger Versuchszeitpunkt) — vergleichbar im Umfang mit der
+Journal-Erweiterung aus Punkt 1, hier aus Zeitgründen zurückgestellt statt
+blind mitgebaut.
+
+Build, Flash und Regressionscheck (unveränderter Zustand der zwei
+bestehenden, bereits abgeschlossenen Sessions) bestanden. Der eigentliche
+`immediate`/`never`/`user_action`-Pfad ist nicht live gegen eine echte
+Serverablehnung geprüft — dieselbe Einschränkung wie bei Punkt 1.
 
 ### 4. `GET /sessions/{id}/dashboard` — erledigt, 7. September, zweite Runde
 
@@ -347,8 +369,9 @@ Dokuments (`memo-why` statt Zählerraten) nicht für mehr.
    (`b4395a68-1f8c-42b2-83c1-b20d657aaeed`), Erfolg nicht weiter verfolgt.
 3. Die dauerhaft sichtbare `attention`-Markierung eines fehlgeschlagenen
    Create — erledigt, siehe Punkt 1 oben (Nachtrag dritte Runde).
-4. Restliche Retryklassen (`immediate`, `backoff`, `network`, `never`) über
-   alle Aufrufe hinweg, nicht nur den Chunk-Upload.
+4. `immediate`/`never`/`user_action` beim Chunk-Upload — erledigt, siehe
+   Punkt 3 oben (dritte Runde). Echtes Pro-Segment-Backoff-Timing für die
+   Klasse `backoff` bleibt bewusst offen.
 5. Den `surface`-Parameter am Gerät gezielt bestätigen: Verlaufsliste öffnen,
    eine Session antippen, `dashboard: snapshot accepted` für die
    Session-Ansicht im Log prüfen.
