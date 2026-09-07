@@ -296,6 +296,12 @@ Bewusst zurückgestellt, keine Priorität in dieser Runde: ein
 Sanduhr-/Ladeindikator für laufende Serverabfragen (Wunsch des Nutzers,
 ausdrücklich „nicht jetzt, aber langfristig sinnvoll").
 
+**Ende-zu-Ende live bestätigt**, Server aus diesem Worktree gestartet: Button
+sichtbar, Klick löst `POST /api/client/v1/entities/task/{id}/complete` aus,
+Task-Status wechselt tatsächlich auf `done`. Die komplette Kette
+(Vertrag → Backend → Firmware) ist damit erstmals vollständig durchlaufen,
+nicht nur einzeln gebaut.
+
 ### 7b. `finish` wiederholte sich endlos für bereits abgeschlossene Sessions — erledigt, 7. September, vierte Runde
 
 Im Backend-Log sichtbar: zwei Session-IDs erschienen alle paar Sekunden mit
