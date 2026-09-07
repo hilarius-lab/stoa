@@ -407,6 +407,8 @@ async def upload_v1_audio(client_session_id:UUID,audio:UploadFile=File(...),sequ
         raise ClientAPIError(409,"AUDIO_IDENTITY_CONFLICT",str(exc),"user_action") from exc
     except ValueError as exc:
         raise ClientAPIError(422,"AUDIO_METADATA_INVALID",str(exc),"never") from exc
+    if result is None:
+        raise ClientAPIError(404,"SESSION_NOT_FOUND","Client session not found.","never")
     chunk={key:value for key,value in result.items() if key not in ("id","session_id","storage_key")}
     if _zero_based(item):chunk["sequence"]-=1
     return {"client_session_id":str(client_session_id),"chunk":chunk,"durable_ack":True}

@@ -234,18 +234,26 @@ Serverablehnung geprüft — dieselbe Einschränkung wie bei Punkt 1.
 Hauptdashboard. Live gegen einen Snapshot mit vielen Transkriptblöcken nicht
 nachprüfbar, weil in dieser Runde kein Server erreichbar war (siehe unten).
 
-### 5. Kleinere Backendbefunde
+### 5. Kleinere Backendbefunde — erledigt, 7. September, vierte Runde
 
-`routers/client.py::upload_v1_audio`: `create_audio_chunk` kann `None` liefern,
-wenn die Ingestion-Session fehlt — dann wirft `result.items()` und es gibt 500
-statt 404.
+Diese Runde arbeitet ausdrücklich auch am Backend (siehe Kontext oben), daher
+jetzt behoben statt nur dokumentiert:
 
-`services/unified_push.py::broadcast_invalidation` hat **keinen Aufrufer**.
-Registrierung und Challenge funktionieren, es wird nie ein Push gesendet. In
-`ROADMAP.md:353` und `CLIENT_BACKEND_CONTRACT.md:176` als `[x]` abgehakt.
+`routers/client.py::upload_v1_audio`: `create_audio_chunk` konnte `None`
+liefern, wenn die Ingestion-Session fehlt — dann warf `result.items()` und es
+gab 500 statt 404. Fix: expliziter `None`-Check vor der Auswertung, wirft
+jetzt `ClientAPIError(404,"SESSION_NOT_FOUND",...)`. Vollständiges M8-Gate
+(18 Suiten, `CLIENT_DEVICE_AUTH_REQUIRED=false`) läuft grün.
 
-Nicht angefasst: liegt in `smart_notebook/` bzw. `routers/`, `services/` —
-Backendcode, außerhalb dessen, was ein App-/Client-Task ändern darf.
+`services/unified_push.py::broadcast_invalidation` hat weiterhin **keinen
+Aufrufer** — Registrierung, Challenge-Bestätigung und Zustellmechanik
+(`deliver()`) sind fertig und funktionieren, es wird aber serverseitig nie ein
+Ereignis ausgelöst. Bewusst **nicht** verdrahtet: welches Ereignis mit
+welcher Revision einen Push auslösen soll, ist nirgends spezifiziert — das
+wäre eine Produktentscheidung (`CLAUDE.md`: „Erfinde keine Backendsemantik…
+Produktfunktionen"), kein Bugfix. Stattdessen die falschen `[x]`-Markierungen
+in `ROADMAP.md:353` und `CLIENT_BACKEND_CONTRACT.md:170` korrigiert (`[~]`,
+mit Begründung) — sie behaupteten, FastAPI sende diese Signale bereits aktiv.
 
 ### 6. Aufzuräumen
 
