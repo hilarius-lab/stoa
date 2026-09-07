@@ -10,7 +10,15 @@ typedef struct {
     const char *reason;  /* reason_text, between title and body; may be NULL */
     const char *body;    /* content, or the question for a query */
     const char *answer;  /* answer, when one exists; may be NULL */
-    const char *meta;    /* kind and status, drawn at the foot */
+    const char *meta;    /* kind and status, drawn at the foot; hidden when action_label is set */
+    /* Set only when the entity offers a mutation beyond navigation — today,
+     * "Erledigt" on an open task's `complete_task`. When present it replaces
+     * the meta line with two selectable elements, "Zurück" and this label;
+     * `action_focused` says which one currently carries the focus. Absent for
+     * every other entity, which keeps the plain "short press is always back"
+     * behaviour unchanged there. */
+    const char *action_label;
+    bool action_focused;
 } detail_content;
 
 /* Draw the detail between the logical rows `top` and `bottom`, starting at

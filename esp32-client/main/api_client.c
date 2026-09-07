@@ -96,6 +96,11 @@ static unsigned cache_max_age_s;
  * `pending` is the handover, so the strings are complete before it is set. */
 static char entity_type[32], entity_id[40];
 static atomic_bool entity_pending;
+/* A task the detail view asked to mark complete. Distinct from entity_id/
+ * entity_type: a fetch and a mutation in flight at once must not overwrite
+ * each other's target. */
+static char complete_task_id[40];
+static atomic_bool complete_task_pending;
 static atomic_bool history_pending;
 static char session_id_wanted[40];
 static atomic_bool session_pending;
@@ -1093,6 +1098,35 @@ static void fetch_entity(void) {
     atomic_store(&entity_pending, false);
 }
 
+/* The one mutation the closed action catalog grants the device today. The
+ * response is the same DashboardEntityResponse a plain fetch returns (now
+ * without `action`, the task being done), so it goes through the same
+ * screen_entity_received() the detail view already redraws from — no second
+ * "here is an updated task" path to keep in sync with the first. */
+static void submit_complete_task(void) {
+    if (!atomic_load(&complete_task_pending)) return;
+    char path[128];
+    snprintf(path, sizeof(path), "/api/client/v1/entities/task/%s/complete", complete_task_id);
+    char *body = malloc(API_RESPONSE_MAX);
+    int http = 0;
+    /* No request body: the task is named in the path, and passing NULL rather
+     * than "" is what actually signals "no body" to call() — reset_request()
+     * decides on request != NULL, and an empty string is not NULL. */
+    bool ok = body && call(HTTP_METHOD_POST, path, NULL, body, API_RESPONSE_MAX, &http) &&
+              http == 200;
+    if (ok) {
+        cJSON *root = cJSON_Parse(body);
+        ok = cJSON_IsObject(root) && string_is(root, "id", complete_task_id) &&
+             string_is(root, "type", "task");
+        cJSON_Delete(root);
+    }
+    status.last_http = http;
+    if (ok) screen_entity_received(body);
+    ESP_LOGI("api", "complete_task %s http=%d", ok ? "ok" : "failed", http);
+    if (body) { memset(body, 0, API_RESPONSE_MAX); free(body); }
+    atomic_store(&complete_task_pending, false);
+}
+
 /* The session list for the history view. Unlike the dashboard this is a plain
  * array, so the only check is that it is one: a body of the wrong shape is
  * reported as unavailable rather than drawn as an empty history, which would
@@ -1274,6 +1308,11 @@ static void fail_pending_readers(void) {
         screen_entity_received(NULL);
         ESP_LOGI("api", "entity fetch failed: name not resolved");
     }
+    /* No screen_entity_received(NULL) here: a mutation that could not be
+     * attempted must not blank the task the reader is still looking at, only
+     * leave the button retriable. */
+    if (atomic_exchange(&complete_task_pending, false))
+        ESP_LOGI("api", "complete_task failed: name not resolved");
     if (atomic_exchange(&history_pending, false)) {
         screen_history_received(NULL);
         ESP_LOGI("api", "history fetch failed: name not resolved");
@@ -1314,6 +1353,7 @@ static void api_task(void *unused) {
         if (resolve_server()) {
             /* A waiting reader comes before housekeeping. */
             fetch_entity();
+            submit_complete_task();
             fetch_history();
             fetch_session();
             synchronize();
@@ -1372,6 +1412,13 @@ void api_client_open_entity(const char *type, const char *id) {
     snprintf(entity_type, sizeof(entity_type), "%s", type);
     snprintf(entity_id, sizeof(entity_id), "%s", id);
     atomic_store(&entity_pending, true);
+    if (worker) xTaskNotifyGive(worker);
+}
+
+void api_client_complete_task(const char *task_id) {
+    if (!task_id || atomic_load(&complete_task_pending)) return;
+    snprintf(complete_task_id, sizeof(complete_task_id), "%s", task_id);
+    atomic_store(&complete_task_pending, true);
     if (worker) xTaskNotifyGive(worker);
 }
 

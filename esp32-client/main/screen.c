@@ -130,6 +130,14 @@ static char *entity_json;
 static SemaphoreHandle_t entity_lock;
 static bool detail_open, detail_waiting;
 static int detail_line;
+/* The id the detail view is currently showing, captured once when it opens —
+ * dashboard_walk() only knows the focused card's id at that moment, and
+ * complete_task needs it again later, whenever the reader actually presses
+ * the action. 0 = "Zurück" carries the focus, 1 = the action does; only
+ * meaningful while the open entity's own action.type is one this build
+ * implements (see dashboard_entity_has_action()). */
+static char detail_entity_id[40];
+static int detail_action_focus;
 /* The history view. Same handover as the snapshot and the entity: written by
  * the upload worker, parsed by the display task, so it needs the same lock. */
 #define HISTORY_MAX 8192
@@ -262,7 +270,7 @@ static void draw_detail(unsigned char *buffer) {
     }
     int page = 1;
     int total = dashboard_entity_draw(buffer, copy, BODY_TOP, BODY_BOTTOM,
-                                      detail_line, &page);
+                                      detail_line, &page, detail_action_focus == 1);
     ESP_LOGI("detail", "line=%d of %d page=%d", detail_line, total, page);
     free(copy);
 }
@@ -272,12 +280,23 @@ static void page_detail(int delta) {
     if (!copy) return;
     if (!entity_take(copy, ENTITY_MAX)) { free(copy); return; }
     int page = 1;
-    int total = dashboard_entity_draw(NULL, copy, BODY_TOP, BODY_BOTTOM, 0, &page);
+    int total = dashboard_entity_draw(NULL, copy, BODY_TOP, BODY_BOTTOM, 0, &page, false);
     free(copy);
     int next = detail_line + delta * page;
     if (next > total - page) next = total - page;
     if (next < 0) next = 0;
     detail_line = next;
+}
+
+/* Whether the currently open detail's own entity carries an action this
+ * build implements — decides whether the detail's up/down buttons pick
+ * between "Zurück" and it, instead of paging the body text. */
+static bool detail_current_has_action(void) {
+    char *copy = heap_caps_malloc(ENTITY_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!copy) return false;
+    bool has = entity_take(copy, ENTITY_MAX) && dashboard_entity_has_action(copy);
+    free(copy);
+    return has;
 }
 
 static void open_detail(void) {
@@ -328,6 +347,8 @@ static void open_detail(void) {
     detail_open = true;
     detail_waiting = true;
     detail_line = 0;
+    detail_action_focus = 0;
+    snprintf(detail_entity_id, sizeof(detail_entity_id), "%s", plan.focus_id);
     api_client_open_entity(plan.focus_type, plan.focus_id);
 }
 
@@ -663,13 +684,35 @@ static void screen_task(void *unused) {
                  * text, the history and the selector move their own
                  * selection, and only a dashboard-family view (dashboard,
                  * tasks, lists) moves the card focus. */
-                if (detail_open) page_detail(message.focus_delta);
+                if (detail_open) {
+                    /* An entity with an action trades paging for choosing
+                     * between "Zurück" and it — agreed as the simpler of two
+                     * options, since a page-then-choose ring is harder to get
+                     * right without hardware to check it against, and the
+                     * entities that carry an action today are short enough
+                     * that paging was never doing anything there anyway. */
+                    if (detail_current_has_action()) {
+                        int next = detail_action_focus - message.focus_delta;
+                        if (next < 0) next = 0;
+                        if (next > 1) next = 1;
+                        detail_action_focus = next;
+                    } else {
+                        page_detail(message.focus_delta);
+                    }
+                }
                 else if (session_open) { /* nothing to move: one page, back only */ }
                 else if (selector_open) move_selector_focus(message.focus_delta);
                 else if (history_open) move_history_focus(message.focus_delta);
                 else move_focus(message.focus_delta);
             } else if (detail_open) {
-                detail_open = detail_waiting = false;   /* back to the overview */
+                /* "Zurück" focused, or no action on this entity at all: leave,
+                 * same as before. The action focused: fire the mutation and
+                 * stay open — the response redraws the same view once it
+                 * lands, through screen_entity_received like any other fetch. */
+                if (detail_action_focus == 1 && detail_current_has_action())
+                    api_client_complete_task(detail_entity_id);
+                else
+                    detail_open = detail_waiting = false;   /* back to the overview */
             } else if (session_open) {
                 /* Back to whatever opened it: the history list or, since a
                  * session card follows its own action, the dashboard. Closing

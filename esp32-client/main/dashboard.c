@@ -178,8 +178,26 @@ static const char *kind_word(const char *type) {
     return type;
 }
 
+/* "Erledigt" is the only label this build knows; any other action.type is
+ * inert here, same convention as an unimplemented action on a dashboard
+ * card — present in the response, not acted on. */
+static const char *action_label_for(const cJSON *root) {
+    const cJSON *action = cJSON_GetObjectItemCaseSensitive(root, "action");
+    const char *type = action ? string_of(action, "type") : NULL;
+    if (type && strcmp(type, "complete_task") == 0) return "Erledigt";
+    return NULL;
+}
+
+bool dashboard_entity_has_action(const char *json) {
+    cJSON *root = cJSON_Parse(json);
+    bool has = cJSON_IsObject(root) && action_label_for(root) != NULL;
+    cJSON_Delete(root);
+    return has;
+}
+
 int dashboard_entity_draw(unsigned char *canvas, const char *json,
-                          int top, int bottom, int line_offset, int *page) {
+                          int top, int bottom, int line_offset, int *page,
+                          bool action_focused) {
     cJSON *root = cJSON_Parse(json);
     if (!cJSON_IsObject(root)) { cJSON_Delete(root); if (page) *page = 1; return 0; }
 
@@ -202,6 +220,8 @@ int dashboard_entity_draw(unsigned char *canvas, const char *json,
         .body = body,
         .answer = string_of(root, "answer"),
         .meta = meta,
+        .action_label = action_label_for(root),
+        .action_focused = action_focused,
     };
     if (page) *page = detail_page_lines(&detail, top, bottom);
     int total = canvas ? detail_draw(canvas, &detail, top, bottom, line_offset)

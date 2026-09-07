@@ -12,6 +12,10 @@ void api_client_queue_changed(void);
  * screen_entity_received; the request itself is queued for the worker, because
  * HTTP belongs to the worker and drawing belongs to the display task. */
 void api_client_open_entity(const char *type, const char *id);
+/* Mark an open task complete. The updated task (no longer carrying an
+ * action) comes back through the same screen_entity_received the detail view
+ * already redraws from. */
+void api_client_complete_task(const char *task_id);
 /* Fetch the session list for the history view. Same split as the detail: HTTP
  * belongs to the worker, drawing to the display task; the result comes back
  * through screen_history_received. */

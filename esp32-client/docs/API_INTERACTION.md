@@ -192,17 +192,38 @@ Fallback- und Konfliktregeln stehen in `docs/DASHBOARD_UI.md`.
 projiziert fällige Tasks und aktive Listen als `section` mit `entity_card`-
 Einträgen. Der ESP rendert Titel, Vorschau, Status und Priorität, kennt aber
 weder Tasktabellen noch Listenfachlogik. Details lädt er bei Bedarf über den
-generischen Entity-Link. Änderungen erfolgen zunächst weiter per Sprachaufnahme
-und serverseitiger Interpretation; das Gerät bietet keine Abhakaktion.
+generischen Entity-Link. Für Tasks und Listen gibt es außerdem eigene Ansichten
+(Ansichtswähler über das Menü in der Kopfzeile, neben Dashboard und Verlauf),
+die dieselben `today`-/`lists`-Sektionen gefiltert zeigen.
+
+**Korrigiert 7. September 2026, vierte Runde:** Dieser Abschnitt behauptete
+hier, das Gerät biete keine Abhakaktion und ein Kurzdruck in der Detailansicht
+sei immer lokales Zurück ohne Servermutation — beides stimmt für eine offene
+Task nicht mehr. `GET /api/client/v1/entities/task/{id}` liefert bei
+`status="open"` jetzt zusätzlich `action:{"type":"complete_task","params":
+{"task_id":…}}`; `POST /api/client/v1/entities/task/{id}/complete` markiert die
+Task serverseitig erledigt (`services/tasks.py::set_task_status(id,"done")`,
+idempotent — ein wiederholter Aufruf auf eine bereits erledigte Task liefert
+unverändert deren aktuellen Stand statt eines Fehlers) und gibt dieselbe
+Entity-Antwort mit aktualisiertem `status`/`percent_complete` zurück, jetzt
+ohne `action`-Feld. Firmwareseitig ist das ein zusätzliches fokussierbares
+Element neben „Zurück" in der Detailansicht, nicht eine zweite Bedeutung des
+Kurzdrucks: der Fokusring wählt zwischen beiden, der Kurzdruck aktiviert stets
+das Fokussierte. Listen-Einträge einzeln löschen (analog geplant) ist noch
+nicht umgesetzt — dafür fehlt in der Detailansicht eines Listeneintrags
+bislang das Konzept einzeln fokussierbarer Positionen, das die Task-Lösung so
+nicht braucht.
 
 Ein kurzer Mitteldruck auf eine fokussierte Karte führt deren erlaubte
 `open_entity`-, `open_conversation`-, `open_session`- oder
-`open_clarification`-Navigation aus. In der ersten ESP-Ausbaustufe wird
-`open_entity` umgesetzt; nicht implementierte erlaubte Aktionen bleiben sichtbar,
-werden aber nicht ausgeführt. In der Detailansicht ist derselbe Kurzdruck immer
-lokales Zurück und löst keine Servermutation aus. Die ESP-Surface liefert nur
-Aktionen, welche die Firmware unterstützt; andere Karten sind rein informativ
-und nicht fokussierbar.
+`open_clarification`-Navigation aus. In der ersten ESP-Ausbaustufe werden
+`open_entity` und, für eine offene Task in ihrer Detailansicht, `complete_task`
+umgesetzt; andere nicht implementierte erlaubte Aktionen bleiben sichtbar,
+werden aber nicht ausgeführt. In der Detailansicht ist ein Kurzdruck auf das
+fokussierte Element „Zurück" lokal und löst keine Servermutation aus; ein
+Kurzdruck auf ein fokussiertes `complete_task`-Element tut es ausdrücklich.
+Die ESP-Surface liefert nur Aktionen, welche die Firmware unterstützt; andere
+Karten sind rein informativ und nicht fokussierbar.
 
 Titel, Vorschau und Entity-Details müssen bereits die in `limits` angekündigten
 Maximallängen einhalten. Der ESP kürzt gültige Texte nur für den sichtbaren
