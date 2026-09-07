@@ -1,5 +1,27 @@
 # Änderungen
 
+## 2026-09-07 – Dashboard bleibt während der Aufnahme sichtbar
+
+Der Aufnahme-Bildschirm (`SCREEN_RECORDING`) und der Zustand direkt danach
+(`SCREEN_MEMO_SAVED`) tauschten den Dashboard-Körper bislang gegen ein
+vorgerechnetes, weitgehend leeres Hintergrundbild aus und zeichneten
+stattdessen — nur bei `SCREEN_MEMO_SAVED` — eine dreistellige Sekundenzahl
+über die Statusleiste. Ein Rest aus H1/H2, vor dem Dashboard entstanden, nie
+an die dashboard-zentrierte Oberfläche angepasst.
+
+Der Aufnahmepunkt in der Statusleiste (`status_recording`/`ICON_RECORDING`)
+existierte bereits vollständig und wurde unabhängig vom Body korrekt gesetzt
+— es fehlte nur, den Dashboard-Körper (bzw. offene Detail-/Session-/
+Verlaufsansicht) auch in diesen beiden Zuständen weiterzuzeichnen.
+`draw_dashboard()` räumt seinen Bereich über `dashboard_walk()` selbst auf,
+das darunterliegende Hintergrundbild spielt also keine Rolle. Die
+Sekundenzahl ist entfernt (`message.state==SCREEN_MEMO_SAVED`-Sonderfall
+gestrichen) — sie hätte jetzt sichtbar mit der wieder sichtbaren Statusleiste
+kollidiert und hatte laut Rückmeldung ohnehin keine Funktion mehr.
+
+Build und Flash bestanden. Optische Abnahme am Gerät steht noch aus
+(`docs/DEVELOPMENT_GUIDE.md` Regel 10).
+
 ## 2026-09-07 – Zu kurze Aufnahmen erzeugen keine Session mehr
 
 Live am Gerät gefunden nach Start des Verarbeitungs-Workers: `memo-list` zeigte
