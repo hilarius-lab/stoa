@@ -282,40 +282,49 @@ Reset auslöst. Derselbe Grundsatz wie bei `memo-why`: aus zwei Beobachtungen
 unter unbekannten Nebenbedingungen eine Ursache zu behaupten, ist genau das
 Muster, das dieses Dokument an anderer Stelle für Zählerstände beschreibt.
 
-## Ein DNS-Aussetzer, keine Diskrepanz — 7. September, zweite Runde, korrigiert
+## DNS-Aussetzer, Ursache offen — 7. September, zweite Runde, zweimal korrigiert
 
-In dieser Runde scheiterte `living-notebook.heusgenradig.de` zweimal kurz nach
-einem Flash über ein eigenes Testskript (`cannot resolve … the network is up
-but DNS is not answering`). Das wurde hier zunächst als anhaltender Befund
-festgeschrieben — falsch: ein direkt anschließender, sauberer
-`idf.py build flash monitor`-Lauf des Nutzers im selben Netz lief auf Anhieb
-durch, inklusive `esp-x509-crt-bundle: Certificate validated`, `dashboard:
-snapshot accepted: sections=5` und `sync complete: create_ok=1 finish=1`.
+Drei Beobachtungen aus dieser Runde, chronologisch:
 
-Wahrscheinlichste Ursache der zwei Aussetzer: Das Testskript öffnete den
-seriellen Port mit `pyserial`, ohne DTR/RTS vorher auf `false` zu setzen —
-genau das Muster, vor dem `docs/DEVELOPMENT_GUIDE.md` warnt
-(„Öffnen eines seriellen Ports kann über DTR/RTS einen Reset auslösen“). Ein
-Reset mitten in WLAN-Assoziation/DNS-Aufbau erklärt einen einzelnen Aussetzer
-ohne jeden Code-Befund. Nicht ausgeschlossen, aber unbelegt: ein echter,
-transienter Router-DNS-Aussetzer, den `resolve_server()` laut Doku ohnehin
-abfedern soll.
+1. Zwei Fehlschläge über ein eigenes Testskript (`pyserial` ohne
+   DTR/RTS-Unterdrückung vor dem Öffnen). Hier zunächst als anhaltender Befund
+   notiert — voreilig.
+2. Ein Erfolg über einen unabhängigen `idf.py build flash monitor`-Lauf des
+   Nutzers (`bssid = 80:af:ca:6a:3a:22`, Kanal 6, `rssi: -60`), **gegen den
+   unveränderten Code der Hauptarbeitskopie**, nicht gegen diesen Branch. Das
+   wurde hier als Widerlegung von (1) gewertet und auf „eigenes Skript war
+   schuld" zurückgeführt.
+3. Ein erneuter Fehlschlag mit demselben Symptom, diesmal über `idf.py -p COM9
+   monitor` als Standardwerkzeug (kein eigenes Skript mehr), gegen den
+   Branch-Code. Widerlegt die Erklärung aus (2): Das Werkzeug war nicht die
+   Ursache.
 
-Der erfolgreiche Nutzerlauf lief nach aktuellem Stand gegen den
-**unveränderten** Code der Hauptarbeitskopie (nicht gegen den Branch
-`worktree-esp32-cleanup`), bestätigt also nur, dass Create/Finish über den
-Legacy-Pfad weiterhin funktionieren — genau das, was Punkt 1 oben ohnehin
-beschreibt. Der `sequence_base`-Fix und die `surface`-Ergänzung sind damit
-weiterhin nur quellcodeseitig und am Kommandodispatcher verifiziert, nicht mit
-einem Server-Roundtrip auf dem Branch selbst.
+Auffällig zwischen (2) und (3): unterschiedliche Basisstation.
+Lauf (2) verband sich mit `rssi: -60`, Lauf (3) mit einer anderen BSSID auf
+einem anderen Kanal bei `rssi: -79` — deutlich schwächer, vermutlich ein
+anderer Knoten in einem Mesh. Ein schwaches Signal, das UDP-DNS-Antworten
+verliert, ist eine naheliegende Erklärung für ein Muster, das mal auftritt und
+mal nicht — **aber das ist eine Hypothese aus zwei Datenpunkten, kein
+belegter Befund.** Nach dem eigenen Grundsatz dieses Dokuments (`memo-why`
+statt Zählerraten) braucht das mehr als zwei Beobachtungen, bevor es als
+Ursache gilt: mehrere Läufe, jeweils mit notierter BSSID/RSSI, oder ein Blick
+ins Reverse-Proxy-/DNS-Serverlog für exakt die fehlgeschlagenen Zeitfenster.
+
+In jedem der drei Fälle kam der Sync nie bis zum Session-Create — `sequence_base`
+und die `surface`-Ergänzung sind deshalb weiterhin nur quellcodeseitig und am
+Kommandodispatcher verifiziert, nicht mit einem Server-Roundtrip auf diesem
+Branch.
 
 ## Reihenfolge für den nächsten Chat
 
-1. `worktree-esp32-cleanup` mergen oder gezielt gegenprüfen, dann einen echten
-   Server-Roundtrip mit dem Branch-Code fahren (Create, Chunk-Upload, Finish).
-2. Die tote Session serverseitig abbrechen (Punkt 6), sobald der Server
+1. DNS-Hypothese entweder mit mehreren dokumentierten Läufen (BSSID/RSSI je
+   Versuch) erhärten oder verwerfen — kein Firmwarethema, aber Voraussetzung
+   für jeden weiteren Live-Test.
+2. Sobald ein Server-Roundtrip gelingt: `worktree-esp32-cleanup` mergen oder
+   gezielt gegenprüfen (Create, Chunk-Upload, Finish mit dem Branch-Code).
+3. Die tote Session serverseitig abbrechen (Punkt 6), sobald der Server
    erreichbar ist.
-3. Die dauerhaft sichtbare `attention`-Markierung eines fehlgeschlagenen
+4. Die dauerhaft sichtbare `attention`-Markierung eines fehlgeschlagenen
    Create ergänzen (Rest von Punkt 1).
-4. Restliche Retryklassen (`immediate`, `backoff`, `network`, `never`) über
+5. Restliche Retryklassen (`immediate`, `backoff`, `network`, `never`) über
    alle Aufrufe hinweg, nicht nur den Chunk-Upload.
