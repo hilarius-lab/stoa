@@ -703,6 +703,34 @@ static bool upload_chunk(journal_session *session, journal_chunk *chunk) {
     return durable && persisted;
 }
 
+/* finish() answers 409 for more than one reason (client_sessions.py raises
+ * the same SESSION_STATE_CONFLICT for "already aborted/completed" and for a
+ * final_sequence mismatch), and the body's free-text message is not a wire
+ * contract this device parses. Asking the session's own state directly is:
+ * "completed"/"aborted" means the server already has what this finish was
+ * trying to achieve, so the local side may as well agree. Anything else
+ * (still processing, a real sequence conflict) is left alone to be retried
+ * or surfaced as before. Without this a session whose finish the device
+ * never durably learned about stays in the local queue and gets re-created
+ * and re-finished on every single sync pass for the life of the card. */
+static bool session_already_settled(const char *session_id) {
+    char path[128];
+    snprintf(path, sizeof(path), "/api/client/v1/sessions/%s", session_id);
+    char *body = malloc(API_RESPONSE_MAX);
+    if (!body) return false;
+    int http = 0;
+    bool ok = call(HTTP_METHOD_GET, path, NULL, body, API_RESPONSE_MAX, &http) && http == 200;
+    bool settled = false;
+    if (ok) {
+        cJSON *root = cJSON_Parse(body);
+        settled = cJSON_IsObject(root) &&
+                  (string_is(root, "state", "completed") || string_is(root, "state", "aborted"));
+        cJSON_Delete(root);
+    }
+    memset(body, 0, API_RESPONSE_MAX); free(body);
+    return settled;
+}
+
 static bool finish_session(journal_session *session) {
     char path[128], request[128];
     snprintf(path, sizeof(path), "/api/client/v1/sessions/%s/finish", session->session_id);
@@ -721,9 +749,14 @@ static bool finish_session(journal_session *session) {
         cJSON_Delete(root);
     }
     status.last_http = http;
-    if (ok) status.finishes_ok++;
     memset(body, 0, API_RESPONSE_MAX); free(body);
-    return ok;
+    if (ok) { status.finishes_ok++; return true; }
+    if (http == 409 && session_already_settled(session->session_id)) {
+        ESP_LOGI("api", "finish %s: server already has it completed/aborted; settling locally",
+                 session->session_id);
+        return true;
+    }
+    return false;
 }
 
 /* The server accepted the finish but reports the upload as incomplete: it is
