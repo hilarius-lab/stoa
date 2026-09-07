@@ -1,5 +1,47 @@
 # Änderungen
 
+## 2026-09-07 – Vier Diskrepanzen aus dem Übergabedokument bereinigt
+
+Build/Flash/Monitor gegen das reale Gerät (COM9), alle Punkte unten dort
+verifiziert. Bezug: `docs/CLIENT_SERVER_STATE.md`, Abschnitt „Offene Punkte".
+
+- **`sequence_base` (Punkt 1).** `create_session()` sendet den Wert jetzt als
+  eigenes Top-Level-Feld (`JOURNAL_SEQUENCE_BASE` aus `journal.h`), nicht mehr
+  nur in `device_metadata`. `response_matches_session()` prüft ein
+  zurückgeliefertes `sequence_base` gegen diese Konstante über die neue
+  `number_matches_or_absent()`; ein fehlendes Feld wird weiterhin akzeptiert.
+  `docs/BACKEND_REQUIREMENTS.md` entsprechend korrigiert.
+- **Fehlende Diagnosebefehle (Punkt 2, Teil 1).** `epd-clear`, `epd-window`,
+  `text-test`, `icon-test`, `pattern-test`, `status-test`, `header-test` und
+  `card-test` waren in `docs/DEVELOPMENT_GUIDE.md` exakt spezifiziert und die
+  Renderer (`screen_icon_test()` usw.) fertig, aber in `main.c` nicht
+  verdrahtet. Jetzt verdrahtet, alle acht am Gerät geprüft.
+- **`memo-discard <id>` (Punkt 2, Teil 2).** `recorder_discard()` samt
+  `discard_memo()` war bereits vollständig implementiert (inklusive
+  `@DISCARDED`/`@ERROR still_deliverable`), fehlte nur in `recorder.h` und im
+  Kommandodispatcher. Jetzt verdrahtet; am Gerät mit einer unbekannten ID
+  geprüft (`@ERROR unknown_memo`), nicht destruktiv gegen eine echte Session
+  getestet.
+- **`401 DEVICE_CREDENTIAL_REVOKED` (Punkt 3, Teilausschnitt).** `upload_chunk()`
+  erkennt jetzt diesen einen Fall am `ErrorResponse.code`
+  (`contracts/client-openapi-v1.json`) und markiert das Segment `attention`
+  mit Grund `credential_revoked`, statt es wie jeden anderen Fehler auf
+  `ready` zurückzusetzen und endlos zu backoffen. Die übrige `retry_class`-
+  Tabelle (`immediate`, `backoff`, `network`, `never`) bleibt offen — das war
+  der einzige Fall, den die Doku als „besonders relevant" markiert hatte.
+- **`GET /sessions/{id}/dashboard` ohne `surface` (Punkt 4).** Ergänzt um
+  `?surface=esp32_epaper`, analog zum Hauptdashboard.
+- **`docs/PROJECT_STATUS.md` widersprach sich selbst.** Eine Zeile behauptete,
+  der reguläre Zeichenpfad nutze das Fensterupdate; die nächsten Zeilen im
+  selben Dokument beschrieben korrekt das Gegenteil (`EPD_Display_Partial_Frame`
+  überträgt bewusst die volle Fläche, weil die geclippte Vendorvariante per
+  `EPD_Reset()` Text sichtbar verschob). Das ist ein belegter Hardware-Fix, kein
+  Bug — nur die falsche Zeile wurde entfernt. `main/screen.c` unverändert.
+- **Nicht angefasst:** die restliche `retry_class`-Tabelle, die dauerhaft
+  sichtbare `attention`-Markierung eines fehlgeschlagenen Create, die tote
+  Session serverseitig (Punkt 6) und die Backendbefunde (Punkt 5) — alles
+  weiterhin offen, teils außerhalb dieses Ordners.
+
 ## 2026-09-06 – Eine Aufnahme, die es nie gab, wird nicht mehr angeboten
 
 - Am Gerät gefunden, nachdem die Zähler nur die Richtung wiesen:

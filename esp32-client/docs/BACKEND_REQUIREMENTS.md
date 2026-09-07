@@ -145,21 +145,22 @@ Produktionsserver — das Gerät muss dafür nicht umgestellt werden.
 
 ## Verbindliche Clientänderungen aus dieser Backendrunde
 
-Stand der Firmware am 6. September, nach Abgleich mit dem tatsächlichen Code.
-Die Punkte 1 und 2 waren hier zwischenzeitlich als umgesetzt vermerkt, waren es
-aber nicht; Punkt 3 war als offen vermerkt und war bereits umgesetzt. Diese
-Liste beschreibt jetzt den Code.
+Diese Liste war zweimal falsch: am 6. September als „umgesetzt" vermerkt, ohne
+es zu sein; von `docs/CLIENT_SERVER_STATE.md` am 7. September korrekt als
+Diskrepanz benannt; am selben 7. September dann tatsächlich am Code umgesetzt
+und hier neu verifiziert (`main/api_client.c::create_session()` und
+`response_matches_session()`, geprüft mit Build/Flash gegen das reale Gerät).
 
 1. **Umgesetzt.** Der Create sendet `sequence_base` auf Top-Level; die Konstante
    `JOURNAL_SEQUENCE_BASE` in `main/journal.h` ist die einzige Stelle, an der
    der Wert steht. Aus `device_metadata` ist er entfernt.
-2. **Teilweise umgesetzt.** `response_matches_session()` prüft ein
-   zurückgeliefertes `sequence_base` gegen `JOURNAL_SEQUENCE_BASE`; bei
-   Abweichung schlägt der Create fehl und die Session lädt nichts hoch. Ein
-   fehlendes Feld wird akzeptiert — ein Server, der nichts sagt, widerspricht
-   nicht. Offen bleibt die dauerhafte sichtbare Einordnung als `attention`;
-   derzeit erscheint nur eine Fehlerzeile im Log und der Zähler
-   `create_failed`.
+2. **Umgesetzt.** `response_matches_session()` prüft ein zurückgeliefertes
+   `sequence_base` über `number_matches_or_absent()` gegen
+   `JOURNAL_SEQUENCE_BASE`; bei Abweichung schlägt der Create fehl und die
+   Session lädt nichts hoch. Ein fehlendes Feld wird akzeptiert — ein Server,
+   der nichts sagt, widerspricht nicht. Offen bleibt weiterhin die dauerhaft
+   sichtbare Einordnung eines fehlgeschlagenen Create als `attention`; derzeit
+   erscheint nur eine Fehlerzeile im Log und der Zähler `create_failed`.
 3. **Umgesetzt**, siehe Abschnitt 5.
 4. **Offen.** Der Fokus hängt weiterhin am Index, nicht an der Komponenten-ID.
    SSE bleibt bewusst ungenutzt.

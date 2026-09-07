@@ -1,198 +1,296 @@
-# Stand der Installation, 6. September 2026, 18:30
+# Stand der Installation, 7. September 2026
 
-Übergabedokument. Es beschreibt, wo Gerät und Backend nach dem Zurücksetzen
-stehen, was nachweislich funktioniert, und welche Abweichungen offen sind. Alles
-hier ist am Gerät gegen `living-notebook.heusgenradig.de` beobachtet, nicht gegen
-den Mockserver. Wo nichts beobachtet wurde, steht das ausdrücklich da.
+Übergabedokument. Es beschreibt, wo Gerät und Backend stehen, was nachweislich
+funktioniert, welche Entscheidungen gefallen sind und was offen ist. Es ersetzt
+die Fassung vom 6. September, deren Befunde alle abgearbeitet oder überholt
+sind.
 
-Gedacht für einen Chat, der **beide Seiten** bearbeiten kann. Die Trennung in
-einen ESP- und einen Backend-Kontext hat heute mehrfach Zeit gekostet: mehrere
-Befunde ließen sich nur klären, indem man denselben Vorgang gleichzeitig im
-Gerätelog und im Serverlog ansieht.
+Ab jetzt läuft die Arbeit in Claude Code mit Terminal und Git. Das ändert die
+Arbeitsweise an einer Stelle grundlegend: Verifikation ist `git diff`, nicht
+mehr das Vergleichen von Dateigrößen. Der vorige Chat lief über eine
+Dateibrücke, und zwei Schreibvorgänge meldeten Erfolg, ohne anzukommen — das
+fiel nur auf, weil danach der Dateiinhalt geprüft wurde.
 
-## Zustand nach dem Zurücksetzen
+## Wie hier gearbeitet wird
 
-SD-Karte geleert (`sessions=0`), Gerät neu geflasht und eingerichtet. Der Boot
-sieht so aus:
-
-```
-WLAN verbunden.
-clock: time synchronised
-esp-x509-crt-bundle: Certificate validated
-dashboard: snapshot fetch failed: reached=0 http=200 overflow=1 limit=8192
-api: sync complete: compatible=1 sessions=0 create_ok=0 … withheld=0 finish=0
-```
-
-Uhrzeit und WLAN-Symbol stehen auf dem Bildschirm. Der Bildschirmkörper bleibt
-leer, weil der Dashboardabruf scheitert — siehe A1, der einzige Blocker im
-Normalbetrieb.
-
-**Ungeklärt und vor allem anderen zu prüfen:** Enrollment-Codes scheint es
-serverseitig noch nicht zu geben, das Gerät hat also möglicherweise kein
-Credential — und bekommt trotzdem auf jede Anfrage `200`/`201`. Wenn das
-zutrifft, ist die API unter einem öffentlich erreichbaren Namen unauthentisiert
-offen. Erste Frage an den neuen Chat, mit einem Befehl beantwortbar:
+**ESP-IDF aktivieren.** Nicht `export.ps1` — das bricht ab, weil es das venv
+unter `C:\Espressif\python_env\` sucht, die EIM-Installation es aber unter
+`IDF_TOOLS_PATH` ablegt. Stattdessen in einem frischen PowerShell-Fenster:
 
 ```powershell
-python scripts/serial_check.py --port COM9 --seconds 8 --command api-status --no-reset
+C:\Espressif\tools\Microsoft.v5.5.2.PowerShell_profile.ps1
+cd C:\Users\Ocelot\Documents\smart-notebook\esp32-client
+idf.py build flash monitor
 ```
 
-Steht dort `authenticated=0` bei gleichzeitig erfolgreichen Aufrufen, ist das
-kein Schönheitsfehler, sondern der erste Punkt der Liste.
+Das Projekt-`.venv` im Repository-Root ist die Python-Umgebung für Backend und
+Tests und hat mit ESP-IDF nichts zu tun. Nie beide gleichzeitig aktivieren.
 
-## Was der Client aufruft
+**Hosttests, ohne Hardware.** `sh tools/run_ui_test.sh` deckt die Zeichenschicht
+ab (`text.c`, `icons.c`, `card.c`, `dashboard_map.c`, `history.c`) mit
+`-Wall -Wextra -Werror`. Es deckt **nicht** `dashboard.c` ab, weil das cJSON
+braucht. Dafür genügt:
 
-| Aufruf | Zweck | Beobachtet |
-|---|---|---|
-| `GET /api/client/capabilities` | Gate | 200, bestanden |
-| `GET /api/client/v1/contract` | Gate | 200, bestanden |
-| `POST /api/client/v1/installations/enroll` | Registrierung | Codeausstellung offen |
-| `GET /api/client/v1/dashboard?surface=esp32_epaper` | Hauptansicht | 200, **Antwort zu groß** |
-| `GET /api/client/v1/sessions?limit=12&offset=…` | Verlaufsliste | 200, Paginierung greift |
-| `GET /api/client/v1/sessions/{id}` | Freigabestatus | 200 |
-| `GET /api/client/v1/sessions/{id}/dashboard` | Detail einer Aufnahme | 200 |
-| `GET /api/client/v1/entities/{typ}/{id}` | Detailkarte | ungetestet |
-| `POST /api/client/v1/sessions` | idempotentes Anlegen | 201, **Idempotenz unbestätigt** |
-| `POST /api/client/v1/sessions/{id}/audio-chunks` | Segmentupload | 201 mit `durable_ack` |
-| `GET /api/client/v1/sessions/{id}/reconciliation` | Abgleich | 200, **Inhalt widersprüchlich** |
-| `POST /api/client/v1/sessions/{id}/finish` | Abschluss | 200 |
+```sh
+apt-get install libcjson-dev          # oder das Äquivalent
+mkdir shim && printf '#pragma once\n#include <cjson/cJSON.h>\n' > shim/cJSON.h
+cc -std=c11 -Wall -Wextra -Werror -DTEXT_HOST_TEST -DICON_HOST_TEST \
+   -I shim -I main main/text.c main/icons.c main/card.c main/dashboard_map.c \
+   main/detail.c main/dashboard.c <eigener_test>.c blobs.c -o t -lcjson
+```
 
-## Was der Client als Bedingung prüft
+So wurden die vier Navigationsfälle am 6. September verifiziert. Wer an
+`dashboard.c` arbeitet, sollte das nutzen statt auf das Gerät zu warten.
 
-Das Capability-Gate ist hart: fällt eine dieser Prüfungen, spricht das Gerät gar
-nicht erst weiter.
+**Backendtests.** `.\.venv\Scripts\python.exe <name>_test.py`, vom
+Repository-Root. Relevant für diese Arbeit:
+`m8_esp_dashboard_projection_test.py`, `device_auth_test.py`,
+`m8_esp_backend_requirements_test.py`.
 
-- `status` ist `ready` oder `degraded`
-- `contract.current` ist `"1"`
-- `features.audio_upload` und `features.session_recovery` sind `true`
-- `audio_profiles[0]`: `mime_type=audio/mp4`, `container=mp4`, `codec=aac-lc`,
-  `sample_rate_hz=48000`, `channels=1`, `max_chunk_bytes>0`
-- `limits.request_timeout_seconds>0`
-
-Weich, also ohne Gate: `limits.dashboard_cache_max_age_seconds`. Fehlt der Wert
-oder ist er unplausibel, nimmt das Gerät seine eigenen zwei Stunden.
-
-Bei Antworten prüft der Client die Identität mit: Sessionantworten müssen
-`client_session_id` zurücknennen, ACKs zusätzlich `durable_ack: true`,
-`chunk.client_chunk_id`, `content_hash`, `sequence` und `byte_length`. Eine
-Antwort, die das nicht erfüllt, gilt als nicht erfolgt. Das Enrollment erwartet
-`credential` mit exakt 64 Zeichen.
-
-## Abweichungen
-
-### A1 — Dashboardantwort passt nicht in den Empfangspuffer
-
-**Blocker. Ohne das bleibt der Bildschirm leer.**
-
-`overflow=1 limit=8192` am Gerät belegt. Der Server antwortet 200 in rund 100 ms,
-der Client bricht beim Lesen ab. Dieselbe Grenze hatte vorher die Sessionliste
-bei 24 Einträgen gesprengt; dort war die Antwort Paginierung.
-
-Zuerst zu messen, nicht zu schätzen: wie groß ist die Antwort wirklich? Danach
-drei Wege, die sich nicht ausschließen — größerer Puffer, streamendes Parsen,
-oder eine serverseitig begrenzte Projektion für `surface=esp32_epaper`. Der
-E-Paper-Bildschirm zeigt eine Handvoll Karten; eine Antwort über 8 KB enthält
-mit hoher Wahrscheinlichkeit Material, das das Gerät gar nicht darstellen kann.
-Der Ort der Lösung ist die eigentliche Frage, und sie ist gemeinsam zu
-entscheiden — genau deshalb braucht es einen Chat für beide Seiten.
-
-### A2 — Freigabe vor gesicherter Speicherung
-
-**Der einzige Punkt, der heute Daten gekostet hat.**
-
-Beobachtet: das Backend setzte `local_audio_release_allowed: true`, das Gerät
-löschte daraufhin das Audio zweier Sessions, und die nächste Reconciliation
-meldete für dieselben Sessions alle Segmente als fehlend. Zwei Aufnahmen sind
-endgültig verloren.
-
-Die Freigabe ist die Erlaubnis, die einzige Kopie zu löschen. Sie darf erst
-gesetzt werden, wenn die Segmente dauerhaft gespeichert sind und diese
-Speicherung einen Neustart des Backends übersteht. Offene Frage: woraus wird das
-Feld derzeit abgeleitet?
-
-Clientseitig bereits abgesichert: vor dem Löschen wird die Reconciliation gefragt
-und muss ausdrücklich bestätigen, kein Segment zu vermissen. Unklare Antwort oder
-nicht erreichbar zählt als Nein. Gezählt als `withheld`.
-
-### A3 — Reconciliation meldet bestätigte Segmente als fehlend
-
-Hängt mit A2 zusammen, ist aber eigenständig: der Server hat Segmente mit
-`durable_ack: true` quittiert und meldete sie später als fehlend. Entweder geht
-serverseitig etwas verloren, oder die Zuordnung Session zu Installation ist nicht
-stabil. Für den Client sind beide Fälle dasselbe Symptom und nicht auflösbar.
-
-### A4 — Idempotenz von `POST /sessions` unbestätigt
-
-Der Client legt jede Session in jedem Durchlauf erneut an und verlässt sich
-darauf, dass eine bekannte `client_session_id` dieselbe Session zurückliefert.
-Beobachtet sind ausschließlich `201 Created`. Ob dahinter dieselbe Session
-steckt, ist von außen nicht erkennbar — im Serverlog dagegen sofort.
-
-### A5 — Abschlussbestätigung überlebt den Neustart nicht
-
-Clientseitig, bewusst so gebaut: dass der Server `finish` angenommen hat, merkt
-sich das Gerät nur bis zum Neustart und bietet danach jede Session einmal erneut
-an. Idempotent und begrenzt, bei wachsender Historie aber unnötig. Zu
-entscheiden, ob ein Journaleintrag dafür gerechtfertigt ist — er würde
-Serverwissen im Gerätejournal festschreiben, und genau das ist der Grund, warum
-es ihn bisher nicht gibt.
-
-### A6 — ACK und Freigabe führen die Serveridentität nicht mit
-
-Die strukturelle Ursache hinter dem heutigen Verlust. Der Client speichert
-Bestätigungen ohne Vermerk, von welchem Server sie stammen. Ein Adresswechsel im
-Reverse Proxy genügt deshalb, um eine abgeschlossene Historie in Warnungen zu
-verwandeln — heute mit 66 Segmenten geschehen. Vertragsfrage, gehört nach
-`IMPLEMENTATION_DECISIONS.md`.
-
-## Was nachweislich funktioniert
-
-Beide Gates, HTTPS mit Wurzelzertifikatsprüfung ohne Abschaltmöglichkeit, je eine
-wiederverwendete TLS-Verbindung für JSON und für den Upload, Anlegen, Upload mit
-geprüftem durablem ACK, Abschluss, Verlaufsliste mit Paginierung, SNTP-Uhrzeit,
-Journal mit Boot-Recovery, verlustfreie lokale Queue über Stromausfall und
-ACK-Grenze. Eine frisch aufgenommene Memo lief vollständig und fehlerfrei gegen
-das echte Backend durch.
-
-## Diagnosewerkzeuge am Gerät
-
-Alle über `scripts/serial_check.py --command … --no-reset`, alle lesend außer den
-beiden letzten.
+**Diagnose am Gerät.** Über die serielle Konsole, alle lesend außer den
+Verwerfen-Befehlen:
 
 | Befehl | Antwort |
 |---|---|
-| `queue-status` | Zähler, Speicher, Statusflags |
 | `api-status` | eine Zeile mit allen API-Zählern |
+| `queue-status` | Zähler, Speicher, Statusflags |
 | `memo-list` | jede Session mit `ready`/`acked`/`attention` |
 | `memo-why <id>` | je Segment Zustand, Grund, Datei, Größe |
 | `memo-get <id>` | Export über USB |
+| `wifi-reconnect` | erzwingt Trennung und Reconnect, weckt den Worker |
+| `server-set <url>`, `enroll-set <code>` | Konfiguration, startet neu |
 | `reboot` | Neustart, während einer Aufnahme verweigert |
-| `memo-discard <id>` | löscht eine Aufnahme unwiderruflich |
-| `memo-discard-all <n>` | dasselbe für alle geeigneten, Anzahl muss stimmen |
+| `memo-discard-all <n>` | verwirft alle geeigneten, Anzahl muss stimmen |
 
-`memo-why` ist das Werkzeug, mit dem eine Markierung beantwortet wird. Zähler
-allein reichen dafür nicht — dieser Irrtum hat heute mehrere Stunden gekostet.
+`memo-why` ist das Werkzeug, mit dem eine Markierung beantwortet wird. Aus
+Zählerständen eine Ursache zu erraten ist in diesem Projekt dreimal
+schiefgegangen; `memo-why` hat dieselbe Frage jedes Mal in einem Aufruf
+beantwortet.
+
+## Was nachweislich funktioniert
+
+Alles hier am Gerät gegen `living-notebook.heusgenradig.de` beobachtet, nicht
+gegen den Mock.
+
+**Der Aufnahme- und Uploadweg.** Eine Testmemo lief vollständig durch:
+`@MEMO B889AF95 2 634880 ready=0 acked=2 attention=0`, beide Segmente `acked`,
+Dateien vorhanden, Größen exakt wie erwartet (84551 und 27484 Byte).
+
+**Die Bedienung.** Fokusring über GPIO 4 (hoch) und 6 (runter), Kurzdruck Mitte
+löst aus. Am Gerät bestätigt: `dashboard: focus=0 of 8` bis `focus=4 of 8`,
+Verlaufsliste geöffnet, eine Aufnahme daraus geöffnet, Detailansicht geladen
+(`api: entity fetch ok http=200`). Die Tastenrichtung stimmt so.
+
+**Das Dashboard.** `dashboard: snapshot accepted: sections=5` mit acht
+fokussierbaren Karten. Die Antwort misst rund 5 kB gegen einen Puffer von
+16384.
+
+**Authentisierung.** `CLIENT_DEVICE_AUTH_REQUIRED=true` ist scharf, das Gerät
+meldet `authenticated=1`, der Betrieb läuft normal weiter.
+
+**Der Retry-Takt.** Beobachtet mit wachsenden Abständen 19 → 54 → 104 → 120 →
+148 Sekunden, und der Reconnect hat den Worker vorzeitig geweckt, als das WLAN
+zurückkam.
+
+**Powersave-Umschaltung.** `Set ps type: 0` vor jedem Durchlauf, `type: 1`
+danach.
+
+## Entscheidungen, die nicht neu verhandelt werden müssen
+
+**Das Gerät muss in fremden Netzen laufen.** Kein Split-Horizon, keine
+manuellen DNS-Einträge, kein lokaler Sonderweg. Es fragt immer den öffentlichen
+Namen und bekommt die öffentliche Adresse. Im Heimnetz heißt das: NAT-Reflection
+muss bleiben, und der Reverse Proxy muss den lokalen Weg zulassen — genau das
+war am 6. September gesperrt und ist der Grund, warum lokale Anfragen nicht
+durchkamen.
+
+**Kein geräteeigener DNS-Cache.** Die aufgelöste Adresse ließe sich nicht in die
+URL schreiben, ohne die Zertifikatsprüfung gegen den Hostnamen zu brechen, und
+die hat bewusst keinen Abschalter. Zwischengespeichert wird im lwIP-Resolver;
+`resolve_server()` sorgt nur dafür, dass ein einzelner Aussetzer nicht den
+ganzen Durchlauf kostet.
+
+**Zwei Credentials, nicht austauschbar.** Das Geräte-Credential öffnet nur
+`/api/client/`. Das Operator-Token (`CLIENT_OPERATOR_TOKEN`) öffnet alles unter
+`/api/` — notes, claims, tasks, lists, artifacts, caldav und die
+Worker-Trigger. Ein gestohlenes Gerät darf kein Operator werden. Leeres Token
+sperrt diese Routen, statt sie zu öffnen. Der Socket-Peer wird nirgends
+ausgewertet: hinter einem Reverse Proxy auf demselben Host kommt jeder Request
+von 127.0.0.1, ein Localhost-Bonus hätte das ganze Internet zum Operator
+gemacht.
+
+**Die ESP-Dashboardprojektion streicht nur, was der Renderer nicht liest.** Die
+Liste ist aus `main/dashboard.c` abgeleitet, nicht geraten: der Walker
+konsumiert je Karte `component`, `title`, `preview`, `status`, `icon`,
+`severity`, `color_role`, `border_role`, `action.type` und `entity_ref`.
+`id` und `action` bleiben ausdrücklich erhalten — `id` ist die vertraglich
+zugesicherte Fokusidentität, `action.type` trennt `open_entity` von
+`open_clarification` und `open_session`.
+
+**Das Auffrischintervall kommt vom Server.** Halbes
+`limits.dashboard_cache_max_age_seconds`, begrenzt auf 5 bis 60 Minuten. Ein
+Server, der sein Fenster verkürzt, wird ohne Firmwareänderung befolgt.
+
+## Offene Punkte
+
+### 1. `sequence_base` — erledigt, 7. September, zweite Runde
+
+War hier als Diskrepanz notiert: `create_session()` sendete den Wert nur in
+`device_metadata`, `response_matches_session()` prüfte ihn nicht,
+`docs/BACKEND_REQUIREMENTS.md` behauptete fälschlich „umgesetzt". Jetzt behoben:
+`create_session()` sendet `sequence_base` als Top-Level-Feld
+(`JOURNAL_SEQUENCE_BASE` aus `main/journal.h`), `response_matches_session()`
+prüft einen zurückgelieferten Wert über die neue `number_matches_or_absent()`
+(fehlendes Feld bleibt akzeptiert). `docs/BACKEND_REQUIREMENTS.md` korrigiert.
+Build und Flash gegen COM9 verifiziert; ein Live-Create ließ sich wegen des
+DNS-Problems unten nicht mehr gegenprüfen.
+
+Weiterhin offen: ein fehlgeschlagener Create wird nur geloggt und gezählt
+(`create_failed`), nicht dauerhaft sichtbar als `attention` eingeordnet.
+
+### 2. Doku beschrieb Befehle, die es nicht gab — erledigt, 7. September, zweite Runde
+
+`epd-clear`, `epd-window`, `text-test`, `icon-test`, `pattern-test`,
+`status-test`, `header-test` und `card-test` waren in
+`docs/DEVELOPMENT_GUIDE.md` spezifiziert und die Renderer fertig, nur die
+Befehlsschicht fehlte in `main.c`. Jetzt verdrahtet und alle acht am Gerät
+geprüft (Log-Zeilen wie erwartet, u. a. `pattern-test` ohne Argument korrekt im
+Bänder-Modus `step=5`).
+
+`memo-discard <id>` war ebenfalls schon fertig implementiert
+(`recorder_discard()`/`discard_memo()` in `recorder.c`, inklusive
+`@DISCARDED`/`@ERROR still_deliverable`) — nur nicht in `recorder.h` deklariert
+und nicht im Kommandodispatcher verdrahtet. Jetzt verdrahtet; am Gerät nur mit
+einer unbekannten ID geprüft (`@ERROR unknown_memo`), nicht destruktiv gegen
+eine echte Session getestet.
+
+`docs/PROJECT_STATUS.md` widersprach sich tatsächlich selbst (eine Zeile
+behauptete das Fensterupdate im Regelpfad, die nächsten Zeilen im selben
+Dokument beschrieben korrekt das Gegenteil). Die falsche Zeile ist entfernt.
+Wichtig dabei: `main/screen.c` blieb unangetastet — die volle Flächenübertragung
+über `EPD_Display_Partial_Frame` ist laut denselben, korrekten Zeilen ein
+belegter Fix für einen realen Positionsfehler (`EPD_Display_Partial` verliert
+per `EPD_Reset()` die Controllerbasis), kein Bug.
+
+### 3. Retryklassen — teilweise erledigt, 7. September, zweite Runde
+
+Der eine Fall, den diese Datei als „besonders relevant" markiert hatte, ist
+behoben: `upload_chunk()` erkennt `401` mit `ErrorResponse.code ==
+"DEVICE_CREDENTIAL_REVOKED"` (Schema aus `contracts/client-openapi-v1.json`)
+und markiert das Segment `attention` mit Grund `credential_revoked`, statt es
+wie jeden anderen Fehler auf `ready` zurückzusetzen und endlos zu backoffen.
+Lokale Aufnahme und die übrige Queue bleiben unangetastet.
+
+Weiterhin offen: die vollständige `retry_class`-Tabelle (`immediate`,
+`backoff`, `network`, `never`) ist nirgends ausgewertet; jeder andere
+Nicht-200/201/409/401-Fall landet weiterhin im uniformen Backoff. Das betrifft
+auch `create_session()`, `finish_session()` und die übrigen Aufrufe — nur der
+Chunk-Upload-Pfad wurde angefasst.
+
+### 4. `GET /sessions/{id}/dashboard` — erledigt, 7. September, zweite Runde
+
+`fetch_session()` hängt jetzt `?surface=esp32_epaper` an, analog zum
+Hauptdashboard. Live gegen einen Snapshot mit vielen Transkriptblöcken nicht
+nachprüfbar, weil in dieser Runde kein Server erreichbar war (siehe unten).
+
+### 5. Kleinere Backendbefunde
+
+`routers/client.py::upload_v1_audio`: `create_audio_chunk` kann `None` liefern,
+wenn die Ingestion-Session fehlt — dann wirft `result.items()` und es gibt 500
+statt 404.
+
+`services/unified_push.py::broadcast_invalidation` hat **keinen Aufrufer**.
+Registrierung und Challenge funktionieren, es wird nie ein Push gesendet. In
+`ROADMAP.md:353` und `CLIENT_BACKEND_CONTRACT.md:176` als `[x]` abgehakt.
+
+Nicht angefasst: liegt in `smart_notebook/` bzw. `routers/`, `services/` —
+Backendcode, außerhalb dessen, was ein App-/Client-Task ändern darf.
+
+### 6. Aufzuräumen
+
+Eine leere Session steht serverseitig in `created` und erscheint als Karte unter
+„Offene Sessions". Sie stammt aus einer abgebrochenen Aufnahme
+(`63497897`, null Segmente, kein Abschluss). Das Gerät bietet sie seit dem
+`abandoned`-Fix nicht mehr an, aber die Serverzeile bleibt:
+
+```
+curl -X POST -H "Authorization: Bearer <operator-token>" \
+  https://living-notebook.heusgenradig.de/api/client/v1/sessions/<uuid>/abort
+```
+
+Die UUID steht in `memo-why 63497897`. Nicht ausgeführt in dieser Runde: der
+Server war wegen des DNS-Problems unten nicht erreichbar, und das ist ein
+Live-Eingriff auf Produktionsdaten, kein Codewechsel.
+
+### 7. A2/A3: Freigabe und verlorene ACKs
+
+Am 6. September vorläufig eingeordnet, nicht abschließend geklärt. Die
+Freigabekette ist strenger als der Vertrag verlangt:
+`_release_local_audio()` setzt `local_audio_release_allowed` nur bei
+`state='completed'` **und** materialisiertem `capture_result`, und das
+persistiert in Postgres. Die Retention setzt nur `status='deleted'` und löscht
+keine Zeile; `reconciliation()` meldet `durable_ack: true` hart für jede
+vorhandene Zeile.
+
+Verlorene ACKs sind daher am wahrscheinlichsten eine Identitätsfrage — eine neue
+`ingestion_session` hinter derselben `client_session_id`, etwa nach einem
+DB-Reset — und kein Datenverlust im Normalbetrieb. Nachvollziehbar in
+`client_session_audit`. Solange das nicht belegt ist, bleibt es eine Hypothese.
+
+## Fallen, die in dieser Runde Zeit gekostet haben
+
+**Bearbeitung auf veralteter Grundlage.** Eine Änderung an `main.c` hat still
+die Uhr-, WLAN- und Tastenanbindung überschrieben. Das blieb tagelang
+unbemerkt, weil GPIO 4 und 6 weiterhin als Eingänge konfiguriert waren — nur
+die Ausleseschleife fehlte. Mit Git ist das ein `git diff`.
+
+**Erfolgsmeldungen ohne Inhalt.** Zwei Schreibvorgänge über die Dateibrücke
+meldeten Erfolg, ohne anzukommen, beide Male `api_client.c`. Ein sofortiger
+zweiter Versuch half jedes Mal. Mit Terminal und Git entfällt diese Schicht.
+
+**Ein Test, der das falsche Objekt misst.** Die Größenprüfung der
+ESP-Projektion wog das Snapshot-Dict statt der HTTP-Antwort. Pydantic schreibt
+jedes optionale Feld als `null` wieder hin: aus 5353 Byte wurden auf der Leitung
+9277. Der Test misst jetzt `response.content` über den TestClient.
+
+**Zähler statt Werkzeug.** Dreimal wurde aus Zählerständen eine plausible
+Ursache abgeleitet, dreimal war sie unvollständig. `memo-why` hat jedes Mal in
+einem Aufruf geantwortet.
+
+**Eine falsche, aber nützliche Hypothese.** Der Powersave-Eingriff war als
+DNS-Reparatur gedacht und hat sie nicht bewirkt — die Auflösung scheiterte
+danach genauso. Die Änderung bleibt trotzdem richtig; sie kostet fast nichts und
+hat eine Fehlerquelle sauber ausgeschlossen. Eine widerlegte Hypothese ist ein
+Ergebnis, kein verlorener Zug.
+
+**Worktree-Fallgrube, 7. September, zweite Runde.** Ein neuer Arbeits-Worktree
+wurde vom letzten Commit erzeugt, nicht von der unversionierten Arbeitskopie —
+er enthielt deshalb eine ältere Fassung genau dieser Datei, die `memo-discard
+<id>` noch ungeprüft als funktionierend auflistete. Erst der Versuch, einen
+bekannten Abschnitt per Edit zu ersetzen, deckte die Abweichung auf. Vor einer
+Übernahme in eine isolierte Arbeitskopie lohnt ein Blick auf `git status` in
+der Ausgangs-Arbeitskopie, wenn dort unversionierte Änderungen an genau der
+Datei stehen, die als Grundlage diente.
+
+## DNS bleibt offen, 7. September, zweite Runde
+
+`living-notebook.heusgenradig.de` ließ sich am Gerät weiterhin nicht auflösen
+(`cannot resolve … the network is up but DNS is not answering`), obwohl WLAN
+verbunden war. Kein Firmwarebefund — passt zu der oben dokumentierten
+Entscheidung, dass das Gerät ausschließlich den öffentlichen Namen fragt und
+NAT-Reflection bzw. der Reverse-Proxy-Pfad dafür stehen müssen. Ein lokal
+gestartetes `uvicorn` auf Port 8000 allein macht den Server für das Gerät nicht
+erreichbar, solange der öffentliche Name nicht dorthin auflöst. Deshalb blieb
+`sequence_base` und die `surface`-Ergänzung diese Runde nur quellcodeseitig und
+am Kommandodispatcher verifiziert, nicht mit einem echten Server-Roundtrip.
 
 ## Reihenfolge für den nächsten Chat
 
-1. Authentisierung klären (siehe oben). Wenn die API offen ist, hat das Vorrang.
-2. A1 lösen, weil ohne Dashboard nichts Sichtbares passiert. Zuerst die
-   tatsächliche Antwortgröße messen.
-3. A2 und A3 gemeinsam untersuchen — dieselbe Session gleichzeitig in beiden
-   Logs verfolgen. Das ist der Punkt, an dem ein gemeinsamer Chat den Unterschied
-   macht.
-4. A4 aus dem Serverlog beantworten.
-5. A5 und A6 als Vertragsentscheidungen führen, nicht als Bugfixes.
-
-## Arbeitsweise, die sich heute bewährt hat
-
-- Werkzeug vor Diagnose. Zweimal wurde aus Zählerständen eine plausible Ursache
-  abgeleitet, und zweimal war sie falsch. `memo-why` hat dieselbe Frage in einem
-  Aufruf beantwortet.
-- Wenn das Gerät der Hypothese widerspricht, wird die Aufzeichnung korrigiert,
-  nicht die Hypothese gerettet.
-- Vor jeder Bearbeitung den aktuellen Dateistand frisch holen. Eine Bearbeitung
-  auf veralteter Grundlage sah heute korrekt aus und hat die Uhr- und
-  WLAN-Anbindung in `main.c` still überschrieben.
-- Kein Testlauf gegen den Mock ersetzt einen gegen das echte Backend. Der Mock
-  kodiert die eigenen Annahmen und kann sie deshalb nicht widerlegen.
+1. DNS/Reverse-Proxy-Erreichbarkeit klären, sonst bleibt jeder weitere
+   Live-Test blockiert.
+2. Die tote Session serverseitig abbrechen (Punkt 6), sobald der Server
+   erreichbar ist.
+3. Die dauerhaft sichtbare `attention`-Markierung eines fehlgeschlagenen
+   Create ergänzen (Rest von Punkt 1).
+4. Restliche Retryklassen (`immediate`, `backoff`, `network`, `never`) über
+   alle Aufrufe hinweg, nicht nur den Chunk-Upload.

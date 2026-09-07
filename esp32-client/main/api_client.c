@@ -240,6 +240,23 @@ static bool boolean_is(cJSON *object, const char *name, bool expected) {
     return cJSON_IsBool(value) && cJSON_IsTrue(value) == expected;
 }
 
+/* A server that says nothing does not contradict us; see BACKEND_REQUIREMENTS.md
+ * §1. Only a present, differing value is a conflict. */
+static bool number_matches_or_absent(cJSON *object, const char *name, double expected) {
+    cJSON *value = cJSON_GetObjectItemCaseSensitive(object, name);
+    if (!cJSON_HasObjectItem(object, name)) return true;
+    return cJSON_IsNumber(value) && value->valuedouble == expected;
+}
+
+/* `ErrorResponse` per contracts/client-openapi-v1.json: a flat top-level
+ * object with `code`, not nested under an `error` key. */
+static bool error_code_is(const char *text, const char *code) {
+    cJSON *root = cJSON_Parse(text);
+    bool match = cJSON_IsObject(root) && string_is(root, "code", code);
+    cJSON_Delete(root);
+    return match;
+}
+
 static bool server_available(cJSON *root) {
     return string_is(root, "status", "ready") || string_is(root, "status", "degraded");
 }
@@ -364,7 +381,8 @@ static bool response_matches_session(const char *text, const char *session_id) {
     bool valid = cJSON_IsObject(root) && string_is(root, "client_session_id", session_id) &&
         cJSON_IsString(state) && cJSON_HasObjectItem(root, "device_metadata") &&
         cJSON_HasObjectItem(root, "capture_mode") && cJSON_HasObjectItem(root, "created_at") &&
-        cJSON_HasObjectItem(root, "updated_at");
+        cJSON_HasObjectItem(root, "updated_at") &&
+        number_matches_or_absent(root, "sequence_base", JOURNAL_SEQUENCE_BASE);
     cJSON_Delete(root);
     return valid;
 }
@@ -376,9 +394,11 @@ static bool create_session(const journal_session *session) {
     cJSON_AddStringToObject(request, "client_session_id", session->session_id);
     cJSON_AddStringToObject(request, "capture_mode", session->capture_mode);
     cJSON_AddStringToObject(request, "source_type", "esp32_epaper_audio");
+    /* Session identity per BACKEND_REQUIREMENTS.md §1: sequence_base is a
+     * top-level field, immutable once the server has stored it. */
+    cJSON_AddNumberToObject(request, "sequence_base", JOURNAL_SEQUENCE_BASE);
     cJSON_AddStringToObject(metadata, "client", "waveshare-esp32-s3-epaper-3.97");
     cJSON_AddStringToObject(metadata, "firmware_version", MEMO_FIRMWARE);
-    cJSON_AddNumberToObject(metadata, "sequence_base", 0);
     cJSON_AddItemToObject(request, "device_metadata", metadata);
     char *json = cJSON_PrintUnformatted(request);
     cJSON_Delete(request);
@@ -595,6 +615,12 @@ static bool upload_chunk(journal_session *session, journal_chunk *chunk) {
         if (persisted) status.uploads_acked++;
     } else if (http == 409) {
         persisted = mark_chunk(session, chunk, CHUNK_ATTENTION, "server_conflict");
+        status.uploads_failed++;
+    } else if (http == 401 && request_ok && error_code_is(body, "DEVICE_CREDENTIAL_REVOKED")) {
+        /* retry_class user_action per API_INTERACTION.md: stop and surface it
+         * instead of backing off forever. Local recording and the rest of the
+         * queue are untouched; only this segment is marked. */
+        persisted = mark_chunk(session, chunk, CHUNK_ATTENTION, "credential_revoked");
         status.uploads_failed++;
     } else {
         persisted = mark_chunk(session, chunk, CHUNK_READY, "");
@@ -1038,7 +1064,8 @@ static void fetch_history(void) {
 static void fetch_session(void) {
     if (!atomic_load(&session_pending)) return;
     char path[128];
-    snprintf(path, sizeof(path), "/api/client/v1/sessions/%s/dashboard", session_id_wanted);
+    snprintf(path, sizeof(path), "/api/client/v1/sessions/%s/dashboard?surface=esp32_epaper",
+             session_id_wanted);
     char *body = malloc(API_RESPONSE_MAX);
     int http = 0;
     bool ok = body && call(HTTP_METHOD_GET, path, NULL, body, API_RESPONSE_MAX, &http) &&
