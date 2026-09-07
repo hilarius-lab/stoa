@@ -1,5 +1,31 @@
 # Änderungen
 
+## 2026-09-07 – Fehlgeschlagener Create wird jetzt dauerhaft sichtbar
+
+Nach dem Merge von `worktree-esp32-cleanup` (PR #1): der letzte Rest von
+Punkt 1 aus `docs/CLIENT_SERVER_STATE.md`, der nach dem Merge noch offen war.
+
+- Neuer Journal-Record-Typ `session_state` (`journal.h`/`journal.c`), weil ein
+  fehlgeschlagener Create oft eine Session mit null Segmenten trifft — kein
+  Chunk vorhanden, an dem sich die bestehende `CHUNK_ATTENTION`-Markierung
+  hätte befestigen lassen.
+- `create_session()` (`api_client.c`) markiert nur bei einer **erreichten**
+  Serverantwort, die nicht der erwartete Erfolg ist — reine Transportfehler
+  (DNS, Timeout) lösen nichts aus. Reasons: `response_mismatch` (201 mit
+  ungültigem Body) oder `create_http_<code>` (jeder andere Status).
+- Fließt in denselben `attention`-Zähler wie Chunk-Attention
+  (`memo_queue_note_session_transition()`, gleiche Lösch-bei-Erfolg-Regel);
+  sichtbar in `memo-list` (`@MEMO ... attention=N`) und neu in `memo-why`
+  (`@WHY ... create_attention=0|1 create_reason=…`).
+- Build, Flash und Regressionscheck gegen die zwei bestehenden Sessions
+  bestanden: `attention=0` unverändert, neue Felder korrekt formatiert. Der
+  tatsächliche Ablehnungsfall ist nicht live geprüft — dafür müsste der
+  Server eine Session aktiv ablehnen.
+- Nebenbei: vier verwaiste `idf_monitor`-Prozesse aus vorherigen
+  Hintergrund-Job-Versuchen blockierten COM9 nach dem Build und mussten vor
+  dem Flash beendet werden — `Stop-Job` tötet den PowerShell-Job-Wrapper,
+  nicht die von `idf.py monitor` gestarteten Kindprozesse.
+
 ## 2026-09-07 – Vier Diskrepanzen aus dem Übergabedokument bereinigt
 
 Build/Flash/Monitor gegen das reale Gerät (COM9), alle Punkte unten dort

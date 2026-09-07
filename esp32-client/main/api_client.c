@@ -387,7 +387,21 @@ static bool response_matches_session(const char *text, const char *session_id) {
     return valid;
 }
 
-static bool create_session(const journal_session *session) {
+/* Persists the session-level defect flag, idempotently — a state that already
+ * matches is not rewritten, or every failed pass would grow the journal. */
+static bool mark_session(journal_session *session, bool attention, const char *reason) {
+    if (session->create_attention == attention &&
+        strcmp(session->create_reason, reason ? reason : "") == 0) return true;
+    char payload[JOURNAL_MAX_PAYLOAD];
+    int length = journal_build_session_state(payload, sizeof(payload), attention, reason);
+    if (length <= 0 || !journal_append(session, payload, (size_t)length)) return false;
+    memo_queue_note_session_transition(session->create_attention, attention);
+    session->create_attention = attention;
+    snprintf(session->create_reason, sizeof(session->create_reason), "%s", reason ? reason : "");
+    return true;
+}
+
+static bool create_session(journal_session *session) {
     cJSON *request = cJSON_CreateObject();
     cJSON *metadata = cJSON_CreateObject();
     if (!request || !metadata) { cJSON_Delete(request); cJSON_Delete(metadata); return false; }
@@ -406,10 +420,21 @@ static bool create_session(const journal_session *session) {
     char *body = malloc(API_RESPONSE_MAX);
     if (!body) { cJSON_free(json); return false; }
     int http = 0;
-    bool ok = call(HTTP_METHOD_POST, "/api/client/v1/sessions", json,
-                   body, API_RESPONSE_MAX, &http) && http == 201 &&
-              response_matches_session(body, session->session_id);
+    bool reached = call(HTTP_METHOD_POST, "/api/client/v1/sessions", json,
+                        body, API_RESPONSE_MAX, &http);
+    bool ok = reached && http == 201 && response_matches_session(body, session->session_id);
     status.last_http = http;
+    /* Mark only on a definitive answer from the server, never on a transport
+     * failure — a DNS or connectivity gap must not light this up, or it would
+     * flag exactly the sessions that will succeed on the next retry. */
+    if (reached && !ok) {
+        char reason[24];
+        if (http == 201) snprintf(reason, sizeof(reason), "response_mismatch");
+        else snprintf(reason, sizeof(reason), "create_http_%d", http);
+        mark_session(session, true, reason);
+    } else if (ok && session->create_attention) {
+        mark_session(session, false, "");
+    }
     memset(json, 0, strlen(json));
     cJSON_free(json);
     memset(body, 0, API_RESPONSE_MAX);

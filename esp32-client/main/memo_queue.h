@@ -55,4 +55,7 @@ void memo_queue_note_ready(uint64_t bytes);
  * unclearable. Uses the same bucket rule as `memo_queue_scan`, so the counters
  * stay equal to what a rescan would produce. */
 void memo_queue_note_transition(chunk_state from, chunk_state to);
+/* Same rule, for the session-level create-attention flag rather than a chunk
+ * state — see journal_session::create_attention. */
+void memo_queue_note_session_transition(bool from_attention, bool to_attention);
 void memo_queue_report(void);

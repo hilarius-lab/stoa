@@ -123,17 +123,19 @@ static void scan_one(const char *directory) {
         ESP_LOGW("queue", "recovery could not persist every state change");
     close_open_horizon(session);
 
+    unsigned session_attention = journal_count_state(session, CHUNK_ATTENTION) +
+                                 (session->create_attention ? 1 : 0);
     status.sessions++;
     status.ready += journal_count_state(session, CHUNK_READY);
     status.acked += journal_count_state(session, CHUNK_ACKED);
-    status.attention += journal_count_state(session, CHUNK_ATTENTION);
+    status.attention += session_attention;
     /* Segment identifiers and reasons only; never a file name the user chose
      * or any audio content. */
     ESP_LOGI("queue", "session recovered: segments=%u ready=%u acked=%u attention=%u adopted=%d",
              session->chunk_count,
              journal_count_state(session, CHUNK_READY),
              journal_count_state(session, CHUNK_ACKED),
-             journal_count_state(session, CHUNK_ATTENTION),
+             session_attention,
              session->adopted ? 1 : 0);
     free(session);
 }
@@ -207,6 +209,12 @@ void memo_queue_note_transition(chunk_state from, chunk_state to) {
     unsigned *entering = bucket_for(to);
     if (leaving && *leaving) (*leaving)--;
     if (entering) (*entering)++;
+}
+
+void memo_queue_note_session_transition(bool from_attention, bool to_attention) {
+    if (from_attention == to_attention) return;
+    if (from_attention && status.attention) status.attention--;
+    if (to_attention) status.attention++;
 }
 
 void memo_queue_report(void) {

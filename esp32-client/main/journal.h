@@ -67,6 +67,12 @@ typedef struct {
     unsigned chunk_count;
     bool adopted;           /* reconstructed from a pre-journal recording */
     bool finished;
+    /* Session-level defect, distinct from any chunk: the server was reached
+     * and gave a definitive answer that was not the expected success — a
+     * rejected identity, not a network hiccup. Set only from a real response,
+     * so a DNS or connectivity gap never lights this up. */
+    bool create_attention;
+    char create_reason[24];
     unsigned final_sequence;
     uint64_t final_source_end_ms;
     journal_chunk chunks[JOURNAL_MAX_SEGMENTS];
@@ -94,6 +100,10 @@ int journal_build_chunk_state(char *out, size_t capacity, unsigned sequence,
                               chunk_state state, const char *reason);
 int journal_build_finish(char *out, size_t capacity, unsigned final_sequence,
                          uint64_t final_source_end_ms);
+/* Session-level defect, set or cleared. `reason` is truncated the same way as
+ * a chunk's; empty clears it. */
+int journal_build_session_state(char *out, size_t capacity, bool attention,
+                                const char *reason);
 
 /* Frame one payload into `out`. Returns the framed length or -1. */
 int journal_frame(uint8_t *out, size_t capacity, uint64_t record_number,

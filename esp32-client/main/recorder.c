@@ -97,7 +97,7 @@ static void memo_states(const char *id,unsigned *segments,unsigned *ready,unsign
         *segments=session->chunk_count;
         *ready=journal_count_state(session,CHUNK_READY)+journal_count_state(session,CHUNK_UPLOADING);
         *acked=journal_count_state(session,CHUNK_ACKED);
-        *attention=journal_count_state(session,CHUNK_ATTENTION);
+        *attention=journal_count_state(session,CHUNK_ATTENTION)+(session->create_attention?1:0);
         *known=true;
     }
     free(session);
@@ -257,8 +257,11 @@ static void explain_memo(const char *id) {
     journal_session_init(session,directory);
     if(!journal_replay(session)) { free(session); usb_line("@ERROR unknown_memo\n"); return; }
     char line[192];
-    snprintf(line,sizeof(line),"@WHY %.8s session=%.36s finished=%d segments=%u\n",
-             id,session->session_id,session->finished?1:0,session->chunk_count);
+    snprintf(line,sizeof(line),
+             "@WHY %.8s session=%.36s finished=%d segments=%u create_attention=%d create_reason=%s\n",
+             id,session->session_id,session->finished?1:0,session->chunk_count,
+             session->create_attention?1:0,
+             session->create_attention&&session->create_reason[0]?session->create_reason:"-");
     usb_line(line);
     for(unsigned i=0;i<session->chunk_count;i++) {
         journal_chunk *chunk=&session->chunks[i];

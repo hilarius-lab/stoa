@@ -146,8 +146,26 @@ Build und Flash gegen COM9 verifiziert; **live gegen den echten Server
 bestätigt** (`sync complete: create_ok=1 … finish=1`, siehe DNS-Abschnitt
 unten für den Verlauf dorthin).
 
-Weiterhin offen: ein fehlgeschlagener Create wird nur geloggt und gezählt
-(`create_failed`), nicht dauerhaft sichtbar als `attention` eingeordnet.
+**Nachtrag, 7. September, dritte Runde: jetzt ebenfalls erledigt.** Ein
+fehlgeschlagener Create ist jetzt dauerhaft sichtbar. Neuer Journal-Record-Typ
+`session_state` (`journal.h`/`journal.c`, Feld `journal_session::create_attention`
++ `create_reason`) neben dem bestehenden Chunk-Mechanismus, weil ein
+fehlschlagender Create oft eine Session mit null Segmenten trifft — die früh
+angelegte laufende Aufnahme hat noch kein Chunk-Objekt, an dem sich etwas
+befestigen ließe. `create_session()` markiert nur bei einer **erreichten**
+Serverantwort, die nicht der erwartete Erfolg ist (`response_mismatch` bei
+201 mit ungültigem Body, `create_http_<code>` sonst) — eine reine
+Transportstörung (DNS, Timeout) löst nichts aus, sonst würde ausgerechnet die
+Session markiert, die beim nächsten Versuch ohnehin durchläuft. Fließt in
+denselben `attention`-Zähler wie Chunk-Attention ein (`memo_queue_note_session_transition()`,
+dieselbe Lösch-bei-Erfolg-Regel wie bei Chunks) und erscheint in `memo-list`
+(`@MEMO ... attention=N`) sowie neu in `memo-why` (`@WHY ... create_attention=0|1
+create_reason=…`). Build, Flash und Regressionscheck gegen die zwei
+bestehenden Sessions bestanden (`attention=0` unverändert, neue Felder korrekt
+formatiert). Der eigentliche Ablehnungsfall (`response_mismatch`/`create_http_*`
+tatsächlich auslösen) ist nicht live geprüft — dafür müsste der Server eine
+Session aktiv ablehnen, was sich ohne Mitwirkung des Backends nicht erzwingen
+lässt.
 
 ### 2. Doku beschrieb Befehle, die es nicht gab — erledigt, 7. September, zweite Runde
 
@@ -323,17 +341,17 @@ Dokuments (`memo-why` statt Zählerraten) nicht für mehr.
 
 ## Reihenfolge für den nächsten Chat
 
-1. `worktree-esp32-cleanup` ist jetzt live gegen den echten Server bestätigt
-   (Create, Response-Validierung, Finish) — bereit zum Merge, sobald der Diff
-   durchgesehen ist.
-2. DNS-Hypothese bleibt offen, ist aber kein Blocker mehr für weitere
-   Live-Tests, da drei von vier Läufen erfolgreich waren. Bei Gelegenheit mit
-   mehr dokumentierten BSSID/RSSI-Paaren erhärten oder verwerfen.
-3. Den `surface`-Parameter am Gerät gezielt bestätigen: Verlaufsliste öffnen,
+1. `worktree-esp32-cleanup` gemerged nach `main` (PR #1) — erledigt.
+2. Die tote Session serverseitig abbrechen (Punkt 6) — vom Nutzer selbst
+   ausgeführt, per `memo-why` bestätigt identifiziert
+   (`b4395a68-1f8c-42b2-83c1-b20d657aaeed`), Erfolg nicht weiter verfolgt.
+3. Die dauerhaft sichtbare `attention`-Markierung eines fehlgeschlagenen
+   Create — erledigt, siehe Punkt 1 oben (Nachtrag dritte Runde).
+4. Restliche Retryklassen (`immediate`, `backoff`, `network`, `never`) über
+   alle Aufrufe hinweg, nicht nur den Chunk-Upload.
+5. Den `surface`-Parameter am Gerät gezielt bestätigen: Verlaufsliste öffnen,
    eine Session antippen, `dashboard: snapshot accepted` für die
    Session-Ansicht im Log prüfen.
-4. Die tote Session serverseitig abbrechen (Punkt 6).
-5. Die dauerhaft sichtbare `attention`-Markierung eines fehlgeschlagenen
-   Create ergänzen (Rest von Punkt 1).
-6. Restliche Retryklassen (`immediate`, `backoff`, `network`, `never`) über
-   alle Aufrufe hinweg, nicht nur den Chunk-Upload.
+6. DNS-Hypothese bleibt offen, ist aber kein Blocker mehr für weitere
+   Live-Tests, da die meisten Läufe erfolgreich waren. Bei Gelegenheit mit
+   mehr dokumentierten BSSID/RSSI-Paaren erhärten oder verwerfen.
