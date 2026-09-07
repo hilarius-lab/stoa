@@ -233,7 +233,13 @@ def get_dashboard_entity(entity_type,public_id):
             return {"id":str(public_id),"type":"topic","title":_clip(r[0],TITLE_MAX),"description":_clip(r[1],DETAIL_MAX),"status":r[2],"confidence":r[3],"created_at":r[4].isoformat(),"updated_at":r[5].isoformat()} if r else None
         if entity_type=="task":
             r=c.execute("SELECT content,due_at,status,priority,urgency,percent_complete,created_at,updated_at FROM tasks WHERE id=%s",(internal_id,)).fetchone()
-            return {"id":str(public_id),"type":"task","content":_clip(r[0],DETAIL_MAX),"due_at":r[1].isoformat() if r[1] else None,"status":r[2],"priority":r[3],"urgency":r[4],"percent_complete":r[5],"created_at":r[6].isoformat(),"updated_at":r[7].isoformat()} if r else None
+            if not r:return None
+            result={"id":str(public_id),"type":"task","content":_clip(r[0],DETAIL_MAX),"due_at":r[1].isoformat() if r[1] else None,"status":r[2],"priority":r[3],"urgency":r[4],"percent_complete":r[5],"created_at":r[6].isoformat(),"updated_at":r[7].isoformat()}
+            # Only an open task has anything left to do; a task already done,
+            # expired or archived offers no action, same as an entity_card
+            # whose action the client does not implement — present but inert.
+            if r[2]=="open":result["action"]={"type":"complete_task","params":{"task_id":str(public_id)}}
+            return result
         if entity_type=="list":
             r=c.execute("SELECT title,description,created_at,updated_at FROM lists WHERE id=%s",(internal_id,)).fetchone()
             if not r:return None

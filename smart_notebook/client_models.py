@@ -106,6 +106,11 @@ class DashboardEntityResponse(ExtensibleModel):
     title:str|None=None;content:str|None=None;description:str|None=None;question:str|None=None
     question_kind:str|None=None;confidence:float|None=None;priority:float|None=None
     answer:str|None=None;answer_source:str|None=None
+    # Set only while the detail view offers a mutation beyond navigation —
+    # a task that is still open, so far. Absent once there is nothing left
+    # to do, same convention as an unimplemented action on a dashboard card:
+    # the client acts on what is present, not on a fixed type per entity_type.
+    action:DashboardAction|None=None
 class UsageResponse(BaseModel):batch_id:UUID;accepted_count:int;idempotent:bool
 
 class AgentInfo(BaseModel):key:str;display_name:str

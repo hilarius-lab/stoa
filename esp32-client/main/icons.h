@@ -56,3 +56,10 @@ void icon_draw_badge(unsigned char *canvas, icon_id id, int x, int y);
 
 /* Invert a rectangle. Used for the focus marker. */
 void icon_invert(unsigned char *canvas, int x, int y, int width, int height);
+
+/* Ink only the border ring, `thickness` pixels wide, leaving the interior
+ * untouched. Used for a persistent "this one is active" mark distinct from
+ * the filled focus marker `icon_invert` draws, so a moving keyboard cursor
+ * and a standing state indicator never look like the same thing. */
+void icon_outline(unsigned char *canvas, int x, int y, int width, int height,
+                  int thickness);

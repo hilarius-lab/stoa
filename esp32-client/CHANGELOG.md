@@ -1,5 +1,93 @@
 # Änderungen
 
+## 2026-09-07 – Refresh durch weiteres „Auf" auf dem Menü-Icon
+
+Neue Geste: In einer Dashboard-Familien-Ansicht (Dashboard/Tasks/Listen) ist
+`focus == -1` bereits der oberste Punkt (das Menü-Icon). Wird von dort aus
+weiter „auf" gedrückt, bliebe der Fokus bisher einfach stehen. Jetzt löst der
+zusätzliche Druck einen sofortigen Dashboard-Refresh aus: `move_focus()` in
+`screen.c` erkennt den Fall (`next < -1`) und ruft die neue
+`api_client_request_sync()` auf, die den Upload-Worker-Task aufweckt — der
+läuft in jedem Wachzyklus `synchronize()` und damit `fetch_dashboard()`,
+unabhängig von Warteschlange oder Netzwerk-Reconnect, genau wie
+`api_client_queue_changed()`/`api_client_network_up()` es für ihre jeweiligen
+Anlässe schon tun. Build/Flash/Boot auf dem realen Gerät (COM9) verifiziert.
+
+## 2026-09-07 – Ansichtswähler verfeinert: echter Fokus-Bug behoben, ständige Icon-Zeile
+
+Direkte Rückmeldung nach dem ersten Test des Ansichtswählers.
+
+- **Echter Bug, nicht nur kosmetisch:** Der Menü-Button zeigte sich manchmal
+  gefüllt/invertiert, obwohl er nicht fokussiert war — typischerweise nach
+  einem Dashboard-Refresh. Ursache: `screen_snapshot_received()` (läuft im
+  Upload-Worker-Task) setzte das atomare `header_focused` bei jedem neuen
+  Snapshot hart auf `true`, ohne den tatsächlichen `dashboard_focus` (gehört
+  ausschließlich dem Display-Task) zurückzusetzen — beide liefen auseinander.
+  Fix: `header_focused` entfernt, `draw_header()` liest den echten Fokus
+  jetzt direkt (sicher, weil im selben Task wie `move_focus()` & Co.). Für
+  das eigentlich beabsichtigte Verhalten („neuer Snapshot springt zurück zum
+  Menü") gibt es jetzt `snapshot_focus_reset` — ein Flag, das der
+  Upload-Worker setzt und das der Display-Task einmal pro echtem neuem
+  Snapshot konsumiert (`atomic_exchange`) und dabei `dashboard_focus`,
+  `tasks_focus` und `lists_focus` sauber auf -1 zurücksetzt.
+- Die vier Ansichts-Icons stehen jetzt **dauerhaft** in der Kopfzeile, nicht
+  nur während der Auswahl — ein Zustand, der nur für ein paar Tastendrücke
+  sichtbar ist, geht leicht unter. Die aktuell aktive Ansicht bekommt eine
+  **Umrandung** (neu: `icon_outline()` in `icons.c`/`icons.h`, zeichnet nur
+  den Rahmen statt der Fläche wie `icon_invert()`); während der Auswahl weicht
+  die Umrandung dem wandernden Fokus-Cursor, damit nie beide Markierungen auf
+  demselben Icon konkurrieren.
+- Navigation innerhalb der Auswahlzeile umgedreht: „Auf" bewegt jetzt nach
+  rechts, „Ab" nach links (`move_selector_focus()`) — für eine horizontale
+  Zeile passender als die von der vertikalen Kartenliste geerbte Richtung,
+  die dort unverändert bleibt.
+
+Build und Flash bestanden, kein Absturz. Die eigentliche optische Wirkung
+(Umrandung sichtbar, Menü-Button nur bei echtem Fokus schwarz, Auf/Ab-Gefühl
+in der Auswahlzeile) ist noch nicht am Gerät bestätigt.
+
+## 2026-09-07 – Ansichtswähler: Dashboard/Tasks/Listen/Verlauf als eigene Ansichten
+
+Größter Umbau der Runde, auf Wunsch des Nutzers. Das 3-Punkte-Menü zwischen
+Statusleiste und Dashboard-Körper öffnet nicht mehr direkt den Verlauf,
+sondern einen Ansichtswähler; die vier Ansichten sind Dashboard, Tasks,
+Listen und Verlauf.
+
+- Zwei neue Icons (`tools/generate_icons.py`: `home`, `history`), Atlas neu
+  generiert (28 statt 26 Icons). Pillow war dafür in keinem der beiden
+  Python-Envs installiert, jetzt im Projekt-`.venv`.
+- `dashboard_map.h`/`dashboard.c`: neuer `dashboard_surface`-Parameter für
+  `dashboard_walk()` (`MAIN`, `TASKS`, `LISTS`, `ALL`), filtert Sektionen nach
+  der vom Backend bereits vergebenen `id` (`today`/`lists`, siehe
+  `services/client_dashboard.py::_idle_content()`) — keine Erfindung, nur
+  Auswertung von etwas, das der Server schon sendet. `MAIN` lässt `today` und
+  `lists` jetzt aus, damit sie nicht doppelt erscheinen; `ALL` (für die
+  Session-Detailansicht) bleibt unverändert unfiltriert.
+- `screen.c`: Tasks- und Listen-Ansicht sind keine eigenen Renderer, sondern
+  derselbe `draw_dashboard()`/`move_focus()`-Pfad mit einem anderen Surface —
+  `tasks_open`/`lists_open` als zwei weitere Flags neben dem bestehenden
+  `history_open`/`session_open`/`detail_open`-Muster, mit eigenem
+  Fokus/Scroll (`tasks_focus`/`tasks_scroll`, `lists_focus`/`lists_scroll`),
+  damit ein Ansichtswechsel die Position in der jeweils anderen nicht verliert.
+- Neuer Selector-Zustand (`selector_open`, `selector_focus` 0–3) und drei
+  kleine Funktionen dafür (`open_selector`/`move_selector_focus`/
+  `activate_selector`), erreichbar über den Menü-Button aus allen vier
+  Ansichten heraus, auch aus dem Verlauf (der Header-Button dort öffnete
+  vorher direkt den Rücksprung, jetzt den Wähler — Rücksprung bleibt möglich,
+  indem man "Verlauf" erneut wählt).
+- `header.c`/`header.h`: Bei offenem Wähler zeigt die Kopfzeile die vier
+  Ansichts-Icons statt der Aktualitäts-Anzeige, mit demselben
+  Fokus-Invertierungs-Muster wie bei Karten.
+- **Bewusst nicht in dieser Runde:** das Abhaken einer Task bzw. Löschen
+  eines einzelnen Listen-Eintrags in der Detailansicht — dafür fehlt noch
+  die neue Vertragsaktion samt Backend-Endpoint (separater Punkt, siehe
+  nächster Eintrag) und die dafür vorgesehene fokussierbare
+  „Erledigt"/„Löschen"-Option neben „Zurück" in `detail.c`.
+
+Build und Flash bestanden, kein Absturz/Resetloop im Boot-Log. Die eigentliche
+Bedienung (Menü öffnen, zwischen Ansichten wechseln, Tasks/Listen anzeigen)
+ist **nicht** von hier aus prüfbar und steht noch aus.
+
 ## 2026-09-07 – `ready`-Zähler driftete nach dem Verwerfen kurzer Aufnahmen
 
 Vom Nutzer bemerkt: das Warteschlangen-Symbol in der Statusleiste zeigte

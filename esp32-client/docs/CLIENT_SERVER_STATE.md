@@ -263,6 +263,76 @@ Die UUID steht in `memo-why 63497897`. Nicht ausgeführt in dieser Runde: der
 Server war wegen des DNS-Problems unten nicht erreichbar, und das ist ein
 Live-Eingriff auf Produktionsdaten, kein Codewechsel.
 
+### 7a. „Erledigt"-Button fehlte in der Detailansicht — erledigt, 7. September, vierte Runde
+
+Zwei getrennte Ursachen, nacheinander gefunden, jede mit Diagnose-Log am
+realen Gerät belegt statt vermutet:
+
+1. **Falscher Branch lief live.** Das Diagnose-Log zeigte `has_action=0` für
+   exakt die Aufgabe, die direkt gegen den Server (per `TestClient`) korrekt
+   `action` lieferte. Ursache: der laufende Backend-Prozess hinter
+   `living-notebook.heusgenradig.de` bediente `main`, nicht
+   `worktree-esp32-cleanup` — `origin/main` enthielt die
+   Task-Abhaken-Änderungen (`services/client_dashboard.py`,
+   `routers/client.py`, `client_models.py`) schlicht noch nicht. Ein
+   Neuflash der Firmware behob das folgerichtig nicht; ein Serverstart aus
+   diesem Worktree heraus schon. Der Merge nach `main` steht noch aus (siehe
+   „Reihenfolge für den nächsten Chat" unten).
+2. **Zeichenreihenfolge in `detail.c`.** Mit korrektem `action`-Feld am Gerät
+   war der Button da, aber unsichtbar: der Fokus-Rahmen (`icon_invert`,
+   echtes Pixel-Invertieren) wurde vor dem Text gezeichnet statt danach —
+   auf einer noch leeren Fläche invertiert das zu Schwarz, der danach
+   gezeichnete Text landet schwarz auf schwarz. `card.c` macht es beim
+   fokussierten Karten-Panel korrekt andersherum (erst Inhalt, dann
+   invertieren); `detail.c` jetzt angeglichen. Live verifiziert.
+
+Die zwei permanenten Diagnose-Logs aus dieser Runde
+(`detail: ... has_action=%d id=%s` beim Zeichnen, `detail: diag: has_action=%d`
+im Fokus-Dispatch) bleiben im Code — beide waren entscheidend, um zwischen
+„Feld kommt nicht an" und „Feld kommt an, wird aber nicht gezeichnet" zu
+unterscheiden, und kosten im Normalbetrieb nichts.
+
+Bewusst zurückgestellt, keine Priorität in dieser Runde: ein
+Sanduhr-/Ladeindikator für laufende Serverabfragen (Wunsch des Nutzers,
+ausdrücklich „nicht jetzt, aber langfristig sinnvoll").
+
+**Ende-zu-Ende live bestätigt**, Server aus diesem Worktree gestartet: Button
+sichtbar, Klick löst `POST /api/client/v1/entities/task/{id}/complete` aus,
+Task-Status wechselt tatsächlich auf `done`. Die komplette Kette
+(Vertrag → Backend → Firmware) ist damit erstmals vollständig durchlaufen,
+nicht nur einzeln gebaut.
+
+**Nachtrag — Tasks-Ansicht zeigte kurz weiter „open" an.** Unmittelbar nach
+dem ersten Ende-zu-Ende-Test schien eine abgehakte Aufgabe in der
+Tasks-Ansicht weiter als offen zu erscheinen, auch nach mehrfachem Refresh.
+DB-Direktprüfung und eine gezielte Diagnosezeile im Fetch (`contains_<id>`,
+seither wieder entfernt) belegten: Server, Cache und der tatsächlich am
+Gerät empfangene Response-Body waren zu jedem Zeitpunkt bereits korrekt
+(Task fehlte in der „Heute"-Sektion). Der zuvor gemeldete Zustand stammte
+von einem Testklick **vor** dem Snapshot-Redraw-Fix (`ef4eb60`); mit der
+aktuellen Firmware verschwindet eine abgehakte Aufgabe bei zwei
+unabhängig getesteten Fällen korrekt aus der Liste. Kein weiterer Fix
+nötig — der Snapshot-Redraw-Fix allein hat es gelöst.
+
+### 7b. `finish` wiederholte sich endlos für bereits abgeschlossene Sessions — erledigt, 7. September, vierte Runde
+
+Im Backend-Log sichtbar: zwei Session-IDs erschienen alle paar Sekunden mit
+`POST /sessions` (201) gefolgt von `POST .../finish` (409 Conflict). Ursache:
+`finish_session()` in `api_client.c` akzeptierte nur `http==200` als Erfolg;
+bei 409 blieb die Session in der lokalen Warteschlange und wurde bei jedem
+Sync-Durchlauf neu angeboten. Der Server hatte diese beiden Sessions längst
+als `completed`/`aborted` markiert — das Gerät lernte das nur nie, weil
+`mark_settled()` ausschließlich über den Erfolgspfad erreicht wurde.
+
+Fix: Bei 409 fragt `finish_session()` jetzt den tatsächlichen Zustand der
+Session direkt ab (`GET /sessions/{id}`) und behandelt `completed`/`aborted`
+als „aus Sicht des Servers bereits erledigt" statt als Fehlschlag — ein
+echter Konflikt (noch in Bearbeitung, echter `final_sequence`-Widerspruch)
+bleibt unverändert. Live verifiziert, auch über einen Geräte-Neustart hinweg
+(der RAM-only `settled[]`-Cache leert sich dabei absichtlich, siehe
+Kommentar dort — beide Sessions settlen trotzdem sofort statt erneut zu
+schleifen).
+
 ### 7. A2/A3: Freigabe und verlorene ACKs
 
 Am 6. September vorläufig eingeordnet, nicht abschließend geklärt. Die

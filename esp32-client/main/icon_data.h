@@ -29,6 +29,8 @@ typedef enum {
     ICON_QUEUE,
     ICON_OFFLINE,
     ICON_MENU,
+    ICON_HOME,
+    ICON_HISTORY,
     ICON_COUNT
 } icon_id;
 
@@ -60,4 +62,6 @@ static const icon_entry icon_entries[ICON_COUNT] = {
     {1484, 20}, /* queue */
     {1544, 20}, /* offline */
     {1604, 24}, /* menu */
+    {1676, 24}, /* home */
+    {1748, 24}, /* history */
 };

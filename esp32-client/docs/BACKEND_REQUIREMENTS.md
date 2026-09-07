@@ -165,6 +165,33 @@ und hier neu verifiziert (`main/api_client.c::create_session()` und
 4. **Offen.** Der Fokus hängt weiterhin am Index, nicht an der Komponenten-ID.
    SSE bleibt bewusst ungenutzt.
 
+## 11. Task abhaken aus der Detailansicht — festgelegt und umgesetzt, 7. September, vierte Runde
+
+Ausdrücklich getrennter Contract-Task, nach explizitem Auftrag. Neue,
+geschlossene Aktion `complete_task`: `GET /api/client/v1/entities/task/{id}`
+liefert bei `status="open"` zusätzlich
+`action:{"type":"complete_task","params":{"task_id":…}}`;
+`POST /api/client/v1/entities/task/{id}/complete` ruft das bereits
+vorhandene `services/tasks.py::set_task_status(id,"done")` auf — keine neue
+Statuslogik, nur ein neuer Zugang dafür über das Geräte-Credential statt des
+Operator-Tokens (der bestehende Endpoint `POST /api/tasks/{id}/done` bleibt
+operatorseitig). Idempotent: ein Aufruf auf eine bereits erledigte
+Task liefert unverändert deren aktuellen Stand, kein Fehler.
+
+Firmwareseitig ein zusätzliches fokussierbares Element neben „Zurück" in der
+Detailansicht, keine neue Bedeutung des Kurzdrucks — Details in
+`docs/API_INTERACTION.md`.
+
+**Bewusst nicht in dieser Runde:** Einzelne Listen-Einträge löschen. Die
+Task-Lösung überträgt sich nicht direkt, weil eine Liste mehrere Einträge
+hat und die Detailansicht bisher keine einzeln fokussierbaren Positionen
+kennt — eine zusätzliche Firmware-UI-Entscheidung, noch offen. Ganze Listen
+per Sprachbefehl löschen bleibt ebenfalls offen; dafür fehlt die
+Lösch-Interpretation in der Klassifikationskette
+(`services/artifacts.py`), die heute nur Dringlichkeitsänderungen für
+„diese Aufgabe" erkennt (`_task_modifier`), keine Lösch- oder
+Abschluss-Absicht für Tasks oder Listen.
+
 ## Was das Backend *nicht* liefern muss
 
 - Keine Historie von Dashboard-Snapshots über die Zeit.

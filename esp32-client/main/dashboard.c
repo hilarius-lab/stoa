@@ -68,9 +68,25 @@ static void record(dashboard_plan *plan, int top, int height,
     plan->rows[plan->count++] = (dashboard_row){top, height, first_focus, second_focus};
 }
 
+/* "today" and "lists" are the sections the tasks/lists views claim as their
+ * own; everything else stays on the main surface. Matched against the same
+ * `id` the backend already assigns each section (services/client_dashboard.py
+ * ::_idle_content()), not guessed. */
+static bool section_wanted(const char *id, dashboard_surface surface) {
+    bool is_today = id && strcmp(id, "today") == 0;
+    bool is_lists = id && strcmp(id, "lists") == 0;
+    switch (surface) {
+    case DASHBOARD_SURFACE_TASKS: return is_today;
+    case DASHBOARD_SURFACE_LISTS: return is_lists;
+    case DASHBOARD_SURFACE_MAIN:  return !is_today && !is_lists;
+    case DASHBOARD_SURFACE_ALL:
+    default:                      return true;
+    }
+}
+
 void dashboard_walk(unsigned char *canvas, const char *json,
                     int top, int bottom, int scroll, int focus_index,
-                    dashboard_plan *plan) {
+                    dashboard_plan *plan, dashboard_surface surface) {
     if (plan) memset(plan, 0, sizeof(*plan));
     cJSON *root = cJSON_Parse(json);
     const cJSON *sections = cJSON_GetObjectItemCaseSensitive(root, "sections");
@@ -80,6 +96,7 @@ void dashboard_walk(unsigned char *canvas, const char *json,
     int focus_counter = 0;
     const cJSON *section;
     cJSON_ArrayForEach(section, sections) {
+        if (!section_wanted(string_of(section, "id"), surface)) continue;
         const char *heading = string_of(section, "title");
         const cJSON *items = cJSON_GetObjectItemCaseSensitive(section, "items");
         if (heading && heading[0]) {
@@ -161,8 +178,26 @@ static const char *kind_word(const char *type) {
     return type;
 }
 
+/* "Erledigt" is the only label this build knows; any other action.type is
+ * inert here, same convention as an unimplemented action on a dashboard
+ * card — present in the response, not acted on. */
+static const char *action_label_for(const cJSON *root) {
+    const cJSON *action = cJSON_GetObjectItemCaseSensitive(root, "action");
+    const char *type = action ? string_of(action, "type") : NULL;
+    if (type && strcmp(type, "complete_task") == 0) return "Erledigt";
+    return NULL;
+}
+
+bool dashboard_entity_has_action(const char *json) {
+    cJSON *root = cJSON_Parse(json);
+    bool has = cJSON_IsObject(root) && action_label_for(root) != NULL;
+    cJSON_Delete(root);
+    return has;
+}
+
 int dashboard_entity_draw(unsigned char *canvas, const char *json,
-                          int top, int bottom, int line_offset, int *page) {
+                          int top, int bottom, int line_offset, int *page,
+                          bool action_focused) {
     cJSON *root = cJSON_Parse(json);
     if (!cJSON_IsObject(root)) { cJSON_Delete(root); if (page) *page = 1; return 0; }
 
@@ -185,6 +220,8 @@ int dashboard_entity_draw(unsigned char *canvas, const char *json,
         .body = body,
         .answer = string_of(root, "answer"),
         .meta = meta,
+        .action_label = action_label_for(root),
+        .action_focused = action_focused,
     };
     if (page) *page = detail_page_lines(&detail, top, bottom);
     int total = canvas ? detail_draw(canvas, &detail, top, bottom, line_offset)

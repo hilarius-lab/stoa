@@ -33,6 +33,18 @@ strip_pattern dashboard_combined_urgency(const char *color_role, const char *sev
  * resolvable entity reference. */
 bool dashboard_focusable(const char *action_type, bool has_entity_ref);
 
+/* Which slice of the snapshot's sections a walk draws. The view selector
+ * splits "today" (tasks) and "lists" out of the main surface into their own
+ * views, so the main surface skips both rather than showing them twice.
+ * ALL is for a context that is not the home dashboard at all — a past
+ * session's snapshot — where nothing should be filtered out. */
+typedef enum {
+    DASHBOARD_SURFACE_MAIN,
+    DASHBOARD_SURFACE_TASKS,
+    DASHBOARD_SURFACE_LISTS,
+    DASHBOARD_SURFACE_ALL,
+} dashboard_surface;
+
 /* --- layout plan and paging ----------------------------------------------- */
 
 #define DASHBOARD_MAX_ROWS 48

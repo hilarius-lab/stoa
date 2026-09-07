@@ -79,7 +79,34 @@ int detail_draw(unsigned char *canvas, const detail_content *detail,
         }
     }
 
-    if (detail->meta && detail->meta[0]) {
+    if (detail->action_label && detail->action_label[0]) {
+        /* Two selectable words stand in for the meta line: "Zurück" always,
+         * the action label beside it. Same focus treatment as a card —
+         * inverted, not just labelled — so the two views of "what is
+         * selected" never disagree. */
+        int foot = bottom - PAD - text_font_preview.line_height;
+        for (int x = text_left; x < right - PAD; x++)
+            icon_fill(canvas, x, foot - 6, 1, 1, STRIP_SOLID);
+        static const char back[] = "Zurück";
+        int back_width = text_measure(&text_font_preview, back, strlen(back));
+        text_draw(canvas, &text_font_preview, text_left, foot, back, strlen(back));
+        /* Invert after the glyphs are on the canvas, same order card.c uses
+         * for a focused card: inverting first would flip a still-blank
+         * panel to solid black, and the text drawn on top of that would be
+         * black ink on black — present, but invisible. */
+        if (!detail->action_focused)
+            icon_invert(canvas, text_left - 4, foot - 3, back_width + 8,
+                        text_font_preview.line_height + 2);
+
+        int action_left = text_left + back_width + 32;
+        int action_width = text_measure(&text_font_preview, detail->action_label,
+                                        strlen(detail->action_label));
+        text_draw(canvas, &text_font_preview, action_left, foot,
+                  detail->action_label, strlen(detail->action_label));
+        if (detail->action_focused)
+            icon_invert(canvas, action_left - 4, foot - 3, action_width + 8,
+                        text_font_preview.line_height + 2);
+    } else if (detail->meta && detail->meta[0]) {
         int foot = bottom - PAD - text_font_preview.line_height;
         for (int x = text_left; x < right - PAD; x++)
             icon_fill(canvas, x, foot - 6, 1, 1, STRIP_SOLID);

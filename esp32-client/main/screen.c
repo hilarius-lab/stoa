@@ -86,8 +86,17 @@ static atomic_uint status_pending, status_attention;
 static atomic_bool status_storage_low, status_storage_block;
 static atomic_bool status_network, status_recording;
 static atomic_uint status_minutes; /* minutes since midnight, or UINT_MAX */
-static atomic_bool snapshot_seen, snapshot_empty, header_focused = true;
+static atomic_bool snapshot_seen, snapshot_empty;
 static _Atomic int64_t snapshot_at_us;
+/* Set from the upload worker's task when a new snapshot arrives, consumed
+ * exactly once by the display task (see screen_task's message loop) to reset
+ * the three dashboard-family focuses to the header. Not touched directly from
+ * there: dashboard_focus/tasks_focus/lists_focus belong to the display task
+ * alone, the same reason move_focus() etc. are never called from outside it.
+ * Focus identity across revisions is a later step; until then a new snapshot
+ * returns to the menu button rather than pointing at a card that may no
+ * longer exist. */
+static atomic_bool snapshot_focus_reset = true;
 /* The server decides when its own snapshot stops being trustworthy; the value
  * comes from `limits.dashboard_cache_max_age_seconds` in the capabilities. 0
  * means the server did not say, in which case the local fallback applies. */
@@ -106,7 +115,8 @@ static atomic_uint cache_max_age_s;
 static char *snapshot_json;
 static SemaphoreHandle_t snapshot_lock;
 /* Focus and scroll belong to the display task alone; nothing else touches them.
- * -1 is the history button, which is where the dashboard is entered. */
+ * -1 is the menu button, which is where the dashboard is entered and which now
+ * opens the view selector rather than the recording list directly. */
 #define BODY_TOP (STATUS_BAR_HEIGHT + HEADER_HEIGHT + 8)
 #define BODY_BOTTOM 792
 static int dashboard_focus = -1;
@@ -120,6 +130,14 @@ static char *entity_json;
 static SemaphoreHandle_t entity_lock;
 static bool detail_open, detail_waiting;
 static int detail_line;
+/* The id the detail view is currently showing, captured once when it opens —
+ * dashboard_walk() only knows the focused card's id at that moment, and
+ * complete_task needs it again later, whenever the reader actually presses
+ * the action. 0 = "Zurück" carries the focus, 1 = the action does; only
+ * meaningful while the open entity's own action.type is one this build
+ * implements (see dashboard_entity_has_action()). */
+static char detail_entity_id[40];
+static int detail_action_focus;
 /* The history view. Same handover as the snapshot and the entity: written by
  * the upload worker, parsed by the display task, so it needs the same lock. */
 #define HISTORY_MAX 8192
@@ -136,6 +154,38 @@ static int history_scroll;
 static char *session_json;
 static SemaphoreHandle_t session_lock;
 static bool session_open, session_waiting;
+/* Tasks and lists are the same snapshot as the dashboard, just walked with a
+ * narrower section filter (dashboard_map.h::dashboard_surface) — no separate
+ * fetch, no separate JSON buffer. Each keeps its own focus/scroll so leaving
+ * and returning does not lose the reader's place, the same reasoning the
+ * dashboard and the history list already follow independently. */
+static bool tasks_open, lists_open;
+static int tasks_focus = -1, tasks_scroll;
+static int lists_focus = -1, lists_scroll;
+/* The menu button now opens this instead of jumping straight to the
+ * recording list. 0=dashboard, 1=tasks, 2=lists, 3=history. */
+static bool selector_open;
+static int selector_focus;
+
+/* Which of the three dashboard-family views is showing, and its own focus and
+ * scroll — tasks and lists are otherwise the plain dashboard renderer with a
+ * narrower section filter, so everything downstream of these three just asks
+ * "which one" instead of duplicating draw_dashboard()/move_focus() per view. */
+static dashboard_surface active_surface(void) {
+    if (tasks_open) return DASHBOARD_SURFACE_TASKS;
+    if (lists_open) return DASHBOARD_SURFACE_LISTS;
+    return DASHBOARD_SURFACE_MAIN;
+}
+static int *active_focus_ptr(void) {
+    if (tasks_open) return &tasks_focus;
+    if (lists_open) return &lists_focus;
+    return &dashboard_focus;
+}
+static int *active_scroll_ptr(void) {
+    if (tasks_open) return &tasks_scroll;
+    if (lists_open) return &lists_scroll;
+    return &dashboard_scroll;
+}
 #define STATUS_TIME_UNKNOWN 0xFFFFFFFFu
 #define PARTIAL_REFRESH_LIMIT 200
 
@@ -171,9 +221,15 @@ static void draw_glyph_portrait(unsigned char *buffer,int glyph,int logical_x,in
 static void draw_header(unsigned char *buffer) {
     /* While the list is open the header button is its way out, so it carries
      * the focus marker whenever the selection sits on it. Otherwise the marker
-     * follows the dashboard focus. One button, one meaning, in both views. */
+     * follows whichever dashboard-family view is active. One button, one
+     * meaning, in every view — read directly rather than through a cached
+     * flag, since this runs in the same task that owns all four focuses. */
     header_state state = {.focused = history_open ? history_focus < 0
-                                                  : atomic_load(&header_focused)};
+                                                  : *active_focus_ptr() < 0,
+                          .selector_open = selector_open,
+                          .selector_focus = selector_focus,
+                          .active_view = tasks_open ? 1 : lists_open ? 2
+                                       : history_open ? 3 : 0};
     /* What ages is the contact, not the content: `snapshot_at_us` is set on
      * every accepted poll, including one that returns an unchanged dashboard.
      * A snapshot the server keeps confirming stays current no matter how old
@@ -214,8 +270,9 @@ static void draw_detail(unsigned char *buffer) {
     }
     int page = 1;
     int total = dashboard_entity_draw(buffer, copy, BODY_TOP, BODY_BOTTOM,
-                                      detail_line, &page);
-    ESP_LOGI("detail", "line=%d of %d page=%d", detail_line, total, page);
+                                      detail_line, &page, detail_action_focus == 1);
+    ESP_LOGI("detail", "line=%d of %d page=%d has_action=%d id=%s",
+             detail_line, total, page, dashboard_entity_has_action(copy), detail_entity_id);
     free(copy);
 }
 
@@ -224,12 +281,23 @@ static void page_detail(int delta) {
     if (!copy) return;
     if (!entity_take(copy, ENTITY_MAX)) { free(copy); return; }
     int page = 1;
-    int total = dashboard_entity_draw(NULL, copy, BODY_TOP, BODY_BOTTOM, 0, &page);
+    int total = dashboard_entity_draw(NULL, copy, BODY_TOP, BODY_BOTTOM, 0, &page, false);
     free(copy);
     int next = detail_line + delta * page;
     if (next > total - page) next = total - page;
     if (next < 0) next = 0;
     detail_line = next;
+}
+
+/* Whether the currently open detail's own entity carries an action this
+ * build implements — decides whether the detail's up/down buttons pick
+ * between "Zurück" and it, instead of paging the body text. */
+static bool detail_current_has_action(void) {
+    char *copy = heap_caps_malloc(ENTITY_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!copy) return false;
+    bool has = entity_take(copy, ENTITY_MAX) && dashboard_entity_has_action(copy);
+    free(copy);
+    return has;
 }
 
 static void open_detail(void) {
@@ -238,7 +306,7 @@ static void open_detail(void) {
         xSemaphoreTake(snapshot_lock, pdMS_TO_TICKS(200)) == pdTRUE) {
         if (snapshot_json[0])
             dashboard_walk(NULL, snapshot_json, BODY_TOP, BODY_BOTTOM, 0,
-                           dashboard_focus, &plan);
+                           *active_focus_ptr(), &plan, active_surface());
         xSemaphoreGive(snapshot_lock);
     }
     if (!plan.focus_has_entity) {
@@ -280,6 +348,8 @@ static void open_detail(void) {
     detail_open = true;
     detail_waiting = true;
     detail_line = 0;
+    detail_action_focus = 0;
+    snprintf(detail_entity_id, sizeof(detail_entity_id), "%s", plan.focus_id);
     api_client_open_entity(plan.focus_type, plan.focus_id);
 }
 
@@ -398,6 +468,41 @@ static void open_history(void) {
     api_client_open_history();
 }
 
+/* --- view selector --------------------------------------------------------- */
+
+/* Reachable from the header button in any of the four views. Lands on
+ * whichever one is currently showing, so activating again without moving
+ * closes it without changing anything — the same "re-select what's already
+ * open" no-op the dashboard-family views give for free. */
+static void open_selector(void) {
+    selector_open = true;
+    selector_focus = tasks_open ? 1 : lists_open ? 2 : history_open ? 3 : 0;
+}
+
+static void move_selector_focus(int delta) {
+    /* The row runs left to right; the up button sends delta=-1 everywhere
+     * else, which would move the cursor left. Flipped here only — reported
+     * as more intuitive for a horizontal row than the vertical convention it
+     * would otherwise inherit unchanged. */
+    int next = selector_focus - delta;
+    /* Same non-wrapping ring as the history list: a wrap past either end
+     * looks like a jump on a panel that takes half a second to redraw. */
+    if (next < 0) next = 0;
+    if (next > 3) next = 3;
+    selector_focus = next;
+}
+
+static void activate_selector(void) {
+    selector_open = false;
+    if (selector_focus == 3) {
+        if (!history_open) open_history();
+        return;
+    }
+    history_open = history_waiting = false;
+    tasks_open = selector_focus == 1;
+    lists_open = selector_focus == 2;
+}
+
 static bool session_take(char *into, size_t capacity) {
     if (!session_json || !session_lock) return false;
     if (xSemaphoreTake(session_lock, pdMS_TO_TICKS(200)) != pdTRUE) return false;
@@ -423,7 +528,8 @@ static void draw_session(unsigned char *buffer) {
         free(copy);
         return;
     }
-    dashboard_walk(buffer, copy, BODY_TOP, BODY_BOTTOM, 0, -1, NULL);
+    dashboard_walk(buffer, copy, BODY_TOP, BODY_BOTTOM, 0, -1, NULL,
+                   DASHBOARD_SURFACE_ALL);
     free(copy);
 }
 
@@ -454,7 +560,8 @@ static void draw_dashboard(unsigned char *buffer) {
     if (xSemaphoreTake(snapshot_lock, pdMS_TO_TICKS(200)) != pdTRUE) return;
     if (snapshot_json[0])
         dashboard_walk(buffer, snapshot_json, BODY_TOP, BODY_BOTTOM,
-                       dashboard_scroll, dashboard_focus, NULL);
+                       *active_scroll_ptr(), *active_focus_ptr(), NULL,
+                       active_surface());
     xSemaphoreGive(snapshot_lock);
 }
 
@@ -462,22 +569,30 @@ static void draw_dashboard(unsigned char *buffer) {
  * drawing all see the same snapshot. */
 static void move_focus(int delta) {
     dashboard_plan plan = {0};
+    dashboard_surface surface = active_surface();
     if (snapshot_json && snapshot_lock &&
         xSemaphoreTake(snapshot_lock, pdMS_TO_TICKS(200)) == pdTRUE) {
         if (snapshot_json[0])
-            dashboard_walk(NULL, snapshot_json, BODY_TOP, BODY_BOTTOM, 0, -1, &plan);
+            dashboard_walk(NULL, snapshot_json, BODY_TOP, BODY_BOTTOM, 0, -1,
+                           &plan, surface);
         xSemaphoreGive(snapshot_lock);
     }
     if (!delta) return;   /* a plain redraw request */
-    int next = dashboard_focus + delta;
-    if (next < -1) next = -1;
+    int *focus = active_focus_ptr(), *scroll = active_scroll_ptr();
+    int next = *focus + delta;
+    if (next < -1) {
+        /* Already on the menu icon and still pulling up: nothing left to
+         * focus, so the gesture is repurposed as "fetch the current view
+         * again now" instead of doing nothing. */
+        next = -1;
+        api_client_request_sync();
+    }
     if (next >= plan.focusable) next = plan.focusable ? plan.focusable - 1 : -1;
-    dashboard_focus = next;
-    dashboard_scroll = next < 0 ? 0
-        : dashboard_scroll_for(&plan, next, dashboard_scroll, BODY_BOTTOM - BODY_TOP);
-    atomic_store(&header_focused, next < 0);
-    ESP_LOGI("dashboard", "focus=%d of %d scroll=%d", next, plan.focusable,
-             dashboard_scroll);
+    *focus = next;
+    *scroll = next < 0 ? 0
+        : dashboard_scroll_for(&plan, next, *scroll, BODY_BOTTOM - BODY_TOP);
+    ESP_LOGI("dashboard", "surface=%d focus=%d of %d scroll=%d", surface, next,
+             plan.focusable, *scroll);
 }
 
 static void draw_status(unsigned char *buffer) {
@@ -524,6 +639,14 @@ static void screen_task(void *unused) {
     screen_message message;
     while (xQueueReceive(queue, &message, portMAX_DELAY)) {
         if (message.ambient) atomic_store(&redraw_pending, false);
+        /* Test-and-clear: fires exactly once per snapshot that actually
+         * arrived, however many redraws happen between checks. Safe to touch
+         * the three focuses directly here — this is the one task that owns
+         * them. */
+        if (atomic_exchange(&snapshot_focus_reset, false)) {
+            dashboard_focus = tasks_focus = lists_focus = -1;
+            dashboard_scroll = tasks_scroll = lists_scroll = 0;
+        }
         if (message.window_test) {
             /* The probe writes into the live framebuffer instead of reloading a
              * background, so the panel keeps whatever it currently shows and
@@ -565,29 +688,56 @@ static void screen_task(void *unused) {
         if (message.focus_move || message.focus_activate) {
             if (message.focus_move) {
                 /* Whichever view is open owns the buttons: a detail pages its
-                 * text, the history moves its selection, and only the dashboard
-                 * itself moves the card focus. */
-                if (detail_open) page_detail(message.focus_delta);
+                 * text, the history and the selector move their own
+                 * selection, and only a dashboard-family view (dashboard,
+                 * tasks, lists) moves the card focus. */
+                if (detail_open) {
+                    /* An entity with an action trades paging for choosing
+                     * between "Zurück" and it — agreed as the simpler of two
+                     * options, since a page-then-choose ring is harder to get
+                     * right without hardware to check it against, and the
+                     * entities that carry an action today are short enough
+                     * that paging was never doing anything there anyway. */
+                    bool has_action = detail_current_has_action();
+                    if (has_action) {
+                        int next = detail_action_focus - message.focus_delta;
+                        if (next < 0) next = 0;
+                        if (next > 1) next = 1;
+                        detail_action_focus = next;
+                        ESP_LOGI("detail", "diag: has_action=1 action_focus=%d", detail_action_focus);
+                    } else {
+                        page_detail(message.focus_delta);
+                        ESP_LOGI("detail", "diag: has_action=0 (paged instead)");
+                    }
+                }
                 else if (session_open) { /* nothing to move: one page, back only */ }
+                else if (selector_open) move_selector_focus(message.focus_delta);
                 else if (history_open) move_history_focus(message.focus_delta);
                 else move_focus(message.focus_delta);
             } else if (detail_open) {
-                detail_open = detail_waiting = false;   /* back to the overview */
+                /* "Zurück" focused, or no action on this entity at all: leave,
+                 * same as before. The action focused: fire the mutation and
+                 * stay open — the response redraws the same view once it
+                 * lands, through screen_entity_received like any other fetch. */
+                if (detail_action_focus == 1 && detail_current_has_action())
+                    api_client_complete_task(detail_entity_id);
+                else
+                    detail_open = detail_waiting = false;   /* back to the overview */
             } else if (session_open) {
                 /* Back to whatever opened it: the history list or, since a
                  * session card follows its own action, the dashboard. Closing
                  * this view alone is enough — the draw path picks the next open
                  * one by itself. */
                 session_open = session_waiting = false;
+            } else if (selector_open) {
+                activate_selector();
             } else if (history_open) {
-                /* The header button leaves the list; a row opens the recording
-                 * it names. Leaving is an explicit target rather than a side
-                 * effect of pressing anywhere, which is why it sits in the same
-                 * focus ring as the entries. */
-                if (history_focus < 0) history_open = history_waiting = false;
+                /* The header button now opens the selector, same as every
+                 * other view; a row opens the recording it names. */
+                if (history_focus < 0) open_selector();
                 else open_session();
-            } else if (dashboard_focus < 0) {
-                open_history();
+            } else if (*active_focus_ptr() < 0) {
+                open_selector();
             } else {
                 open_detail();
             }
@@ -952,10 +1102,15 @@ void screen_snapshot_received(const char *json, bool empty) {
     atomic_store(&snapshot_empty, empty);
     atomic_store(&snapshot_at_us, esp_timer_get_time());
     atomic_store(&snapshot_seen, true);
-    /* Focus identity across revisions is a later step; until then a new
-     * snapshot returns to the history button rather than pointing at a card
-     * that may no longer exist. */
-    atomic_store(&header_focused, true);
+    atomic_store(&snapshot_focus_reset, true);
+    /* Redraw through the queue so the display task stays the only writer --
+     * the same pattern screen_entity_received()/_history_/_session_ already
+     * use. Without this the fresh snapshot sits in the buffer unseen until
+     * some unrelated button press happens to redraw the screen: a snapshot
+     * arrival is not itself a queue message, so nothing wakes the display
+     * task to show it. */
+    screen_message message = {.focus_move=true, .focus_delta=0};
+    post(&message);
 }
 void screen_focus_move(int delta) {
     screen_message message = {.focus_move=true, .focus_delta=delta};

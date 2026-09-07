@@ -96,6 +96,11 @@ static unsigned cache_max_age_s;
  * `pending` is the handover, so the strings are complete before it is set. */
 static char entity_type[32], entity_id[40];
 static atomic_bool entity_pending;
+/* A task the detail view asked to mark complete. Distinct from entity_id/
+ * entity_type: a fetch and a mutation in flight at once must not overwrite
+ * each other's target. */
+static char complete_task_id[40];
+static atomic_bool complete_task_pending;
 static atomic_bool history_pending;
 static char session_id_wanted[40];
 static atomic_bool session_pending;
@@ -698,6 +703,34 @@ static bool upload_chunk(journal_session *session, journal_chunk *chunk) {
     return durable && persisted;
 }
 
+/* finish() answers 409 for more than one reason (client_sessions.py raises
+ * the same SESSION_STATE_CONFLICT for "already aborted/completed" and for a
+ * final_sequence mismatch), and the body's free-text message is not a wire
+ * contract this device parses. Asking the session's own state directly is:
+ * "completed"/"aborted" means the server already has what this finish was
+ * trying to achieve, so the local side may as well agree. Anything else
+ * (still processing, a real sequence conflict) is left alone to be retried
+ * or surfaced as before. Without this a session whose finish the device
+ * never durably learned about stays in the local queue and gets re-created
+ * and re-finished on every single sync pass for the life of the card. */
+static bool session_already_settled(const char *session_id) {
+    char path[128];
+    snprintf(path, sizeof(path), "/api/client/v1/sessions/%s", session_id);
+    char *body = malloc(API_RESPONSE_MAX);
+    if (!body) return false;
+    int http = 0;
+    bool ok = call(HTTP_METHOD_GET, path, NULL, body, API_RESPONSE_MAX, &http) && http == 200;
+    bool settled = false;
+    if (ok) {
+        cJSON *root = cJSON_Parse(body);
+        settled = cJSON_IsObject(root) &&
+                  (string_is(root, "state", "completed") || string_is(root, "state", "aborted"));
+        cJSON_Delete(root);
+    }
+    memset(body, 0, API_RESPONSE_MAX); free(body);
+    return settled;
+}
+
 static bool finish_session(journal_session *session) {
     char path[128], request[128];
     snprintf(path, sizeof(path), "/api/client/v1/sessions/%s/finish", session->session_id);
@@ -716,9 +749,14 @@ static bool finish_session(journal_session *session) {
         cJSON_Delete(root);
     }
     status.last_http = http;
-    if (ok) status.finishes_ok++;
     memset(body, 0, API_RESPONSE_MAX); free(body);
-    return ok;
+    if (ok) { status.finishes_ok++; return true; }
+    if (http == 409 && session_already_settled(session->session_id)) {
+        ESP_LOGI("api", "finish %s: server already has it completed/aborted; settling locally",
+                 session->session_id);
+        return true;
+    }
+    return false;
 }
 
 /* The server accepted the finish but reports the upload as incomplete: it is
@@ -1093,6 +1131,35 @@ static void fetch_entity(void) {
     atomic_store(&entity_pending, false);
 }
 
+/* The one mutation the closed action catalog grants the device today. The
+ * response is the same DashboardEntityResponse a plain fetch returns (now
+ * without `action`, the task being done), so it goes through the same
+ * screen_entity_received() the detail view already redraws from — no second
+ * "here is an updated task" path to keep in sync with the first. */
+static void submit_complete_task(void) {
+    if (!atomic_load(&complete_task_pending)) return;
+    char path[128];
+    snprintf(path, sizeof(path), "/api/client/v1/entities/task/%s/complete", complete_task_id);
+    char *body = malloc(API_RESPONSE_MAX);
+    int http = 0;
+    /* No request body: the task is named in the path, and passing NULL rather
+     * than "" is what actually signals "no body" to call() — reset_request()
+     * decides on request != NULL, and an empty string is not NULL. */
+    bool ok = body && call(HTTP_METHOD_POST, path, NULL, body, API_RESPONSE_MAX, &http) &&
+              http == 200;
+    if (ok) {
+        cJSON *root = cJSON_Parse(body);
+        ok = cJSON_IsObject(root) && string_is(root, "id", complete_task_id) &&
+             string_is(root, "type", "task");
+        cJSON_Delete(root);
+    }
+    status.last_http = http;
+    if (ok) screen_entity_received(body);
+    ESP_LOGI("api", "complete_task %s http=%d", ok ? "ok" : "failed", http);
+    if (body) { memset(body, 0, API_RESPONSE_MAX); free(body); }
+    atomic_store(&complete_task_pending, false);
+}
+
 /* The session list for the history view. Unlike the dashboard this is a plain
  * array, so the only check is that it is one: a body of the wrong shape is
  * reported as unavailable rather than drawn as an empty history, which would
@@ -1274,6 +1341,11 @@ static void fail_pending_readers(void) {
         screen_entity_received(NULL);
         ESP_LOGI("api", "entity fetch failed: name not resolved");
     }
+    /* No screen_entity_received(NULL) here: a mutation that could not be
+     * attempted must not blank the task the reader is still looking at, only
+     * leave the button retriable. */
+    if (atomic_exchange(&complete_task_pending, false))
+        ESP_LOGI("api", "complete_task failed: name not resolved");
     if (atomic_exchange(&history_pending, false)) {
         screen_history_received(NULL);
         ESP_LOGI("api", "history fetch failed: name not resolved");
@@ -1314,6 +1386,7 @@ static void api_task(void *unused) {
         if (resolve_server()) {
             /* A waiting reader comes before housekeeping. */
             fetch_entity();
+            submit_complete_task();
             fetch_history();
             fetch_session();
             synchronize();
@@ -1375,6 +1448,13 @@ void api_client_open_entity(const char *type, const char *id) {
     if (worker) xTaskNotifyGive(worker);
 }
 
+void api_client_complete_task(const char *task_id) {
+    if (!task_id || atomic_load(&complete_task_pending)) return;
+    snprintf(complete_task_id, sizeof(complete_task_id), "%s", task_id);
+    atomic_store(&complete_task_pending, true);
+    if (worker) xTaskNotifyGive(worker);
+}
+
 void api_client_open_history(void) {
     if (atomic_load(&history_pending)) return;
     atomic_store(&history_pending, true);
@@ -1390,6 +1470,7 @@ void api_client_open_session(const char *session_id) {
 
 void api_client_network_up(void) { if (worker) xTaskNotifyGive(worker); }
 void api_client_queue_changed(void) { if (worker) xTaskNotifyGive(worker); }
+void api_client_request_sync(void) { if (worker) xTaskNotifyGive(worker); }
 
 void api_client_report(void) {
     printf("@API configured=%d authenticated=%d compatible=%d gate_ok=%u gate_failed=%u sessions=%u create_ok=%u create_failed=%u replay_failed=%u settled=%u abandoned=%u acked=%u upload_failed=%u reconciled=%u resynced=%u unresyncable=%u released=%u refused=%u withheld=%u finish=%u last_http=%d\n",

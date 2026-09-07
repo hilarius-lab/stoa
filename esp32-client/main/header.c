@@ -37,13 +37,34 @@ void header_draw(unsigned char *canvas, const header_state *state) {
     char age[24];
     char line[48];
 
-    /* The history button. Focus inverts it, as it does a card, so the marker
-     * means the same thing everywhere. */
+    /* The menu button. Focus inverts it, as it does a card, so the marker
+     * means the same thing everywhere. Once the selector is open the button
+     * itself is just one of the four choices, marked the same way as the
+     * others below rather than a second time here. */
     int size = icon_size(ICON_MENU);
     int button_left = MARGIN, button_top = CENTRE - size / 2;
     icon_draw(canvas, ICON_MENU, button_left, button_top, false);
-    if (state->focused)
+    if (state->focused && !state->selector_open)
         icon_invert(canvas, button_left - 6, button_top - 5, size + 12, size + 10);
+
+    /* The four views sit in the row permanently. The active one carries a
+     * standing outline; while a pick is in progress that outline steps aside
+     * and only the moving cursor marks a spot, so a still icon and a moving
+     * one are never both claiming the same mark. */
+    static const icon_id views[4] = {ICON_HOME, ICON_TASK, ICON_LIST, ICON_HISTORY};
+    int pen = button_left + size + 20;
+    for (int i = 0; i < 4; i++) {
+        int isize = icon_size(views[i]);
+        int itop = CENTRE - isize / 2;
+        icon_draw(canvas, views[i], pen, itop, false);
+        if (state->selector_open) {
+            if (state->selector_focus == i)
+                icon_invert(canvas, pen - 6, itop - 5, isize + 12, isize + 10);
+        } else if (state->active_view == i) {
+            icon_outline(canvas, pen - 6, itop - 5, isize + 12, isize + 10, 2);
+        }
+        pen += isize + 16;
+    }
 
     switch (state->snapshot) {
     case HEADER_NEVER:

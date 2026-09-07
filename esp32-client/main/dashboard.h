@@ -18,10 +18,18 @@
  * geometry is recorded for the paging arithmetic. Either may be omitted. */
 void dashboard_walk(unsigned char *canvas, const char *json,
                     int top, int bottom, int scroll, int focus_index,
-                    dashboard_plan *plan);
+                    dashboard_plan *plan, dashboard_surface surface);
 
 /* Draw an entity response as the detail view. Returns the number of body text
  * lines, and reports through `page` how many of them fit at once. Both come
- * from the same layout the drawing uses. */
+ * from the same layout the drawing uses. `action_focused` only matters when
+ * the entity's own `action.type` is one the ESP implements (currently
+ * `complete_task`); the caller owns that focus, not this function. */
 int dashboard_entity_draw(unsigned char *canvas, const char *json,
-                          int top, int bottom, int line_offset, int *page);
+                          int top, int bottom, int line_offset, int *page,
+                          bool action_focused);
+
+/* Whether the entity response names an action this build implements, so the
+ * caller can decide whether the up/down buttons pick between "Zurück" and the
+ * action instead of paging — see docs/API_INTERACTION.md. */
+bool dashboard_entity_has_action(const char *json);

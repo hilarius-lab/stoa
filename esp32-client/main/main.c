@@ -112,9 +112,32 @@ static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         char text[40];
         if (event && esp_netif_get_dns_info(event->esp_netif, ESP_NETIF_DNS_MAIN, &dns) == ESP_OK)
             printf("DNS (primaer): %s\n", esp_ip4addr_ntoa(&dns.ip.u_addr.ip4, text, sizeof(text)));
+        /* Two more resolvers behind the DHCP-provided one, not instead of it —
+         * MAIN is left exactly as DHCP set it. The gateway often runs its own
+         * caching resolver, distinct from whatever DNS option DHCP advertised;
+         * 1.1.1.1 is a fixed, public last resort for a primary that stops
+         * answering. Nothing here retries anything itself: LWIP's DNS client
+         * already moves to the next configured server on a timeout on its own
+         * (dns.c) once more than one slot is filled. Certificate validation
+         * is unaffected either way — it checks the hostname, never which
+         * resolver supplied the address for it. */
+        if (event) {
+            esp_netif_dns_info_t backup = {0};
+            backup.ip.type = ESP_IPADDR_TYPE_V4;
+            backup.ip.u_addr.ip4 = event->ip_info.gw;
+            esp_netif_set_dns_info(event->esp_netif, ESP_NETIF_DNS_BACKUP, &backup);
+
+            esp_netif_dns_info_t fallback = {0};
+            fallback.ip.type = ESP_IPADDR_TYPE_V4;
+            fallback.ip.u_addr.ip4.addr = 0x01010101; /* 1.1.1.1 — same bytes in either order */
+            esp_netif_set_dns_info(event->esp_netif, ESP_NETIF_DNS_FALLBACK, &fallback);
+        }
         if (event && esp_netif_get_dns_info(event->esp_netif, ESP_NETIF_DNS_BACKUP, &dns) == ESP_OK &&
             dns.ip.u_addr.ip4.addr)
             printf("DNS (zweiter): %s\n", esp_ip4addr_ntoa(&dns.ip.u_addr.ip4, text, sizeof(text)));
+        if (event && esp_netif_get_dns_info(event->esp_netif, ESP_NETIF_DNS_FALLBACK, &dns) == ESP_OK &&
+            dns.ip.u_addr.ip4.addr)
+            printf("DNS (dritter): %s\n", esp_ip4addr_ntoa(&dns.ip.u_addr.ip4, text, sizeof(text)));
         screen_status_network(true);
         /* Every join, not only the first: a device that was off for a week has
          * a useless clock even though it once had a good one. */
