@@ -1,5 +1,22 @@
 # Änderungen
 
+## 2026-09-07 – Zu kurze Aufnahmen erzeugen keine Session mehr
+
+Live am Gerät gefunden nach Start des Verarbeitungs-Workers: `memo-list` zeigte
+zwei leere „incomplete"-Geisterschnipsel (0 Segmente) von versehentlich kurzen
+Tastendrücken.
+
+`record_memo()` legt Verzeichnis und Session-Journaleintrag absichtlich sofort
+an, bevor überhaupt feststeht, wie lange gehalten wird (Absturzsicherheit).
+Neu: direkt nach dem Schließen von Mikrofon und Encoder, vor dem Schreiben von
+`COMPLETE.TXT`, wird die Gesamtdauer geprüft (`MEMO_MIN_DURATION_MS 1500`,
+klar über der ~500-ms-Gestenerkennung in `main.c`). Darunter wird das gerade
+erst angelegte Verzeichnis samt Journal sofort wieder entfernt — anders als
+`discard_one()`, das ein bereits als `ready` markiertes Segment aus gutem
+Grund verweigert, ist das hier sicher: Der Sync-Worker hat diese Aufnahme
+noch nie gesehen, nichts kann „deliverable" sein. Build und Flash bestanden;
+der eigentliche kurze Tastendruck ist noch nicht am Gerät gegengeprüft.
+
 ## 2026-09-07 – Drei weitere Retryklassen beim Chunk-Upload
 
 Punkt 4 der Reihenfolge. Korrektur zur eigenen Vorrunde: die
