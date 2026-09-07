@@ -62,3 +62,73 @@ Hardware-Sicherheitszustände erforderlich.
   `docs/DEVELOPMENT_GUIDE.md`
 - `CHANGELOG.md` bei nutzerrelevanten, vertraglichen oder strukturellen
   Änderungen anpassen; betroffene Dokumentation aktuell halten
+
+## Wie Claude Code sich in dieser Umgebung bewegt
+
+Verifiziert 2026-09-07: Build, Flash und Monitor gegen reale Hardware (ESP32-S3
+über USB) und ein reales Backend (`living-notebook.heusgenradig.de` sowie
+`localhost:8000` auf demselben Host) liefen erfolgreich durch. Diese Sektion
+ist das Ergebnis, keine Zielvorgabe — bei abweichendem Verhalten gilt die
+tatsächliche Beobachtung, nicht dieser Text.
+
+**Shells sind getrennte Werkzeuge mit getrenntem Zustand.** Das Bash-Tool ist
+Git-Bash/POSIX-Sh, das PowerShell-Tool eine eigene Windows-PowerShell-Instanz.
+Das Arbeitsverzeichnis bleibt je Tool über Aufrufe hinweg erhalten,
+Umgebungsvariablen und aktivierte Profile/venvs nicht. Für ESP-IDF müssen die
+Aktivierung, `cd` und `idf.py` deshalb in **einem** PowerShell-Aufruf
+verkettet werden:
+
+```powershell
+C:\Espressif\tools\Microsoft.v5.5.2.PowerShell_profile.ps1
+cd C:\Users\<Nutzer>\Documents\smart-notebook\esp32-client
+idf.py -p COM9 build
+```
+
+Nicht `export.ps1` verwenden (sucht das venv am falschen Pfad, siehe
+`CLAUDE.md`). Der COM-Port wird über PowerShell ermittelt, nicht geraten:
+`Get-PnpDevice -Class Ports -PresentOnly`.
+
+**Lange Befehle brauchen `run_in_background`, aber Vorsicht bei der
+Ausgabe.** Ein erster oder größerer `idf.py build` kann mehrere Minuten
+dauern; im Hintergrund starten und über `TaskOutput`/das Output-File den
+Stand prüfen. `... | Select-Object -Last N` an so einen Befehl zu hängen
+verzögert jede Ausgabe bis zum Prozessende, weil PowerShell dafür den
+gesamten Strom puffert — im Zweifel ohne Pipe laufen lassen.
+`idf.py monitor` terminiert nie von selbst (wartet auf Ctrl+]); im
+Hintergrund starten, Ausgabe lesen, und **immer mit `TaskStop` beenden**,
+sonst bleibt der COM-Port belegt und der nächste Flash-Versuch blockiert
+oder schlägt fehl.
+
+**Serverzugriff läuft über das Operator-Token, nicht über eigene
+Zugangsdaten.** Der Server läuft in einem eigenen Terminal des Nutzers;
+Claude Code startet ihn nicht selbst, prüft aber mit einem einfachen
+Health-Call, ob er erreichbar ist (`GET /api/client/health`, ohne Auth,
+lokal `http://localhost:8000/...` oder öffentlich über
+`https://living-notebook.heusgenradig.de/...`). Für jede andere Route gilt:
+
+```bash
+set -a; source .env; set +a
+curl -H "Authorization: Bearer $CLIENT_OPERATOR_TOKEN" https://living-notebook.heusgenradig.de/api/system/status
+```
+
+Laut `smart_notebook/app.py::client_device_auth` prüft die Middleware das
+Operator-Token **vor** jeder Pfadeinschränkung — ein gültiges Token öffnet
+also nicht nur die Operator-Routen, sondern auch `/api/client/*`. Für die
+tatsächliche Geräteperspektive (nicht die Operatorsicht) ist stattdessen ein
+enrolltes Geräte-Credential nötig. Das Token aus `.env` lesen statt es im
+Klartext in Chatverlauf, Dateien oder Befehlszeilen zu wiederholen.
+
+**Ein Build+Flash überschreibt kommentarlos, was gerade auf dem Gerät
+läuft.** Wenn vorher eine andere, nicht committete Firmware auf dem Chip war,
+ist sie danach weg — es gibt keine Rückfrage und keinen automatischen
+Vergleich mit dem vorigen Zustand. Vor einem Flash prüfen, ob der
+Arbeitsstand wirklich der gewünschte ist (`git status` im Verzeichnis).
+
+**Ein einzelner Log-Ausschnitt ist ein Datenpunkt, keine Diagnose.** Eine
+fehlgeschlagene DNS-Auflösung, ein einzelner `sync failed`-Eintrag oder ein
+fehlendes Dashboard nach einem Neustart können viele Ursachen haben (Cache
+vs. echte Störung, Netzwerkfehler auf dem Weg zum Server, echter
+Firmware-Fehler). Nicht unaufgefordert in Firewall-, Router- oder
+DNS-Konfiguration des Host-Rechners eingreifen oder danach graben — das ist
+außerhalb des ESP32-Arbeitsbereichs und gehört angekündigt, nicht als
+Nebenschauplatz eines Build-Tests.

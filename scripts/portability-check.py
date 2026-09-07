@@ -77,7 +77,43 @@ PATTERNS = [
         "literal-credential",
         re.compile(r"""(?i)\b(password|passwd|secret|api_?key|access_?token|auth_?token|private_?key)\b\s*[:=]\s*["']([^\s"']+)["']"""),
     ),
+    (
+        "private-ip-address",
+        re.compile(
+            r"""(?<![0-9.])(?:
+                192\.168\.\d{1,3}\.\d{1,3}
+                | 10\.\d{1,3}\.\d{1,3}\.\d{1,3}
+                | 172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}
+            )(?![0-9.])""",
+            re.VERBOSE,
+        ),
+    ),
+    (
+        "internal-hostname",
+        re.compile(r"(?i)\b[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.(?:internal|lan|local)\b(?!\.[a-z])"),
+    ),
 ]
+
+# Rule names that are skipped for documentation: Doku und CHANGELOG zitieren
+# Heimnetz-Adressen und interne Hostnamen absichtlich als historischen
+# Kontext (z. B. CLIENT_SERVER_STATE.md, AUDIO_ARCHITECTURE.md, der
+# archivierte Codex-Handoff). Andere Regeln (Pfade, Fremdrepo-Marker,
+# Klartext-Credentials) scannen Doku weiterhin.
+NETWORK_ADDRESS_RULES = {"private-ip-address", "internal-hostname"}
+
+# Bekannte, unbedenkliche Adressen, die keine Heimnetz-Konfiguration sind:
+# ESP-IDF-SoftAP-Standard, der Android-Emulator-Alias für den Hostrechner
+# (ADR-0009) und Test-/Platzhalteradressen in Validator-Tests und UI-Hints.
+NETWORK_ADDRESS_ALLOWLIST = {
+    "192.168.4.1",
+    "192.168.1.100",
+    "192.168.1.10",
+    "192.168.1.1",
+    "192.168.001.1",
+    "10.0.2.2",
+}
+
+HANDOFF_ARCHIVE_DIR = "smart-notebook-codex-handoff-v1.0"
 
 PLACEHOLDER_CREDENTIAL = re.compile(
     r"""^(?:
@@ -135,6 +171,17 @@ def excerpt_for(line: str) -> str:
     return line[:157] + "..."
 
 
+def is_network_address_exempt(relative_path: Path) -> bool:
+    parts = relative_path.parts
+    if relative_path.suffix.lower() == ".md":
+        return True
+    if "changelog" in relative_path.name.lower():
+        return True
+    if parts and parts[0] == HANDOFF_ARCHIVE_DIR:
+        return True
+    return False
+
+
 def check_line(line: str, rule: str, pattern: re.Pattern) -> list[str]:
     if rule == "literal-credential":
         messages = []
@@ -145,6 +192,18 @@ def check_line(line: str, rule: str, pattern: re.Pattern) -> list[str]:
             if PLACEHOLDER_CREDENTIAL.match(value):
                 continue
             if not re.search(r"[a-z]", value) or not re.search(r"[A-Z0-9]", value):
+                continue
+            messages.append(value)
+        return messages
+    if rule == "internal-hostname" and line.lstrip().startswith(("import ", "package ")):
+        # Dotted Kotlin/Java/Python identifier chains (e.g. `org.gradle.api.tasks.Internal`)
+        # are not hostnames; only the TLD-like suffix happens to match.
+        return []
+    if rule in NETWORK_ADDRESS_RULES:
+        messages = []
+        for match in pattern.finditer(line):
+            value = match.group(0)
+            if value.lower() in NETWORK_ADDRESS_ALLOWLIST:
                 continue
             messages.append(value)
         return messages
@@ -163,12 +222,16 @@ def main() -> int:
 
     for path in iter_files(root, self_path):
         scanned += 1
+        relative_path = path.relative_to(root)
+        network_exempt = is_network_address_exempt(relative_path)
         try:
             lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
         except OSError:
             continue
         for line_number, line in enumerate(lines, start=1):
             for rule, pattern in PATTERNS:
+                if rule in NETWORK_ADDRESS_RULES and network_exempt:
+                    continue
                 for match in check_line(line, rule, pattern):
                     findings.append(Finding(path, line_number, rule, excerpt_for(f"{match} | {line}")))
 

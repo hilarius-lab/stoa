@@ -1,6 +1,7 @@
 # Smart Notebook configuration
 from zoneinfo import ZoneInfo
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 import os
 
 
@@ -56,12 +57,12 @@ NTFY_SERVER_URL = os.getenv("NTFY_SERVER_URL", "").strip().rstrip("/")
 NTFY_ERROR_TOPIC = os.getenv("NTFY_ERROR_TOPIC", "").strip().strip("/")
 NTFY_ACCESS_TOKEN = os.getenv("NTFY_ACCESS_TOKEN", "")
 NTFY_TIMEOUT_SECONDS = min(60,max(5,int(os.getenv("NTFY_TIMEOUT_SECONDS","15"))))
-LLM_URL = "http://capybara.nb.internal:8080/v1/chat/completions"
+LLM_URL = os.getenv("LLM_URL", "").strip()
 LLM_MODEL = os.getenv("LLM_MODEL", "CapybaraLM")
-EMBEDDING_URL = "http://192.168.124.5:8181/v1/embeddings"
+EMBEDDING_URL = os.getenv("EMBEDDING_URL", "").strip()
 EMBEDDING_MODEL = "Qwen3-Embedding-0.6B"
 EMBEDDING_DIMENSIONS = 1024
-STT_URL = "http://192.168.124.5:9000/v1/audio/transcriptions"
+STT_URL = os.getenv("STT_URL", "").strip()
 STT_MODEL = "large-v3"
 STT_API_MODEL_PARAMETER = "whisper-1"
 STT_DEFAULT_LANGUAGE = "de"
@@ -81,11 +82,34 @@ REFERENCE_STRONG_CONFIDENCE = min(1.0,max(0.0,float(os.getenv("REFERENCE_STRONG_
 REFERENCE_SUPPORTING_CONFIDENCE = min(1.0,max(0.0,float(os.getenv("REFERENCE_SUPPORTING_CONFIDENCE","0.72"))))
 REFERENCE_AMBIGUITY_MARGIN = min(1.0,max(0.0,float(os.getenv("REFERENCE_AMBIGUITY_MARGIN","0.08"))))
 NOTE_TO_FACT_MIN_EVIDENCE_SCORE = min(1.0,max(0.0,float(os.getenv("NOTE_TO_FACT_MIN_EVIDENCE_SCORE","0.80"))))
-POSTGRES_HOST = "192.168.124.5"
-POSTGRES_PORT = 5432
-POSTGRES_DB = "smart_notebook"
-POSTGRES_USER = "smart_notebook"
-POSTGRES_PASSWORD = "CHANGE_ME_TO_A_LONG_RANDOM_PASSWORD"
+POSTGRES_HOST = os.getenv("POSTGRES_HOST", "").strip()
+POSTGRES_PORT = min(65535, max(1, int(os.getenv("POSTGRES_PORT", "5432"))))
+POSTGRES_DB = os.getenv("POSTGRES_DB", "smart_notebook").strip() or "smart_notebook"
+POSTGRES_USER = os.getenv("POSTGRES_USER", "smart_notebook").strip() or "smart_notebook"
+POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "")
+
+# Umgebungsspezifisch und ohne sinnvollen Fallback: ein leerer Wert würde den
+# Server stillschweigend gegen eine leere URL oder einen leeren Host laufen
+# lassen, statt sichtbar zu scheitern. Siehe .env.example.
+_REQUIRED_NETWORK_VARS = {
+    "LLM_URL": LLM_URL,
+    "EMBEDDING_URL": EMBEDDING_URL,
+    "STT_URL": STT_URL,
+    "POSTGRES_HOST": POSTGRES_HOST,
+    "POSTGRES_PASSWORD": POSTGRES_PASSWORD,
+}
+_missing_required = [name for name, value in _REQUIRED_NETWORK_VARS.items() if not value]
+if _missing_required:
+    raise RuntimeError(
+        "Fehlende Pflichtvariablen (siehe .env.example): " + ", ".join(_missing_required)
+    )
+
+# Gleicher LLM-Host wie LLM_URL, anderer Pfad. Aus LLM_URL abgeleitet statt
+# als eigene Variable geführt, damit ein Host-Wechsel nicht zwei Stellen
+# auseinanderlaufen lassen kann.
+_llm_url_parts = urlsplit(LLM_URL)
+LLM_APPLY_TEMPLATE_URL = urlunsplit((_llm_url_parts.scheme, _llm_url_parts.netloc, "/apply-template", "", ""))
+
 CONTEXT_EVENT_LIMIT = 10
 CONTEXT_MAX_AGE_MINUTES = 60
 NOTE_RETRIEVAL_LIMIT = 5

@@ -5,7 +5,8 @@ from datetime import datetime, timedelta
 from ..config import (
     TIMEZONE, CONTEXT_EVENT_LIMIT, CONTEXT_MAX_AGE_MINUTES,
     KNOWLEDGE_RETRIEVAL_LIMIT, KNOWLEDGE_RETRIEVAL_MIN_SIMILARITY,
-    KNOWLEDGE_LIST_CONTEXT_ITEM_LIMIT, CHAT_NOTE_REDUNDANCY_SIMILARITY
+    KNOWLEDGE_LIST_CONTEXT_ITEM_LIMIT, CHAT_NOTE_REDUNDANCY_SIMILARITY,
+    LLM_APPLY_TEMPLATE_URL
 )
 from ..database import get_db_connection
 from ..prompts import SYSTEM_PROMPT
@@ -316,7 +317,7 @@ async def build_messages(text: str, before_event_id: int):
     )
 
 async def get_applied_prompt(messages: list[dict]):
-    url = "http://capybara.nb.internal:8080/apply-template"
+    url = LLM_APPLY_TEMPLATE_URL
 
     payload = {
         "messages": messages
