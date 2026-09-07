@@ -263,6 +263,29 @@ Die UUID steht in `memo-why 63497897`. Nicht ausgeführt in dieser Runde: der
 Server war wegen des DNS-Problems unten nicht erreichbar, und das ist ein
 Live-Eingriff auf Produktionsdaten, kein Codewechsel.
 
+### 7a. „Erledigt"-Button fehlt in der Detailansicht — Ursache noch offen, 7. September, vierte Runde
+
+Live gegen den echten Server geprüft (`GET /api/client/v1/entities/task/{id}`
+per `TestClient` gegen eine nachweislich offene Aufgabe): Die Antwort enthält
+korrekt `"action":{"type":"complete_task",...}`. Der komplette Firmware-Pfad
+(`dashboard.c::action_label_for()`/`dashboard_entity_has_action()`,
+`detail.c`-Footer, `screen.c::open_detail()`/`detail_current_has_action()`,
+`api_client.c::fetch_entity()`) wurde durchgesehen, kein Logikfehler
+gefunden. Neuflash des aktuellen HEAD auf COM9 (sauberer Boot bestätigt) hat
+das Problem **nicht** behoben — damit ist eine veraltete Firmware als
+Erklärung ausgeschlossen.
+
+Nächster Schritt, der ein reales Gerät braucht (kann nicht durch weitere
+Code-Durchsicht ersetzt werden): das serielle Log genau des Moments, in dem
+eine Aufgaben-Detailansicht geöffnet wird — insbesondere die Zeilen `api:
+entity fetch ... http=...` und `detail: line=... of ... page=...`. Das würde
+zwischen „Feld kommt am Gerät nicht an" (Netzwerk/Parsing) und „Feld kommt an,
+wird aber nicht zum Button" (Zeichenlogik) unterscheiden.
+
+Bewusst zurückgestellt, keine Priorität in dieser Runde: ein
+Sanduhr-/Ladeindikator für laufende Serverabfragen (Wunsch des Nutzers,
+ausdrücklich „nicht jetzt, aber langfristig sinnvoll").
+
 ### 7. A2/A3: Freigabe und verlorene ACKs
 
 Am 6. September vorläufig eingeordnet, nicht abschließend geklärt. Die

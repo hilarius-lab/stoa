@@ -271,7 +271,8 @@ static void draw_detail(unsigned char *buffer) {
     int page = 1;
     int total = dashboard_entity_draw(buffer, copy, BODY_TOP, BODY_BOTTOM,
                                       detail_line, &page, detail_action_focus == 1);
-    ESP_LOGI("detail", "line=%d of %d page=%d", detail_line, total, page);
+    ESP_LOGI("detail", "line=%d of %d page=%d has_action=%d id=%s",
+             detail_line, total, page, dashboard_entity_has_action(copy), detail_entity_id);
     free(copy);
 }
 
@@ -697,13 +698,16 @@ static void screen_task(void *unused) {
                      * right without hardware to check it against, and the
                      * entities that carry an action today are short enough
                      * that paging was never doing anything there anyway. */
-                    if (detail_current_has_action()) {
+                    bool has_action = detail_current_has_action();
+                    if (has_action) {
                         int next = detail_action_focus - message.focus_delta;
                         if (next < 0) next = 0;
                         if (next > 1) next = 1;
                         detail_action_focus = next;
+                        ESP_LOGI("detail", "diag: has_action=1 action_focus=%d", detail_action_focus);
                     } else {
                         page_detail(message.focus_delta);
+                        ESP_LOGI("detail", "diag: has_action=0 (paged instead)");
                     }
                 }
                 else if (session_open) { /* nothing to move: one page, back only */ }
