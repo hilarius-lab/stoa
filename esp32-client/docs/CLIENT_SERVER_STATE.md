@@ -302,6 +302,18 @@ Task-Status wechselt tatsächlich auf `done`. Die komplette Kette
 (Vertrag → Backend → Firmware) ist damit erstmals vollständig durchlaufen,
 nicht nur einzeln gebaut.
 
+**Nachtrag — Tasks-Ansicht zeigte kurz weiter „open" an.** Unmittelbar nach
+dem ersten Ende-zu-Ende-Test schien eine abgehakte Aufgabe in der
+Tasks-Ansicht weiter als offen zu erscheinen, auch nach mehrfachem Refresh.
+DB-Direktprüfung und eine gezielte Diagnosezeile im Fetch (`contains_<id>`,
+seither wieder entfernt) belegten: Server, Cache und der tatsächlich am
+Gerät empfangene Response-Body waren zu jedem Zeitpunkt bereits korrekt
+(Task fehlte in der „Heute"-Sektion). Der zuvor gemeldete Zustand stammte
+von einem Testklick **vor** dem Snapshot-Redraw-Fix (`ef4eb60`); mit der
+aktuellen Firmware verschwindet eine abgehakte Aufgabe bei zwei
+unabhängig getesteten Fällen korrekt aus der Liste. Kein weiterer Fix
+nötig — der Snapshot-Redraw-Fix allein hat es gelöst.
+
 ### 7b. `finish` wiederholte sich endlos für bereits abgeschlossene Sessions — erledigt, 7. September, vierte Runde
 
 Im Backend-Log sichtbar: zwei Session-IDs erschienen alle paar Sekunden mit
