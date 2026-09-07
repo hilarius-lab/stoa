@@ -356,6 +356,59 @@ Verlorene ACKs sind daher am wahrscheinlichsten eine Identitätsfrage — eine n
 DB-Reset — und kein Datenverlust im Normalbetrieb. Nachvollziehbar in
 `client_session_audit`. Solange das nicht belegt ist, bleibt es eine Hypothese.
 
+### 8. Verarbeitungs-Job hängt dauerhaft fest — Backend-Infrastruktur, nicht ESP-spezifisch, offen, 7. September, vierte Runde
+
+Gefunden beim ersten echten Ende-zu-Ende-Test einer Memo-Aufnahme (Ziel dieses
+Chats: die Schleife Aufnahme → Upload → Verarbeitung → Dashboard). Betrifft
+`worker.py`/`background.py`/`processing_jobs`, nicht den ESP32-Client — hier
+dokumentiert, weil dies aktuell das einzige laufende Übergabedokument für
+Backend-Befunde in diesem Chat ist (siehe Kontext oben: dieser Chat arbeitet
+ausdrücklich an beidem).
+
+**Befund 1 — zwei Wege starten `worker.py`, beide ohne `--worker-id`.**
+`python worker.py all` startet den Queue-Worker direkt. `python background.py`
+startet zusätzlich `caldav_worker.py` und `scheduler.py` und ruft dabei
+intern ebenfalls `worker.py all` auf (`background.py:6`). Beide Wege lassen
+`--worker-id` weg, wodurch `worker_id` in `worker.py:20` aus
+`{hostname}-{kind}` berechnet wird — bei zwei gleichzeitig laufenden
+Prozessen entsteht so zweimal derselbe Name (`Ocelot-all`). Live beobachtet:
+zwei Prozesse mit identischer `worker_id` überschreiben sich gegenseitig die
+eine Zeile in `worker_heartbeats` (`ON CONFLICT(worker_id) DO UPDATE`,
+`services/jobs.py::record_worker_heartbeat`) — der Heartbeat zeigte `idle`,
+während der andere Prozess unter demselben Namen tatsächlich noch mitten in
+einem Job hing. Macht das Debuggen ohne Prozessliste (`Get-CimInstance
+Win32_Process`) praktisch unmöglich. **Nicht behoben** — Empfehlung: nur
+einen der beiden Startwege gleichzeitig verwenden, oder beide künftig mit
+verschiedenen `--worker-id` starten.
+
+**Befund 2 — kein Recovery für einen bei `status='running'` verwaisten Job.**
+Ein `session_artifacts`-Job (Materialisierung von `note_candidate`-Segmenten
+zu tatsächlichen Notizen, `services/artifacts.py::run_session_artifact_worker_once`)
+blieb nach einem `ValueError` im Worker (Event `worker.loop_error`,
+`worker.py:35-39`) dauerhaft auf `status='running'`/`locked_by='Ocelot-all'`
+stehen — über 8 Minuten unverändert, auch nach Neustart des Workers (der
+alte Lock-Eintrag wird von niemandem aufgelöst). `queue_parked_jobs_for_night_repair()`
+(`services/jobs.py:393`) existiert zwar, greift aber nur bei
+`status='parked' AND night_repair_attempts=0` — **nicht** bei `running`. Es
+gibt aktuell keinen Mechanismus, der einen Job mit totem/hängendem Worker
+erkennt und zurücksetzt. Einmalig manuell behoben (`UPDATE processing_jobs
+SET status='queued', locked_by=NULL, locked_at=NULL, started_at=NULL WHERE
+id=…`, mit Zustimmung des Nutzers, eigene Testdaten) — das ist eine
+Einzelfall-Reparatur, kein struktureller Fix. **Offener Befund:** ein
+Watchdog/Timeout, der einen `running`-Job nach angemessener Zeit ohne
+Fortschritt automatisch zurücksetzt, fehlt.
+
+Die eigentliche Ursache, warum der `httpx`-Aufruf (Embedding- oder
+LLM-Endpunkt, `services/embeddings.py`/`services/artifacts.py:300`, beide mit
+konfiguriertem Timeout von 120s/180s) über 8 Minuten hing, obwohl die
+Timeouts das eigentlich verhindern sollten, ist **nicht geklärt** — DNS und
+TCP-Connect zu beiden Endpunkten (`capybara.nb.internal:8080` über
+Tailscale/`100.103.162.19`, `192.168.124.5:8181`) waren zum Prüfzeitpunkt
+sofort erreichbar. Möglicher Zusammenhang mit der an anderer Stelle in
+diesem Dokument beschriebenen DNS-/Netzwerk-Flackerei, aber unbelegt — eine
+weitere Beobachtung, keine Ursache (derselbe Grundsatz wie beim
+DNS-Abschnitt oben).
+
 ## Fallen, die in dieser Runde Zeit gekostet haben
 
 **Bearbeitung auf veralteter Grundlage.** Eine Änderung an `main.c` hat still
@@ -456,3 +509,8 @@ Dokuments (`memo-why` statt Zählerraten) nicht für mehr.
 6. DNS-Hypothese bleibt offen, ist aber kein Blocker mehr für weitere
    Live-Tests, da die meisten Läufe erfolgreich waren. Bei Gelegenheit mit
    mehr dokumentierten BSSID/RSSI-Paaren erhärten oder verwerfen.
+7. Neu, vierte Runde: Watchdog/Timeout für bei `status='running'` verwaiste
+   `processing_jobs` bauen (Punkt 8 oben) — bisher nur einmalig manuell
+   repariert, kein struktureller Fix. Klären, ob `worker.py`/`background.py`
+   künftig grundsätzlich mit explizitem `--worker-id` gestartet werden
+   sollen, um die Heartbeat-Kollision zu vermeiden.
