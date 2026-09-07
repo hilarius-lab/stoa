@@ -413,8 +413,12 @@ jetzt selbst mit Fallback (`error.strip() or "(no error message)"`) statt
 hart zu validieren; die drei Aufrufer übergeben zusätzlich `str(exc) or
 type(exc).__name__`, damit wenigstens der Exception-Typ erhalten bleibt,
 wenn die Nachricht leer ist. `services/jobs.py`, `services/audio.py`,
-`services/artifacts.py`, `services/segmentation.py`. Noch nicht durch das
-volle M8-Gate verifiziert (siehe unten, unabhängiger Testausreißer).
+`services/artifacts.py`, `services/segmentation.py`. Live bestätigt: Ein
+später ausgelöster `audio_transcription`-Fehler (echter, unabhängiger
+CUDA-Fehler auf dem STT-Server, siehe unten) kam mit vollständiger,
+lesbarer Fehlermeldung im Job-Datensatz an statt den Prozess erneut in
+einem `running`-Lock zu stranden — genau das Verhalten, das dieser Fix
+herstellen sollte.
 
 **Befund 3 — Ursache des Hängens gefunden: `llama.cpp` hängt bei diesem
 JSON-Schema, nicht am Netzwerk.** DNS und TCP-Connect zu beiden Endpunkten
@@ -438,12 +442,56 @@ kompletten Jobs (Embedding-Aufrufe + LLM-Aufruf) deutlich über den
 rechnerischen ~7 Minuten Worst-Case lag, ist im Detail nicht restlos
 geklärt, ändert aber nichts an der gefundenen Grundursache.
 
-**Nicht im Smart-Notebook-Repository behebbar** — betrifft die
-`llama.cpp`-Konfiguration/-Version auf `capybara.nb.internal`. Mögliche
-nächste Schritte (bei Gelegenheit, außerhalb dieses Chats): `llama.cpp` auf
-eine neuere Version aktualisieren, das Schema vereinfachen (z. B. weniger
-verschachtelte `required`-Arrays), oder in den `llama.cpp`-Server-Logs nach
-Grammar-Compile-Fehlern für dieses Schema suchen.
+**Update: mit Workaround behoben, 7. September, vierte Runde.**
+`llama.cpp`-Image auf `capybara.nb.internal` wurde vom Nutzer aktualisiert —
+hat das Hängen **nicht** behoben (erneut reproduziert, gleiches Schema,
+gleiches Ergebnis). Weiter eingegrenzt: **jede** Form von `response_format`
+hängt, nicht nur `json_schema` — auch das schlankere `json_object` hängt
+identisch (30s `ReadTimeout`, GPU bei 0%). Eine Anfrage ganz **ohne**
+`response_format`, mit dem gewünschten JSON-Format stattdessen im
+Prompt-Text beschrieben, läuft dagegen zuverlässig durch (22,8s,
+korrektes valides JSON). Auf Wunsch des Nutzers ausdrücklich als
+**bewusst begrenzter Workaround nur für `artifacts.py`** umgesetzt — die
+übrigen sieben Stellen mit demselben `response_format`-Muster
+(`segmentation.py`, `chat.py`, `claims.py`, `dedupe.py`, `consolidation.py`,
+`maintenance.py`, `nightly_consolidation.py`, `promotion.py`) bleiben
+unverändert, da ihre Schemas dort nachweislich funktionieren.
+
+`_propose_artifact_operations()` in `services/artifacts.py` sendet jetzt
+keinen `response_format` mehr; das JSON-Format steht stattdessen als Text im
+System-Prompt. Die Antwort wird über die erste/letzte `{`/`}`-Klammer aus dem
+Text extrahiert (robust gegen Markdown-Fences), und da `strict` nicht mehr
+garantiert, dass alle Felder vorhanden und Listen tatsächlich Listen sind,
+normalisiert der Code die Listenfelder jetzt defensiv (`_as_list()`) — ohne
+dabei Werte zu erfinden, die das Modell nicht geliefert hat (fehlende
+Pflichtfelder wie `title`/`content` werfen weiterhin bewusst einen klaren
+Fehler statt eines erfundenen Platzhalters).
+
+Live zweimal end-to-end verifiziert (echte Aufnahme, echtes
+`capybara.nb.internal`): Transkription → Segmentierung → Artefakt-Extraktion
+lief beide Male fehlerfrei durch; eine gesprochene Aufgabe wurde korrekt als
+`task`-Artefakt mit Status `confirmed` gespeichert (`session_artifacts.id=271`,
+Inhalt exakt wie gesprochen). Ein zweites, bewusst beiläufig formuliertes
+Segment wurde korrekt als `statement` (nicht `note_candidate`) eingestuft und
+absichtlich nicht abgelegt — inhaltliche Modellentscheidung, kein Fehler.
+
+**Architekturentscheidung dazu, festgehalten:** Der Nutzer erwog testweise,
+Schema-Komplexität projektweit zugunsten kleinerer LLM-Schritte zu
+reduzieren (Vorteil: robuster gegenüber genau dieser Fehlerklasse, tauglich
+auch für schwächere/effizientere Modelle; Nachteil: mehr Roundtrips/Latenz,
+mehr Orchestrierungscode, Risiko widersprüchlicher Entscheidungen über
+getrennte Aufrufe hinweg). Eingeordnet als eigenständige, nicht triviale
+Architekturfrage — der oben beschriebene Workaround ist bewusst der
+kleinere, lokal begrenzte erste Schritt statt eines Vorgriffs auf diese
+Entscheidung; ein Wechsel bei den anderen sieben Stellen bräuchte ein
+eigenes ADR.
+
+**Nebenbefund während der Verifikation, kein Code-Fix:** Ein Testlauf schlug
+mit `cudaErrorInvalidDevice: invalid device ordinal` auf dem STT-Server fehl
+— laut Nutzer eigene VRAM-Knappheit auf einem anderen Server, direkt behoben,
+kein Smart-Notebook-Bug. Erwähnenswert nur, weil genau dieser Fehler dank
+Befund 2 als klare Meldung im Job-Datensatz ankam statt den Job erneut
+hängen zu lassen.
 
 **Nebenbefund, unabhängig:** `m8_release_gate_test.py` schlug einmal bei
 `m8_chat_push_contract_test.py` fehl (`AttributeError` auf
