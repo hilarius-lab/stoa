@@ -167,9 +167,13 @@ Fenster und verweist für die vollständige Historie auf einen Detailendpunkt.
 - [x] SSE auf demselben DTO-Modell mit Event-ID und monotoner Revision
 - [x] Keepalive, Reconnect, Resume und Fallback auf Re-Snapshot
 - [x] Dashboard-/SSE-Ausfall beeinflusst Aufnahme und Upload nicht
-- [x] bestehende ntfy-App als UnifiedPush-Distributor wiederverwenden; FastAPI übernimmt
+- [~] bestehende ntfy-App als UnifiedPush-Distributor wiederverwenden; FastAPI übernimmt
   analog zu MollySocket die Wächterrolle und sendet nur verschlüsselte inhaltsarme
-  Wake-up-/Invalidierungssignale
+  Wake-up-/Invalidierungssignale — **korrigiert 7. September 2026, vierte Runde:**
+  die Zustellmechanik ist fertig (siehe Punkt darunter), aber
+  `services/unified_push.py::broadcast_invalidation()` hat keinen Aufrufer; es
+  wird serverseitig nie tatsächlich ein Signal ausgelöst. Auslöse-Ereignisse
+  sind nirgends spezifiziert — offene Produktfrage, kein Bugfix.
 - [x] UnifiedPush-Endpunktregistrierung, verschlüsselte Challenge-Bestätigung,
   Endpoint-Rotation, Unregister und mehrere Geräte serverseitig implementieren;
   VAPID gehört zu Web Push und ist für den ntfy-UnifiedPush-Vertrag nicht erforderlich

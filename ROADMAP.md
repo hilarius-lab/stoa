@@ -350,9 +350,15 @@ clientseitig nötigen Änderungen ist normativ in
 - [x] Design-Tokens und responsive Hints für Icon, Typ/Status, Farbe, Rahmen, Span,
   Gruppierung und relative Reihenfolge definieren; tatsächliches Layout bleibt App-Scope
 - [x] Entity-Card-Preview und sanitisierten Markdown-Detailvertrag festlegen
-- [x] UnifiedPush mit der bereits installierten ntfy-App als Distributor integrieren;
+- [~] UnifiedPush mit der bereits installierten ntfy-App als Distributor integrieren;
   FastAPI sendet analog zu MollySocket ausschließlich verschlüsselte inhaltsarme
-  Invalidierungen, danach lädt die App den autoritativen Zustand
+  Invalidierungen, danach lädt die App den autoritativen Zustand — **korrigiert
+  7. September 2026, vierte Runde:** Registrierung, Challenge-Bestätigung und
+  Zustellung (`services/unified_push.py::deliver()`/`broadcast_invalidation()`)
+  sind fertig, aber `broadcast_invalidation()` hat keinen Aufrufer — es wird nie
+  tatsächlich eine Invalidierung ausgelöst. Welches Ereignis mit welcher Revision
+  einen Push auslösen soll, ist nirgends spezifiziert; das nachzuliefern wäre eine
+  Produktentscheidung, keine Bugfix-Korrektur, und bleibt offen.
 
 #### Serververwalteter Chat
 
