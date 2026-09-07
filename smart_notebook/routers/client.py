@@ -26,6 +26,7 @@ from ..database import get_db_connection
 from ..services.audio import AudioChunkConflictError,create_audio_chunk
 from ..services.audio_diagnostics import diagnose_audio_bytes
 from ..services.client_dashboard import ESP_SURFACE,dashboard_snapshot,get_dashboard_entity
+from ..services.tasks import set_task_status
 from ..services.client_chat import (ConversationConflict,abort_turn,add_turn,create_conversation,get_conversation,
     get_turn,list_conversations,list_messages,retry_turn,run_chat_turn_once,turn_events)
 from ..services.client_capture import CaptureConflict,create_capture,get_capture,run_capture_once
@@ -512,6 +513,23 @@ async def get_v1_knowledge_entity(entity_id:UUID):
 @router.get("/api/client/v1/entities/{entity_type}/{entity_id}",response_model=DashboardEntityResponse)
 async def get_v1_dashboard_entity(entity_type:str,entity_id:UUID):
     result=get_dashboard_entity(entity_type,entity_id)
+    if result is None:raise ClientAPIError(404,"ENTITY_NOT_FOUND","Client entity not found.","never")
+    return result
+
+
+@router.post("/api/client/v1/entities/task/{entity_id}/complete",response_model=DashboardEntityResponse)
+async def post_v1_complete_task(entity_id:UUID):
+    """The one mutation the closed action catalog grants the device: `complete_task`,
+    offered only on an open task's own detail response (see
+    services/client_dashboard.py::get_dashboard_entity). Idempotent by design —
+    completing an already-done task just returns its current state rather than
+    erroring, since a client retry after a lost response must not surface as a
+    failure for something that in fact succeeded."""
+    with get_db_connection() as c:
+        identity=c.execute("SELECT internal_id FROM client_entity_identities WHERE entity_type='task' AND public_id=%s",(entity_id,)).fetchone()
+    if not identity:raise ClientAPIError(404,"ENTITY_NOT_FOUND","Client entity not found.","never")
+    if set_task_status(identity[0],"done") is None:raise ClientAPIError(404,"ENTITY_NOT_FOUND","Client entity not found.","never")
+    result=get_dashboard_entity("task",entity_id)
     if result is None:raise ClientAPIError(404,"ENTITY_NOT_FOUND","Client entity not found.","never")
     return result
 
