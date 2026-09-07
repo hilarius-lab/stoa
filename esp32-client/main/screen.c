@@ -1103,6 +1103,14 @@ void screen_snapshot_received(const char *json, bool empty) {
     atomic_store(&snapshot_at_us, esp_timer_get_time());
     atomic_store(&snapshot_seen, true);
     atomic_store(&snapshot_focus_reset, true);
+    /* Redraw through the queue so the display task stays the only writer --
+     * the same pattern screen_entity_received()/_history_/_session_ already
+     * use. Without this the fresh snapshot sits in the buffer unseen until
+     * some unrelated button press happens to redraw the screen: a snapshot
+     * arrival is not itself a queue message, so nothing wakes the display
+     * task to show it. */
+    screen_message message = {.focus_move=true, .focus_delta=0};
+    post(&message);
 }
 void screen_focus_move(int delta) {
     screen_message message = {.focus_move=true, .focus_delta=delta};
