@@ -24,7 +24,13 @@ typedef enum {
 typedef struct {
     header_snapshot snapshot;
     unsigned age_minutes;
-    bool focused; /* the history button carries the focus */
+    bool focused; /* the menu button carries the focus */
+    /* The menu button opens a view selector rather than jumping straight to
+     * the recording list. While it is open, this row shows the four view
+     * icons instead of the freshness text; `selector_focus` (0=dashboard,
+     * 1=tasks, 2=lists, 3=history) marks which one a press would activate. */
+    bool selector_open;
+    int selector_focus;
 } header_state;
 
 /* Draw the row directly below the status bar. */

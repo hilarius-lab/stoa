@@ -106,7 +106,8 @@ static atomic_uint cache_max_age_s;
 static char *snapshot_json;
 static SemaphoreHandle_t snapshot_lock;
 /* Focus and scroll belong to the display task alone; nothing else touches them.
- * -1 is the history button, which is where the dashboard is entered. */
+ * -1 is the menu button, which is where the dashboard is entered and which now
+ * opens the view selector rather than the recording list directly. */
 #define BODY_TOP (STATUS_BAR_HEIGHT + HEADER_HEIGHT + 8)
 #define BODY_BOTTOM 792
 static int dashboard_focus = -1;
@@ -136,6 +137,38 @@ static int history_scroll;
 static char *session_json;
 static SemaphoreHandle_t session_lock;
 static bool session_open, session_waiting;
+/* Tasks and lists are the same snapshot as the dashboard, just walked with a
+ * narrower section filter (dashboard_map.h::dashboard_surface) — no separate
+ * fetch, no separate JSON buffer. Each keeps its own focus/scroll so leaving
+ * and returning does not lose the reader's place, the same reasoning the
+ * dashboard and the history list already follow independently. */
+static bool tasks_open, lists_open;
+static int tasks_focus = -1, tasks_scroll;
+static int lists_focus = -1, lists_scroll;
+/* The menu button now opens this instead of jumping straight to the
+ * recording list. 0=dashboard, 1=tasks, 2=lists, 3=history. */
+static bool selector_open;
+static int selector_focus;
+
+/* Which of the three dashboard-family views is showing, and its own focus and
+ * scroll — tasks and lists are otherwise the plain dashboard renderer with a
+ * narrower section filter, so everything downstream of these three just asks
+ * "which one" instead of duplicating draw_dashboard()/move_focus() per view. */
+static dashboard_surface active_surface(void) {
+    if (tasks_open) return DASHBOARD_SURFACE_TASKS;
+    if (lists_open) return DASHBOARD_SURFACE_LISTS;
+    return DASHBOARD_SURFACE_MAIN;
+}
+static int *active_focus_ptr(void) {
+    if (tasks_open) return &tasks_focus;
+    if (lists_open) return &lists_focus;
+    return &dashboard_focus;
+}
+static int *active_scroll_ptr(void) {
+    if (tasks_open) return &tasks_scroll;
+    if (lists_open) return &lists_scroll;
+    return &dashboard_scroll;
+}
 #define STATUS_TIME_UNKNOWN 0xFFFFFFFFu
 #define PARTIAL_REFRESH_LIMIT 200
 
@@ -173,7 +206,9 @@ static void draw_header(unsigned char *buffer) {
      * the focus marker whenever the selection sits on it. Otherwise the marker
      * follows the dashboard focus. One button, one meaning, in both views. */
     header_state state = {.focused = history_open ? history_focus < 0
-                                                  : atomic_load(&header_focused)};
+                                                  : atomic_load(&header_focused),
+                          .selector_open = selector_open,
+                          .selector_focus = selector_focus};
     /* What ages is the contact, not the content: `snapshot_at_us` is set on
      * every accepted poll, including one that returns an unchanged dashboard.
      * A snapshot the server keeps confirming stays current no matter how old
@@ -238,7 +273,7 @@ static void open_detail(void) {
         xSemaphoreTake(snapshot_lock, pdMS_TO_TICKS(200)) == pdTRUE) {
         if (snapshot_json[0])
             dashboard_walk(NULL, snapshot_json, BODY_TOP, BODY_BOTTOM, 0,
-                           dashboard_focus, &plan);
+                           *active_focus_ptr(), &plan, active_surface());
         xSemaphoreGive(snapshot_lock);
     }
     if (!plan.focus_has_entity) {
@@ -398,6 +433,37 @@ static void open_history(void) {
     api_client_open_history();
 }
 
+/* --- view selector --------------------------------------------------------- */
+
+/* Reachable from the header button in any of the four views. Lands on
+ * whichever one is currently showing, so activating again without moving
+ * closes it without changing anything — the same "re-select what's already
+ * open" no-op the dashboard-family views give for free. */
+static void open_selector(void) {
+    selector_open = true;
+    selector_focus = tasks_open ? 1 : lists_open ? 2 : history_open ? 3 : 0;
+}
+
+static void move_selector_focus(int delta) {
+    int next = selector_focus + delta;
+    /* Same non-wrapping ring as the history list: a wrap past either end
+     * looks like a jump on a panel that takes half a second to redraw. */
+    if (next < 0) next = 0;
+    if (next > 3) next = 3;
+    selector_focus = next;
+}
+
+static void activate_selector(void) {
+    selector_open = false;
+    if (selector_focus == 3) {
+        if (!history_open) open_history();
+        return;
+    }
+    history_open = history_waiting = false;
+    tasks_open = selector_focus == 1;
+    lists_open = selector_focus == 2;
+}
+
 static bool session_take(char *into, size_t capacity) {
     if (!session_json || !session_lock) return false;
     if (xSemaphoreTake(session_lock, pdMS_TO_TICKS(200)) != pdTRUE) return false;
@@ -423,7 +489,8 @@ static void draw_session(unsigned char *buffer) {
         free(copy);
         return;
     }
-    dashboard_walk(buffer, copy, BODY_TOP, BODY_BOTTOM, 0, -1, NULL);
+    dashboard_walk(buffer, copy, BODY_TOP, BODY_BOTTOM, 0, -1, NULL,
+                   DASHBOARD_SURFACE_ALL);
     free(copy);
 }
 
@@ -454,7 +521,8 @@ static void draw_dashboard(unsigned char *buffer) {
     if (xSemaphoreTake(snapshot_lock, pdMS_TO_TICKS(200)) != pdTRUE) return;
     if (snapshot_json[0])
         dashboard_walk(buffer, snapshot_json, BODY_TOP, BODY_BOTTOM,
-                       dashboard_scroll, dashboard_focus, NULL);
+                       *active_scroll_ptr(), *active_focus_ptr(), NULL,
+                       active_surface());
     xSemaphoreGive(snapshot_lock);
 }
 
@@ -462,22 +530,25 @@ static void draw_dashboard(unsigned char *buffer) {
  * drawing all see the same snapshot. */
 static void move_focus(int delta) {
     dashboard_plan plan = {0};
+    dashboard_surface surface = active_surface();
     if (snapshot_json && snapshot_lock &&
         xSemaphoreTake(snapshot_lock, pdMS_TO_TICKS(200)) == pdTRUE) {
         if (snapshot_json[0])
-            dashboard_walk(NULL, snapshot_json, BODY_TOP, BODY_BOTTOM, 0, -1, &plan);
+            dashboard_walk(NULL, snapshot_json, BODY_TOP, BODY_BOTTOM, 0, -1,
+                           &plan, surface);
         xSemaphoreGive(snapshot_lock);
     }
     if (!delta) return;   /* a plain redraw request */
-    int next = dashboard_focus + delta;
+    int *focus = active_focus_ptr(), *scroll = active_scroll_ptr();
+    int next = *focus + delta;
     if (next < -1) next = -1;
     if (next >= plan.focusable) next = plan.focusable ? plan.focusable - 1 : -1;
-    dashboard_focus = next;
-    dashboard_scroll = next < 0 ? 0
-        : dashboard_scroll_for(&plan, next, dashboard_scroll, BODY_BOTTOM - BODY_TOP);
+    *focus = next;
+    *scroll = next < 0 ? 0
+        : dashboard_scroll_for(&plan, next, *scroll, BODY_BOTTOM - BODY_TOP);
     atomic_store(&header_focused, next < 0);
-    ESP_LOGI("dashboard", "focus=%d of %d scroll=%d", next, plan.focusable,
-             dashboard_scroll);
+    ESP_LOGI("dashboard", "surface=%d focus=%d of %d scroll=%d", surface, next,
+             plan.focusable, *scroll);
 }
 
 static void draw_status(unsigned char *buffer) {
@@ -565,10 +636,12 @@ static void screen_task(void *unused) {
         if (message.focus_move || message.focus_activate) {
             if (message.focus_move) {
                 /* Whichever view is open owns the buttons: a detail pages its
-                 * text, the history moves its selection, and only the dashboard
-                 * itself moves the card focus. */
+                 * text, the history and the selector move their own
+                 * selection, and only a dashboard-family view (dashboard,
+                 * tasks, lists) moves the card focus. */
                 if (detail_open) page_detail(message.focus_delta);
                 else if (session_open) { /* nothing to move: one page, back only */ }
+                else if (selector_open) move_selector_focus(message.focus_delta);
                 else if (history_open) move_history_focus(message.focus_delta);
                 else move_focus(message.focus_delta);
             } else if (detail_open) {
@@ -579,15 +652,15 @@ static void screen_task(void *unused) {
                  * this view alone is enough — the draw path picks the next open
                  * one by itself. */
                 session_open = session_waiting = false;
+            } else if (selector_open) {
+                activate_selector();
             } else if (history_open) {
-                /* The header button leaves the list; a row opens the recording
-                 * it names. Leaving is an explicit target rather than a side
-                 * effect of pressing anywhere, which is why it sits in the same
-                 * focus ring as the entries. */
-                if (history_focus < 0) history_open = history_waiting = false;
+                /* The header button now opens the selector, same as every
+                 * other view; a row opens the recording it names. */
+                if (history_focus < 0) open_selector();
                 else open_session();
-            } else if (dashboard_focus < 0) {
-                open_history();
+            } else if (*active_focus_ptr() < 0) {
+                open_selector();
             } else {
                 open_detail();
             }

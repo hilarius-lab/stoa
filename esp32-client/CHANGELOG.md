@@ -1,5 +1,47 @@
 # Änderungen
 
+## 2026-09-07 – Ansichtswähler: Dashboard/Tasks/Listen/Verlauf als eigene Ansichten
+
+Größter Umbau der Runde, auf Wunsch des Nutzers. Das 3-Punkte-Menü zwischen
+Statusleiste und Dashboard-Körper öffnet nicht mehr direkt den Verlauf,
+sondern einen Ansichtswähler; die vier Ansichten sind Dashboard, Tasks,
+Listen und Verlauf.
+
+- Zwei neue Icons (`tools/generate_icons.py`: `home`, `history`), Atlas neu
+  generiert (28 statt 26 Icons). Pillow war dafür in keinem der beiden
+  Python-Envs installiert, jetzt im Projekt-`.venv`.
+- `dashboard_map.h`/`dashboard.c`: neuer `dashboard_surface`-Parameter für
+  `dashboard_walk()` (`MAIN`, `TASKS`, `LISTS`, `ALL`), filtert Sektionen nach
+  der vom Backend bereits vergebenen `id` (`today`/`lists`, siehe
+  `services/client_dashboard.py::_idle_content()`) — keine Erfindung, nur
+  Auswertung von etwas, das der Server schon sendet. `MAIN` lässt `today` und
+  `lists` jetzt aus, damit sie nicht doppelt erscheinen; `ALL` (für die
+  Session-Detailansicht) bleibt unverändert unfiltriert.
+- `screen.c`: Tasks- und Listen-Ansicht sind keine eigenen Renderer, sondern
+  derselbe `draw_dashboard()`/`move_focus()`-Pfad mit einem anderen Surface —
+  `tasks_open`/`lists_open` als zwei weitere Flags neben dem bestehenden
+  `history_open`/`session_open`/`detail_open`-Muster, mit eigenem
+  Fokus/Scroll (`tasks_focus`/`tasks_scroll`, `lists_focus`/`lists_scroll`),
+  damit ein Ansichtswechsel die Position in der jeweils anderen nicht verliert.
+- Neuer Selector-Zustand (`selector_open`, `selector_focus` 0–3) und drei
+  kleine Funktionen dafür (`open_selector`/`move_selector_focus`/
+  `activate_selector`), erreichbar über den Menü-Button aus allen vier
+  Ansichten heraus, auch aus dem Verlauf (der Header-Button dort öffnete
+  vorher direkt den Rücksprung, jetzt den Wähler — Rücksprung bleibt möglich,
+  indem man "Verlauf" erneut wählt).
+- `header.c`/`header.h`: Bei offenem Wähler zeigt die Kopfzeile die vier
+  Ansichts-Icons statt der Aktualitäts-Anzeige, mit demselben
+  Fokus-Invertierungs-Muster wie bei Karten.
+- **Bewusst nicht in dieser Runde:** das Abhaken einer Task bzw. Löschen
+  eines einzelnen Listen-Eintrags in der Detailansicht — dafür fehlt noch
+  die neue Vertragsaktion samt Backend-Endpoint (separater Punkt, siehe
+  nächster Eintrag) und die dafür vorgesehene fokussierbare
+  „Erledigt"/„Löschen"-Option neben „Zurück" in `detail.c`.
+
+Build und Flash bestanden, kein Absturz/Resetloop im Boot-Log. Die eigentliche
+Bedienung (Menü öffnen, zwischen Ansichten wechseln, Tasks/Listen anzeigen)
+ist **nicht** von hier aus prüfbar und steht noch aus.
+
 ## 2026-09-07 – `ready`-Zähler driftete nach dem Verwerfen kurzer Aufnahmen
 
 Vom Nutzer bemerkt: das Warteschlangen-Symbol in der Statusleiste zeigte

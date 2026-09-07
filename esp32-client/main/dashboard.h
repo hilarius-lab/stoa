@@ -18,7 +18,7 @@
  * geometry is recorded for the paging arithmetic. Either may be omitted. */
 void dashboard_walk(unsigned char *canvas, const char *json,
                     int top, int bottom, int scroll, int focus_index,
-                    dashboard_plan *plan);
+                    dashboard_plan *plan, dashboard_surface surface);
 
 /* Draw an entity response as the detail view. Returns the number of body text
  * lines, and reports through `page` how many of them fit at once. Both come

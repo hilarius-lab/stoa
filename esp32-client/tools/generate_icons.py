@@ -245,6 +245,25 @@ def menu(s):
         d.ellipse((x, s // 2 - 2, x + 3, s // 2 + 1), fill=255)
     return image
 
+def home(s):
+    """View-selector icon for the dashboard: a house, roof plus a body large
+    enough to read as a doorway rather than a solid square."""
+    image, d = new(s)
+    d.line([(2, s // 2 - 1), (s // 2, 2), (s - 3, s // 2 - 1)],
+           fill=255, width=STROKE, joint="curve")
+    d.rectangle((5, s // 2 - 1, s - 6, s - 4), outline=255, width=STROKE)
+    d.rectangle((s // 2 - 2, s - 9, s // 2 + 1, s - 4), fill=255)
+    return image
+
+def history(s):
+    """View-selector icon for the recording list: a clock face, universal for
+    'past/recent' at a glance."""
+    image, d = new(s)
+    d.ellipse((2, 2, s - 3, s - 3), outline=255, width=STROKE)
+    d.line((s // 2, s // 2, s // 2, 6), fill=255, width=STROKE)
+    d.line((s // 2, s // 2, s // 2 + 6, s // 2 + 3), fill=255, width=STROKE)
+    return image
+
 ICONS = [
     ("generic", generic, ART), ("microphone", microphone, ART),
     ("recording", recording, ART), ("session", session, ART),
@@ -258,7 +277,7 @@ ICONS = [
     ("wifi", wifi, WIFI), ("wifi_off", wifi_off, WIFI),
     ("battery", battery, BATTERY), ("storage", storage, STATUS),
     ("queue", queue, STATUS), ("offline", offline, STATUS),
-    ("menu", menu, ART),
+    ("menu", menu, ART), ("home", home, ART), ("history", history, ART),
 ]
 
 def pack(image, size):

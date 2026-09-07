@@ -68,9 +68,25 @@ static void record(dashboard_plan *plan, int top, int height,
     plan->rows[plan->count++] = (dashboard_row){top, height, first_focus, second_focus};
 }
 
+/* "today" and "lists" are the sections the tasks/lists views claim as their
+ * own; everything else stays on the main surface. Matched against the same
+ * `id` the backend already assigns each section (services/client_dashboard.py
+ * ::_idle_content()), not guessed. */
+static bool section_wanted(const char *id, dashboard_surface surface) {
+    bool is_today = id && strcmp(id, "today") == 0;
+    bool is_lists = id && strcmp(id, "lists") == 0;
+    switch (surface) {
+    case DASHBOARD_SURFACE_TASKS: return is_today;
+    case DASHBOARD_SURFACE_LISTS: return is_lists;
+    case DASHBOARD_SURFACE_MAIN:  return !is_today && !is_lists;
+    case DASHBOARD_SURFACE_ALL:
+    default:                      return true;
+    }
+}
+
 void dashboard_walk(unsigned char *canvas, const char *json,
                     int top, int bottom, int scroll, int focus_index,
-                    dashboard_plan *plan) {
+                    dashboard_plan *plan, dashboard_surface surface) {
     if (plan) memset(plan, 0, sizeof(*plan));
     cJSON *root = cJSON_Parse(json);
     const cJSON *sections = cJSON_GetObjectItemCaseSensitive(root, "sections");
@@ -80,6 +96,7 @@ void dashboard_walk(unsigned char *canvas, const char *json,
     int focus_counter = 0;
     const cJSON *section;
     cJSON_ArrayForEach(section, sections) {
+        if (!section_wanted(string_of(section, "id"), surface)) continue;
         const char *heading = string_of(section, "title");
         const cJSON *items = cJSON_GetObjectItemCaseSensitive(section, "items");
         if (heading && heading[0]) {
