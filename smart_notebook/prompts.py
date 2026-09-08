@@ -34,6 +34,11 @@ Regeln für Tasks:
 - Formuliere den Inhalt als kurze Aufgabe.
 - Relative Datumsangaben müssen anhand des bereitgestellten Event-Zeitpunkts in ein
   absolutes ISO-8601-Datum umgerechnet werden.
+- Ein ausdrücklich genannter Bearbeitungsbeginn (zum Beispiel "ab morgen") gehört in
+  work_start_at; eine Frist (zum Beispiel "bis Freitag") gehört in due_at. Verwechsle
+  diese beiden Zeitpunkte nicht.
+- Wenn eine Frist, aber kein Bearbeitungsbeginn genannt ist, lasse work_start_at leer;
+  die Anwendung setzt dann den Beginn auf den Erfassungstag.
 - Wenn keine belastbare Frist bestimmbar ist, lasse due_at leer und erfinde keine Frist.
 
 Regeln für Listen:
@@ -73,6 +78,8 @@ Regeln:
   konkrete absolute Datumsangabe.
 - Notes besitzen niemals ein due_at-Feld.
 - Listeneinträge besitzen list_title und content, aber kein due_at.
+- Für Tasks wird work_start_at als ISO-8601-Zeitpunkt mit Zeitzone angegeben, wenn
+  ausdrücklich ein Bearbeitungsbeginn ("ab ...") genannt ist; andernfalls leer.
 - Für Tasks wird due_at als ISO-8601-Zeitpunkt mit Zeitzone angegeben, wenn eine
   belastbare Frist vorhanden ist; andernfalls als leerer String.
 - Eine klar erledigbare Aufgabe bleibt auch ohne Frist ein Task. Erfinde keine Frist.

@@ -38,22 +38,43 @@ ESP_SURFACE="esp32_epaper"
 #    need once it acts on more than entities.
 ESP_DROP_KEYS=("entity_type","spacing_role","preferred_span","priority","layout",
                "rank","reason_code","reason_text")
-# 2. Sections the device cannot act on. It has no chat view, no way to tick
-#    anything off and no topic browser; those belong to the Android client. The
-#    ESP surface exists for "was steht heute an?" plus what needs an answer.
+# 2. Sections the device has no compact interaction or browser for. Chat,
+#    knowledge history and topic browsing stay off this surface; task completion
+#    remains available through the task detail action.
 #    This is the one product judgement in this file and the easiest thing to
 #    revert: put an id back and it reappears.
 ESP_DROP_SECTIONS=("recent-knowledge","topic-trends","open-chats")
-# 3. Counts and lengths. The panel shows a handful of cards with a two line
-#    preview; ten cards a section and 240 preview characters were never
-#    displayable. Sending less than `limits` announces is allowed — they are
-#    maxima, and the client checks nothing else against them.
+# 3. Counts and lengths. General sections stay at a handful of cards with a
+#    two-line preview. The dedicated Tasks view scrolls and must not silently
+#    drop an actionable task merely because three others sort ahead of it, so
+#    that one section may use the full ten rows already selected by the query.
+#    Sending less than `limits` announces is allowed — they are maxima.
 ESP_ITEMS_PER_SECTION=3
+ESP_TASK_ITEMS_PER_SECTION=10
 ESP_TITLE_MAX=80
 ESP_PREVIEW_MAX=120
 ESP_SESSIONS_MAX=6
+ESP_TASK_MODERATE_URGENCY=.5
 
 def _clip(value,limit):return value[:limit] if isinstance(value,str) else value
+
+
+def _task_time_text(value,now,include_midnight=True):
+    local=value.astimezone(TIMEZONE);today=now.astimezone(TIMEZONE).date()
+    clock=local.strftime("%H:%M")
+    suffix="" if not include_midnight and clock=="00:00" else f", {clock}"
+    if local.date()==today:return clock if include_midnight else "heute"+suffix
+    if local.date()==today+timedelta(days=1):return "morgen"+suffix
+    return local.strftime("%d.%m.")+suffix
+
+
+def _task_window_preview(work_start_at,due_at,urgency,now):
+    if work_start_at:
+        start=f"Ab {_task_time_text(work_start_at,now,include_midnight=False)}"
+    else:
+        start="Moderate Dringlichkeit" if urgency is not None and urgency>=ESP_TASK_MODERATE_URGENCY else "Noch nicht begonnen"
+    end=f"bis {_task_time_text(due_at,now)}" if due_at else "ohne Frist"
+    return f"{start} · {end}"
 
 
 def _project_component(item):
@@ -67,7 +88,8 @@ def _project_component(item):
     for key in ("title","preview","text"):
         if result[key] is None and key not in item:del result[key]
     if isinstance(result.get("items"),list):
-        result["items"]=[_project_component(child) for child in result["items"][:ESP_ITEMS_PER_SECTION]]
+        item_limit=ESP_TASK_ITEMS_PER_SECTION if item.get("id")=="today" else ESP_ITEMS_PER_SECTION
+        result["items"]=[_project_component(child) for child in result["items"][:item_limit]]
     return result
 
 
@@ -153,7 +175,7 @@ def _idle_content(surface="default"):
             _ensure_identities(c,"task","tasks","archived=FALSE AND status='open'")
             _ensure_identities(c,"list","lists","archived=FALSE")
         c.commit()
-        now=datetime.now(TIMEZONE);tomorrow=(now+timedelta(days=1)).replace(hour=0,minute=0,second=0,microsecond=0)
+        now=datetime.now(TIMEZONE)
         failures=c.execute("SELECT count(*) FROM processing_jobs WHERE status='failed'").fetchone()[0]
         questions=c.execute("""SELECT i.public_id,q.question_text,q.priority FROM session_questions q JOIN client_entity_identities i ON i.entity_type='question' AND i.internal_id=q.id
         WHERE q.status='open' ORDER BY q.priority DESC,q.updated_at DESC LIMIT 10""").fetchall()
@@ -164,10 +186,13 @@ def _idle_content(surface="default"):
         topics=c.execute("""SELECT e.public_id,t.title FROM knowledge_topics t JOIN client_knowledge_entities e ON e.entity_type='topic' AND e.internal_id=t.id
         WHERE e.state='active' ORDER BY t.updated_at DESC LIMIT 10""").fetchall()
         chats=c.execute("SELECT id,title,status,last_activity_at FROM client_conversations WHERE dashboard_until>%s ORDER BY last_activity_at DESC LIMIT 10",(now,)).fetchall()
-        tasks=c.execute("""SELECT i.public_id,t.content,t.due_at,t.urgency,t.percent_complete FROM tasks t
+        tasks=c.execute("""SELECT i.public_id,t.content,t.work_start_at,t.due_at,t.urgency,t.percent_complete FROM tasks t
         JOIN client_entity_identities i ON i.entity_type='task' AND i.internal_id=t.id
-        WHERE t.archived=FALSE AND t.status='open' AND t.due_at<%s
-        ORDER BY t.due_at NULLS LAST,t.urgency DESC,t.updated_at DESC LIMIT 10""",(tomorrow,)).fetchall() if surface=="esp32_epaper" else []
+        WHERE t.archived=FALSE AND t.status='open'
+          AND ((t.work_start_at IS NOT NULL AND t.work_start_at<=%s) OR t.urgency>=%s)
+        ORDER BY CASE WHEN t.work_start_at IS NOT NULL AND t.work_start_at<=%s THEN 0 ELSE 1 END,
+                 t.due_at NULLS LAST,t.urgency DESC,t.updated_at DESC LIMIT 10""",
+        (now,ESP_TASK_MODERATE_URGENCY,now)).fetchall() if surface=="esp32_epaper" else []
         lists=c.execute("""SELECT i.public_id,l.title,l.description,
         count(li.id) FILTER(WHERE li.archived=FALSE AND li.status='active') active_count,
         string_agg(li.content,' · ' ORDER BY li.created_at) FILTER(WHERE li.archived=FALSE AND li.status='active') preview
@@ -180,7 +205,7 @@ def _idle_content(surface="default"):
         sections.append(_section("system-attention","Systemhinweise","system_attention",[{"component":"alert","required":False,"id":"failed-jobs","severity":"warning","title":"Verarbeitung benötigt Aufmerksamkeit","text":f"{failures} Job(s) sind fehlgeschlagen.","icon":"warning"}],0))
     if questions:sections.append(_section("open-clarifications","Offene Fragen","clarification_due",[_card("question_open",r[0],r[1],r[1],priority=r[2],icon="question",action={"type":"open_clarification","params":{"question_id":str(r[0])}},ref_type="question") for r in questions],10))
     if sessions:sections.append(_section("active-sessions","Offene Sessions","active_session",[_card("session",s["client_session_id"],s.get("state","Session"),s.get("state",""),s["state"],.7,"session",{"type":"open_session","params":{"client_session_id":s["client_session_id"]}}) for s in sessions],20))
-    if tasks:sections.append(_section("today","Heute","due_today",[_card("task",r[0],r[1][:100],r[2].isoformat() if r[2] else "Ohne Termin","open",r[3],"task",ref_type="task") for r in tasks],25))
+    if tasks:sections.append(_section("today","Aufgaben","due_today",[_card("task",r[0],r[1][:100],_task_window_preview(r[2],r[3],r[4],now),"open",r[4],"task",ref_type="task") for r in tasks],25))
     if lists:sections.append(_section("lists","Listen","active_lists",[_card("list",r[0],r[1],(r[4] or r[2] or "")[:240],"active",min(1,.4+r[3]/20),"list",ref_type="list") for r in lists],27))
     knowledge=[_card("note",r[0],r[1][:100],r[1],priority=.5) for r in notes]+[_card("fact",r[0],r[1][:100],r[1],r[2],r[3],"fact") for r in facts]
     if knowledge:sections.append(_section("recent-knowledge","Zuletzt relevantes Wissen","recent_knowledge",knowledge,30))
@@ -232,13 +257,13 @@ def get_dashboard_entity(entity_type,public_id):
             r=c.execute("SELECT title,description,status,confidence,created_at,updated_at FROM session_topics WHERE id=%s",(internal_id,)).fetchone()
             return {"id":str(public_id),"type":"topic","title":_clip(r[0],TITLE_MAX),"description":_clip(r[1],DETAIL_MAX),"status":r[2],"confidence":r[3],"created_at":r[4].isoformat(),"updated_at":r[5].isoformat()} if r else None
         if entity_type=="task":
-            r=c.execute("SELECT content,due_at,status,priority,urgency,percent_complete,created_at,updated_at FROM tasks WHERE id=%s",(internal_id,)).fetchone()
+            r=c.execute("SELECT content,work_start_at,due_at,status,priority,urgency,percent_complete,created_at,updated_at FROM tasks WHERE id=%s",(internal_id,)).fetchone()
             if not r:return None
-            result={"id":str(public_id),"type":"task","content":_clip(r[0],DETAIL_MAX),"due_at":r[1].isoformat() if r[1] else None,"status":r[2],"priority":r[3],"urgency":r[4],"percent_complete":r[5],"created_at":r[6].isoformat(),"updated_at":r[7].isoformat()}
+            result={"id":str(public_id),"type":"task","content":_clip(r[0],DETAIL_MAX),"work_start_at":r[1].isoformat() if r[1] else None,"due_at":r[2].isoformat() if r[2] else None,"status":r[3],"priority":r[4],"urgency":r[5],"percent_complete":r[6],"created_at":r[7].isoformat(),"updated_at":r[8].isoformat()}
             # Only an open task has anything left to do; a task already done,
             # expired or archived offers no action, same as an entity_card
             # whose action the client does not implement — present but inert.
-            if r[2]=="open":result["action"]={"type":"complete_task","params":{"task_id":str(public_id)}}
+            if r[3]=="open":result["action"]={"type":"complete_task","params":{"task_id":str(public_id)}}
             return result
         if entity_type=="list":
             r=c.execute("SELECT title,description,created_at,updated_at FROM lists WHERE id=%s",(internal_id,)).fetchone()

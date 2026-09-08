@@ -50,7 +50,7 @@ konfigurierbaren Server-Base-URL. Interne numerische PostgreSQL-IDs sind niemals
 | Dashboard | `GET /api/client/v1/dashboard` | atomarer Home-Snapshot `live` oder `idle` | read-only; Revision ändert sich nur bei fachlichem Snapshotwechsel |
 | Dashboard | `GET .../sessions/{uuid}/dashboard` | atomarer Session-Snapshot | `SESSION_NOT_FOUND` |
 | Dashboard | `GET .../dashboard/events` und Sessionvariante | SSE `dashboard`, Event-ID=Revision, Keepalive-Kommentar | `Last-Event-ID`; bei Lücke vollständigen Snapshot laden |
-| Detail | `GET /api/client/v1/entities/{type}/{uuid}` | vollständige Session-Artifact-, Session-Topic-, Question-, Task- oder List-Ansicht | `ENTITY_NOT_FOUND`; unbekannter Typ ist nicht erratbar |
+| Detail | `GET /api/client/v1/entities/{type}/{uuid}` | vollständige Session-Artifact-, Session-Topic-, Question-, Task- oder List-Ansicht; Task optional mit `work_start_at`, `due_at`, `urgency`, `percent_complete` | `ENTITY_NOT_FOUND`; unbekannter Typ ist nicht erratbar |
 | Detail | `POST /api/client/v1/entities/task/{uuid}/complete` | markiert eine offene Task erledigt (`status=done`, `percent_complete=100`); nur angeboten, wenn die GET-Antwort `action:{"type":"complete_task"}` trägt | idempotent, `ENTITY_NOT_FOUND` sonst; keine Wirkung auf bereits erledigte/archivierte Tasks |
 | Library | `GET /api/client/v1/knowledge/libraries` | servergesteuerte Bibliotheken, Syncmodus, Privacy und Statistik | `local_action=delete_library` ist verbindliche Löschanweisung |
 | Sync | `GET .../knowledge/snapshot` | atomarer Snapshot in Seiten, Abschlusscursor | identische Cursor-Seite deterministisch; invalid `SYNC_CURSOR_INVALID` |

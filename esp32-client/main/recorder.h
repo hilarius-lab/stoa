@@ -17,3 +17,6 @@ void recorder_discard_all(unsigned expected);
 void recorder_discard(const char *id);
 bool recorder_busy(void);
 void recorder_queue_status(void);
+/* Coalesced request from the uploader: rebuild cached queue counters from the
+ * journal in the recorder task, which owns SD-card maintenance. */
+void recorder_request_queue_rescan(void);

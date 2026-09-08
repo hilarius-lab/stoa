@@ -451,11 +451,17 @@ identisch (30s `ReadTimeout`, GPU bei 0%). Eine Anfrage ganz **ohne**
 `response_format`, mit dem gewünschten JSON-Format stattdessen im
 Prompt-Text beschrieben, läuft dagegen zuverlässig durch (22,8s,
 korrektes valides JSON). Auf Wunsch des Nutzers ausdrücklich als
-**bewusst begrenzter Workaround nur für `artifacts.py`** umgesetzt — die
-übrigen sieben Stellen mit demselben `response_format`-Muster
-(`segmentation.py`, `chat.py`, `claims.py`, `dedupe.py`, `consolidation.py`,
-`maintenance.py`, `nightly_consolidation.py`, `promotion.py`) bleiben
-unverändert, da ihre Schemas dort nachweislich funktionieren.
+**bewusst begrenzter Workaround nur für `artifacts.py`** umgesetzt. Re-Audit
+am 8. September: Daneben bestehen zwölf strukturierte Aufrufe in zehn
+Services (`capture.py`, `claims.py`, `consolidation.py`, `dedupe.py` zweimal,
+`lists.py` zweimal, `maintenance.py`, `nightly_consolidation.py`,
+`promotion.py`, `segmentation.py`, `shadow.py`); `chat.py` nutzt entgegen der
+älteren Aufzählung kein `response_format`. Der nächtliche strukturierte Review
+lief im Re-Audit live grün. AD-012 entscheidet deshalb gegen eine pauschale
+projektweite Umstellung: funktionierende kleine Schemas bleiben constrained;
+weitere Ausnahmen benötigen einen reproduzierbaren Taskfehler und
+gleichwertige lokale Validierung. Details und Prüflücke stehen in
+`BACKEND_LOGIK.md` 17.5.
 
 `_propose_artifact_operations()` in `services/artifacts.py` sendet jetzt
 keinen `response_format` mehr; das JSON-Format steht stattdessen als Text im
@@ -475,16 +481,16 @@ Inhalt exakt wie gesprochen). Ein zweites, bewusst beiläufig formuliertes
 Segment wurde korrekt als `statement` (nicht `note_candidate`) eingestuft und
 absichtlich nicht abgelegt — inhaltliche Modellentscheidung, kein Fehler.
 
-**Architekturentscheidung dazu, festgehalten:** Der Nutzer erwog testweise,
+**Architekturentscheidung dazu, abgeschlossen mit AD-012:** Der Nutzer erwog testweise,
 Schema-Komplexität projektweit zugunsten kleinerer LLM-Schritte zu
 reduzieren (Vorteil: robuster gegenüber genau dieser Fehlerklasse, tauglich
 auch für schwächere/effizientere Modelle; Nachteil: mehr Roundtrips/Latenz,
 mehr Orchestrierungscode, Risiko widersprüchlicher Entscheidungen über
 getrennte Aufrufe hinweg). Eingeordnet als eigenständige, nicht triviale
-Architekturfrage — der oben beschriebene Workaround ist bewusst der
-kleinere, lokal begrenzte erste Schritt statt eines Vorgriffs auf diese
-Entscheidung; ein Wechsel bei den anderen sieben Stellen bräuchte ein
-eigenes ADR.
+Architekturfrage. AD-012 behält funktionierende kleine strukturierte Aufrufe
+bei, verbietet einen stillen globalen Fallback und verlangt für weitere
+Ausnahmen einen reproduzierbaren Fehler samt gleichwertiger lokaler
+Validierung. Der oben beschriebene Workaround bleibt daher bewusst lokal.
 
 **Nebenbefund während der Verifikation, kein Code-Fix:** Ein Testlauf schlug
 mit `cudaErrorInvalidDevice: invalid device ordinal` auf dem STT-Server fehl
@@ -587,6 +593,88 @@ Paketverlustschwelle als zu „diese eine Basisstation ist kaputt", ist aber
 weiterhin eine Hypothese, keine Ursache — vier Beobachtungen unter
 unkontrollierten Bedingungen reichen nach dem eigenen Grundsatz dieses
 Dokuments (`memo-why` statt Zählerraten) nicht für mehr.
+
+## Reale Memo-Probe: Upload erfolgreich, Task wegen fehlender Tagesfrist unsichtbar — 8. September
+
+Die Geräteaufnahme `66F289DE` / Client-Session
+`388472e4-4401-4cd4-bc5a-54122947d333` war entgegen dem ersten Eindruck kein
+Uploadfehler. Im ESP-Log stehen Chunk-Upload `201`, Finish `200` und danach die
+serverseitige Sessionfreigabe; PostgreSQL bestätigt einen transkribierten
+39.943-Byte-Chunk sowie drei erfolgreiche Jobs (STT, Text, Artefakte). Das
+Transkript „Ich muss heute um 20 Uhr den Rauchmelder im Flur prüfen.“ wurde als
+bestätigtes Task-Artefakt erkannt und zu Task 13 promoviert. `memo-why` meldet
+danach `acked=1` und `file=missing`, weil der ESP die Audiodatei nach der
+expliziten Serverfreigabe regulär gelöscht hat; das ist hier der erwartete
+Retentionpfad und kein Beleg für den Fehler.
+
+Die fachliche Ursache lag im Backend: `semantic_router.py::_relative_due`
+erkannte benannte Wochentage, aber nicht „heute“/„morgen“/„übermorgen“. Dadurch
+erhielten zwei nacheinander gesprochene Versuche nur `urgency=0.4` als
+Policy-Default und `due_at=NULL`; beide existieren in PostgreSQL (Tasks 12 und
+13), werden von der ESP-Heute-Sektion aber vertragsgemäß nicht projiziert. Der
+Parser unterstützt die drei relativen Tageswörter nun deterministisch relativ
+zum Sessionstart. Gezielter Regressionstest und vollständiges M8-Release-Gate
+sind grün. Nach Neustart von `background.py` ist auch die Geräteprobe grün:
+Session `946b481a-4f53-4e04-83fb-ba7be2037871` erzeugte aus „heute um 21 Uhr“
+Task 16 mit der korrekten lokalen Frist und zeigte ihn auf dem ESP an; die
+Session ist abgeschlossen und die Audiofreigabe gesetzt. Die beiden vorhandenen
+undatierten Duplikate wurden bewusst nicht ohne Nutzerauftrag verändert.
+
+## Queue-Badge blieb nach ACK auf 1 — behoben und live bestätigt, 8. September
+
+Die Diagnose trennt Anzeige, Server und Queuezustand eindeutig. Vor einem
+Neustart meldete `queue-status` `ready=1 acked=1`, obwohl die zwei vorhandenen
+Memos laut ihren Journalen bereits bestätigt waren. Der folgende Boot las
+denselben SD-Inhalt als `ready=0 acked=2 attention=0`. Damit war weder eine
+serverseitig offene Aufnahme noch bloßes E-Paper-Ghosting die Ursache, sondern
+ein gegenüber den Journalen gedrifteter RAM-Zähler. Die ansteigenden
+`settled=450,452,…` im API-Log sind kumulierte Diagnoseereignisse und keine
+Queuegröße.
+
+`api_client.c` markiert nun jede tatsächlich journalierte Chunk-/Session-
+Zustandsänderung. Nach dem Durchlauf fordert es genau einen Neuaufbau aus der
+SD-Karte an; `recorder.c` konsumiert diese Anforderung im Recorder-Task und
+publiziert anschließend die neu gezählten Werte. So bleibt SD-Zugriff an einer
+Stelle serialisiert, und mehrere Übergänge eines Uploads erzeugen nur einen
+Scan. Firmware baut und ist auf COM9 geflasht. End-to-end bestätigt: Vom
+Ausgangszustand `ready=0 acked=2 attention=0` wurde die dritte reale Aufnahme
+„Gleich um 14:30 Uhr habe ich noch einen Friseurtermin“ vollständig verarbeitet
+und freigegeben; ohne Neustart stand der lokale Zustand danach korrekt auf
+`ready=0 acked=3 attention=0`.
+
+Zusätzlich korrigiert: `scripts/serial_check.py --no-reset` konfiguriert DTR/RTS
+jetzt vor dem Öffnen des Ports. Der frühere Sofort-Open mit PySerial-Defaults
+hatte beim zweiten Diagnoseaufruf selbst einen Boot ausgelöst und damit den zu
+messenden RAM-Drift beseitigt. Syntaxprüfung und ein echter Aufruf ohne Bootlog
+sind grün.
+
+## Task-Zeitfenster und erweiterte Taskansicht — Backend umgesetzt, 8. September
+
+Nach Abschluss des Queue-Fixes wurde das bestätigte Zielbild serverseitig
+umgesetzt. Tasks führen nun `work_start_at` („bearbeiten ab“) neben `due_at`
+(„erledigen bis“). Fehlt bei vorhandener Frist ein expliziter Beginn, wird
+einmalig der Beginn des ursprünglichen Erfassungstags gespeichert. Sprachlich
+trennt der Regelrouter `ab …` von `bis …`/`spätestens …`; CalDAV projiziert die
+Werte als `DTSTART`/`DUE`.
+
+Die `esp32_epaper`-Projektion zeigt offene, nicht archivierte Tasks, sobald ihr
+Beginn erreicht ist, oder unabhängig davon ab `urgency >= 0.5`. Der unbelegte
+Policy-Default `0.4` reicht nicht. Karten tragen bereits vom Server formatiert
+`Ab … · bis …`; dafür war keine neue Firmwaresemantik nötig. Der Section-Key
+`today` bleibt kompatibel, die Überschrift heißt „Aufgaben“. Die erste reale
+Probe erzeugte beide Zeitfenster korrekt. Die dringende Balkonbeleuchtungs-Task
+war zunächst trotzdem unsichtbar, weil ein pauschales Projektionslimit nur die
+ersten drei Taskkarten übertrug. Die Firmware unterstützt Scrollen und bis zu 48
+Layoutzeilen; deshalb darf nun nur die Task-Sektion bis zu zehn Karten tragen,
+alle anderen Sektionen bleiben bei drei. Der Regressionstest hält eine dringende
+Task ausdrücklich jenseits Position drei und prüft ihre projizierte Anwesenheit.
+Das belastete HTTP-Payload bleibt mit 6247 Bytes unter dem 8192-Byte-Budget.
+Die Queue derselben realen Probe heilte ohne Neustart auf
+`ready=0 acked=5 attention=0`. Nach einem wegen TLS-Heapmangel nötigen
+Kaltstart nahm das Gerät den erweiterten Snapshot einschließlich der zuvor an
+Position vier abgeschnittenen Balkonbeleuchtungs-Task sichtbar an. Die
+anschließende Diagnose meldete `compatible=1`, `gate_ok=1`, `gate_failed=0`,
+`upload_failed=0` und weiterhin `ready=0 acked=5 attention=0`.
 
 ## Reihenfolge für den nächsten Chat
 

@@ -192,6 +192,20 @@ Lösch-Interpretation in der Klassifikationskette
 „diese Aufgabe" erkennt (`_task_modifier`), keine Lösch- oder
 Abschluss-Absicht für Tasks oder Listen.
 
+## 12. Task-Bearbeitungsfenster — festgelegt und umgesetzt, 8. September
+
+Tasks besitzen serverseitig optional `work_start_at` („bearbeiten ab“) und
+`due_at` („erledigen bis“). Bei einer Frist ohne ausdrücklich genannten Start
+persistiert das Backend den Beginn des Erfassungstags; CalDAV bildet beide Werte
+als `DTSTART`/`DUE` ab. Die `esp32_epaper`-Projektion nimmt eine offene,
+nicht archivierte Task auf, wenn `work_start_at <= server_time` gilt oder ihre
+`urgency >= 0.5` ist. Der regelbasierte Default `urgency=0.4` reicht allein
+nicht. Die scrollbare Task-Sektion darf bis zu zehn Karten tragen; andere
+ESP-Sektionen bleiben aus Payloadgründen auf drei begrenzt. Die Karte erhält bereits den fertigen Text `Ab … · bis …`; weder Auswahl
+noch Zeitzonenlogik werden in der Firmware dupliziert. Der historische
+Section-Key `today` bleibt wire-kompatibel, die sichtbare Überschrift lautet
+„Aufgaben“.
+
 ## Was das Backend *nicht* liefern muss
 
 - Keine Historie von Dashboard-Snapshots über die Zeit.

@@ -10,6 +10,7 @@ from .audio import schedule_final_stt_windows
 
 
 ACTIVE_STATES=("created","recording","paused","draining","processing","failed","attention_required")
+PROBLEM_JOB_STATES=("failed","parked","attention_required")
 TRANSITIONS={
     "start":({"created"},"recording"),
     "pause":({"recording"},"paused"),
@@ -143,8 +144,8 @@ def completion_status(client_session_id):
     if item["state"]=="draining" and not rec["upload_complete"]:return "uploads_pending"
     if item["ingestion_session_id"]:
         with get_db_connection() as c:
-            failed=c.execute("SELECT count(*) FROM processing_jobs WHERE ingestion_session_id=%s AND status='failed'",(item["ingestion_session_id"],)).fetchone()[0]
-        if failed:return "attention_required"
+            blocked=c.execute("SELECT count(*) FROM processing_jobs WHERE ingestion_session_id=%s AND status=ANY(%s)",(item["ingestion_session_id"],list(PROBLEM_JOB_STATES))).fetchone()[0]
+        if blocked:return "attention_required"
     return "processing"
 
 
@@ -186,14 +187,24 @@ def finalize_client_session(client_session_id):
         if item["capture_result"] is None:_materialize_capture_result(client_session_id)
         _release_local_audio(client_session_id)
         return get_client_session(client_session_id)
-    if item["state"]!="processing" or not rec["upload_complete"]:raise ClientSessionConflict("session is not ready to finalize")
+    if item["state"] not in ("processing","attention_required") or not rec["upload_complete"]:raise ClientSessionConflict("session is not ready to finalize")
     with get_db_connection() as c:
-        failed=c.execute("SELECT count(*) FROM processing_jobs WHERE ingestion_session_id=%s AND status='failed'",(item["ingestion_session_id"],)).fetchone()[0]
-        if failed:
-            now=datetime.now(TIMEZONE);c.execute("UPDATE client_sessions SET state='attention_required',last_error=%s,updated_at=%s WHERE client_session_id=%s",(f"{failed} processing job(s) failed",now,client_session_id));c.commit()
-            raise ClientSessionConflict("session has failed processing jobs and requires attention")
-        pending=c.execute("SELECT count(*) FROM processing_jobs WHERE ingestion_session_id=%s AND status IN('queued','running')",(item["ingestion_session_id"],)).fetchone()[0]
+        statuses=dict(c.execute("SELECT status,count(*) FROM processing_jobs WHERE ingestion_session_id=%s AND status<>'done' GROUP BY status",(item["ingestion_session_id"],)).fetchall())
+        blocked=sum(statuses.get(status,0) for status in PROBLEM_JOB_STATES)
+        if blocked:
+            now=datetime.now(TIMEZONE);message=f"{blocked} processing job(s) require attention"
+            if item["state"]!="attention_required":
+                c.execute("UPDATE client_sessions SET state='attention_required',last_error=%s,updated_at=%s WHERE client_session_id=%s",(message,now,client_session_id))
+                _audit(c,client_session_id,"state_reconciled",item["state"],"attention_required",{"reason":"processing_jobs_require_attention","job_statuses":statuses})
+            c.commit()
+            raise ClientSessionConflict("session has processing jobs that require attention")
+        pending=sum(statuses.values())
         if pending:raise ClientSessionConflict("session still has pending processing jobs")
+        if item["state"]=="attention_required":
+            now=datetime.now(TIMEZONE)
+            c.execute("UPDATE client_sessions SET state='processing',last_error=NULL,updated_at=%s WHERE client_session_id=%s",(now,client_session_id))
+            _audit(c,client_session_id,"state_reconciled","attention_required","processing",{"reason":"processing_jobs_recovered"})
+            c.commit()
     # Materialization is part of the release barrier. Do it while the session
     # is still recoverably in `processing`; a failure must never leave a
     # completed session whose source audio was released without a result.
@@ -220,31 +231,65 @@ def _release_local_audio(client_session_id):
 
 
 async def settle_client_session_for_ingestion(ingestion_session_id):
-    """Finalize a ready client session after its final processing job completes,
-    then run the ingestion-level finalize and promote its confirmed
-    session_artifacts into durable knowledge (tasks/notes/lists) -- the
-    automatic counterpart to POST .../finalize?promotion_mode=llm.
+    """Finalize and promote a ready client session after its last job.
 
     BACKEND_LOGIK.md A09/D02: new validated artifacts were auto-confirmed,
     but nothing in the automatic worker chain ever promoted them, so a
     recorded memo never became a visible task without a manual API call.
-    Both finalize_session() and promote_session_artifacts() are idempotent
-    and safe to call again on a later, more complete pass; a not-ready
-    ValueError here just means the ingestion session isn't fully caught up
-    yet and gets retried after the next successful worker job.
+    Knowledge finalization and promotion deliberately precede the technical
+    client completion and local-audio release barrier.  A failed promotion
+    therefore leaves the client session recoverably in ``processing``.
     """
     if ingestion_session_id is None:return None
     with get_db_connection() as c:
-        row=c.execute("SELECT client_session_id FROM client_sessions WHERE ingestion_session_id=%s AND state='processing'",(ingestion_session_id,)).fetchone()
+        row=c.execute("SELECT client_session_id FROM client_sessions WHERE ingestion_session_id=%s AND state IN('processing','attention_required')",(ingestion_session_id,)).fetchone()
     if not row:return None
-    try:result=finalize_client_session(row[0])
-    except ClientSessionConflict:return None
+    try:return await finalize_client_session_with_knowledge(row[0])
+    except ClientSessionConflict:
+        return None
+    except Exception as exc:
+        # The processing job is already durable ``done`` when settlement is
+        # attempted.  Never try to fail that completed job retroactively.
+        # A real promotion failure is persisted on the client session and can
+        # be retried through the idempotent client finalize endpoint.
+        from .observability import emit_event
+        emit_event("client_session","knowledge_finalization_failed","error",metadata={"error_type":type(exc).__name__})
+        return None
+
+
+async def finalize_client_session_with_knowledge(client_session_id,promotion_mode="llm",allow_text_only_compatibility=False):
+    """Run the knowledge barrier before marking a client session complete."""
+    item=get_client_session(client_session_id)
+    if not item:return None
+    if item["state"]=="completed":return finalize_client_session(client_session_id)
+    rec=reconciliation(client_session_id)
+    if item["state"] not in ("processing","attention_required") or not rec["upload_complete"]:
+        raise ClientSessionConflict("session is not ready to finalize")
     from .intelligence import finalize_session
     from .promotion import promote_session_artifacts
-    try:finalize_session(ingestion_session_id)
-    except ValueError:return result
-    await promote_session_artifacts(ingestion_session_id)
-    return result
+    try:finalize_session(item["ingestion_session_id"])
+    except ValueError as exc:
+        if allow_text_only_compatibility:
+            with get_db_connection() as c:
+                audio_count=c.execute("SELECT count(*) FROM audio_chunks WHERE session_id=%s",(item["ingestion_session_id"],)).fetchone()[0]
+                job_count=c.execute("SELECT count(*) FROM processing_jobs WHERE ingestion_session_id=%s",(item["ingestion_session_id"],)).fetchone()[0]
+            # Frozen client-contract compatibility: a directly injected text
+            # chunk historically materializes a capture result without the
+            # session interpretation pipeline.  It has no source audio to
+            # release and remains the explicit D03 exception.
+            if audio_count==0 and job_count==0:return finalize_client_session(client_session_id)
+        raise ClientSessionConflict(str(exc)) from exc
+    try:await promote_session_artifacts(item["ingestion_session_id"],promotion_mode)
+    except Exception as exc:
+        now=datetime.now(TIMEZONE);error=f"{type(exc).__name__}: knowledge promotion failed"
+        with get_db_connection() as c:
+            current=c.execute("SELECT state FROM client_sessions WHERE client_session_id=%s FOR UPDATE",(client_session_id,)).fetchone()
+            if current and current[0] in ("processing","attention_required"):
+                c.execute("UPDATE client_sessions SET state='attention_required',last_error=%s,updated_at=%s WHERE client_session_id=%s",(error,now,client_session_id))
+                if current[0]!="attention_required":_audit(c,client_session_id,"state_reconciled",current[0],"attention_required",{"reason":"knowledge_finalization_failed","error_type":type(exc).__name__})
+                c.commit()
+        raise
+    return finalize_client_session(client_session_id)
 
 
 def _materialize_capture_result(client_session_id):

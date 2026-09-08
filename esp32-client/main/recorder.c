@@ -31,7 +31,7 @@
 #include "memo_queue.h"
 #include "api_client.h"
 
-static atomic_bool held, busy, test_requested;
+static atomic_bool held, busy, test_requested, queue_rescan_requested;
 static atomic_bool export_requested;
 static char diagnostic_dir[40];
 static unsigned diagnostic_segments;
@@ -163,7 +163,7 @@ static discard_result discard_one(const char *id,unsigned *removed_out,unsigned 
 
 /* The counters are rebuilt from the card rather than adjusted by hand, so the
  * queue and the status bar cannot drift from what is actually there. */
-static void refresh_after_discard(void) {
+static void refresh_queue_from_card(void) {
     memo_queue_scan();
     memo_queue_status queued=memo_queue_get();
     screen_status(queued.ready,queued.attention,queued.space_low);
@@ -183,7 +183,7 @@ static void discard_memo(const char *id) {
     usb_line(line);
     ESP_LOGW("memo","session discarded on request; %u files, %u had needed attention",
              removed,attention);
-    refresh_after_discard();
+    refresh_queue_from_card();
 }
 
 /* Discard every session that is eligible, in one command.
@@ -237,7 +237,7 @@ static void discard_all(unsigned expected) {
     usb_line(line);
     ESP_LOGW("memo","bulk discard on request; %u sessions removed, %u refused, %u still deliverable",
              done,failed,skipped);
-    refresh_after_discard();
+    refresh_queue_from_card();
 }
 
 /* Why a segment is marked, per segment, from the journal — including the reason
@@ -643,6 +643,16 @@ static void recorder_task(void *unused) {
     screen_memo(SCREEN_READY,0);
     ESP_LOGI("memo","READY; hold middle button GPIO5 to record");
     while(true) {
+        /* Upload state is journal truth, while the status bar uses a small RAM
+         * cache. Rebuild that cache after a completed state-changing upload
+         * pass. The request is handled here, not in the API task, so journal
+         * recovery can never race a new recording's file writes. Multiple
+         * transitions in one pass collapse into one scan. */
+        if(atomic_exchange(&queue_rescan_requested,false)) {
+            atomic_store(&busy,true);
+            refresh_queue_from_card();
+            atomic_store(&busy,false);
+        }
         if(atomic_exchange(&export_requested,false)) export_memo(diagnostic_dir,diagnostic_segments);
         file_command cmd;
         if(xQueueReceive(file_commands,&cmd,0)==pdTRUE) {
@@ -720,3 +730,4 @@ void recorder_queue_status(void) {
         queued.space_low?1:0,queued.space_block?1:0);
     usb_line(line);
 }
+void recorder_request_queue_rescan(void) { atomic_store(&queue_rescan_requested,true); }

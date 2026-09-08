@@ -203,6 +203,10 @@ Fenster und verweist für die vollständige Historie auf einen Detailendpunkt.
 - [x] Der eigenständige ESP32-Geräteclient darf sie ausschließlich als flüchtige,
   read-only Dashboardprojektion über `surface=esp32_epaper` erhalten. Das erweitert
   weder Offline-Knowledge-Sync noch Schreibaktionen oder den Android-Standardsnapshot.
+- [x] Taskdetails dürfen für diese Projektion optional `work_start_at` („bearbeiten ab“),
+  `due_at` („erledigen bis“), `urgency` und `percent_complete` tragen. Die ESP-Sektion
+  zeigt bereits gestartete offene Tasks sowie Tasks ab `urgency >= 0.5`; der
+  serverseitige Policy-Default `0.4` löst allein keine Anzeige aus.
 
 ### Datensätze
 

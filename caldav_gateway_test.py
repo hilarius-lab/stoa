@@ -1,5 +1,6 @@
 """Nextcloud WebDAV wire contract using an in-memory HTTP transport."""
 import asyncio
+from datetime import datetime,timezone
 from uuid import uuid4
 
 import httpx
@@ -32,6 +33,7 @@ async def scenario():
         if request.method=="PUT":
             assert request.headers["content-type"].startswith("text/calendar") and request.headers["if-none-match"]=="*"
             parsed=parse_vtodo(content);assert parsed["public_id"]==public and parsed["entity_type"]=="task"
+            assert parsed["work_start_at"] is not None
             return httpx.Response(201,headers={"etag":'"created-1"'})
         raise AssertionError((request.method,str(request.url),content))
 
@@ -40,7 +42,7 @@ async def scenario():
         discovered=await gateway.discover();assert discovered["calendar_url"]=="https://nextcloud.test/remote.php/dav/calendars/test/notizbuch/"
         full=await gateway.fetch(discovered["calendar_url"]);assert full["complete"] and len(full["objects"])==1 and full["sync_token"]=="token-1"
         entity={"public_id":public,"uid":uid,"entity_type":"task","summary":"Wire-Test","description":"","status":"NEEDS-ACTION",
-            "percent_complete":0,"priority":5,"urgency":.4,"due_at":None,"parent_uid":None}
+            "percent_complete":0,"priority":5,"urgency":.4,"work_start_at":datetime(2026,9,8,8,tzinfo=timezone.utc),"due_at":None,"parent_uid":None}
         stored=await gateway.put(discovered["calendar_url"],entity);assert stored["etag"]=='"created-1"' and stored["href"].endswith(".ics")
         delta=await gateway.fetch(discovered["calendar_url"],"token-1")
         assert not delta["complete"] and delta["sync_token"]=="token-2" and delta["deleted_hrefs"]==["/remote.php/dav/calendars/test/notizbuch/gone.ics"]

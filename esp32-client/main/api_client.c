@@ -88,6 +88,10 @@ static char credential[65];
 static char installation[JOURNAL_UUID_CHARS];
 static TaskHandle_t worker;
 static api_status status;
+/* Set only after a journaled queue/session state transition. The recorder task
+ * consumes it as a request to verify the incremental RAM counters against the
+ * complete journals after this synchronization pass. */
+static bool local_queue_state_changed;
 /* `limits.dashboard_cache_max_age_seconds` as the server last stated it, or 0
  * for a server that stated nothing. The panel gets its own copy for the staleness
  * mark; this one sets how often the worker goes and fetches a fresh snapshot. */
@@ -428,6 +432,7 @@ static bool mark_session(journal_session *session, bool attention, const char *r
     memo_queue_note_session_transition(session->create_attention, attention);
     session->create_attention = attention;
     snprintf(session->create_reason, sizeof(session->create_reason), "%s", reason ? reason : "");
+    local_queue_state_changed = true;
     return true;
 }
 
@@ -483,6 +488,7 @@ static bool mark_chunk(journal_session *session, journal_chunk *chunk,
      * the segment was before. */
     memo_queue_note_transition(chunk->state, state);
     chunk->state = state;
+    local_queue_state_changed = true;
     return true;
 }
 
@@ -1239,8 +1245,10 @@ static void synchronize(void) {
      * anything is drawn again and pushed once per pass afterwards. The display
      * task drops an identical frame, so an unchanged queue costs no refresh. */
     publish_queue_status();
+    local_queue_state_changed = false;
     create_local_sessions();
-    publish_queue_status();
+    if (local_queue_state_changed) recorder_request_queue_rescan();
+    else publish_queue_status();
     ESP_LOGI("api", "sync complete: compatible=1 sessions=%u create_ok=%u create_failed=%u replay_failed=%u settled=%u abandoned=%u acked=%u failed=%u resynced=%u unresyncable=%u released=%u refused=%u withheld=%u finish=%u",
              status.sessions_seen, status.creates_ok, status.creates_failed,
              status.replay_failed, status.settled_skipped, status.abandoned,

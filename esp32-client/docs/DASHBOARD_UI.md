@@ -472,8 +472,12 @@ statt. BOOT drei Sekunden bleibt der separate Weg zur lokalen Einrichtung.
 Das Gerät verwendet standardmäßig `Europe/Berlin`; die Anzeigezeitzone ist in den
 lokalen Einstellungen änderbar. Nach Netzverbindung synchronisiert es per
 SNTP/NTP und prüft die Plausibilität zusätzlich gegen `server.time`. Vor einer
-vertrauenswürdigen Synchronisation sendet es kein `captured_at`. Welche Karten
-fachlich zu „Heute" gehören, entscheidet ausschließlich der Server.
+vertrauenswürdigen Synchronisation sendet es kein `captured_at`. Welche
+Taskkarten fachlich sichtbar sind, entscheidet ausschließlich der Server:
+bereits gestartete offene Tasks sowie Tasks ab moderater Dringlichkeit. Das
+Gerät zeigt die serverseitige Vorschau „Ab … · bis …“ und berechnet keine
+Fristen selbst. Die scrollbare Taskansicht erhält bis zu zehn Karten; die
+übrigen ESP-Sektionen bleiben auf drei begrenzt.
 
 ## Abbildung des Vertrags auf die Zeichenwerte
 

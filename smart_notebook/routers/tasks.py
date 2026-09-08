@@ -2,7 +2,7 @@
 from datetime import datetime
 from fastapi import APIRouter, HTTPException
 
-from ..config import TIMEZONE, EMBEDDING_MODEL
+from ..config import TIMEZONE
 
 from ..database import get_db_connection
 from ..schemas import TaskCreate, TaskUpdate, NoteSearch
@@ -81,7 +81,9 @@ async def patch_task(
             detail="Task not found"
         )
 
-    if task.content is None and task.due_at is None and not task.clear_due_at and task.priority is None and task.urgency is None and task.percent_complete is None:
+    if (task.content is None and task.work_start_at is None and not task.clear_work_start_at
+            and task.due_at is None and not task.clear_due_at and task.priority is None
+            and task.urgency is None and task.percent_complete is None):
         raise HTTPException(
             status_code=400,
             detail="Provide content and/or due_at"
@@ -101,14 +103,25 @@ async def patch_task(
     if due_at is not None and due_at.tzinfo is None:
         due_at = due_at.replace(tzinfo=TIMEZONE)
 
-    await update_task(
-        task_id,
-        content,
-        due_at,
-        task.priority,
-        task.urgency,
-        task.percent_complete
+    work_start_at = None if task.clear_work_start_at else (
+        task.work_start_at if task.work_start_at is not None
+        else (datetime.fromisoformat(existing["work_start_at"]) if existing["work_start_at"] else None)
     )
+    if work_start_at is not None and work_start_at.tzinfo is None:
+        work_start_at = work_start_at.replace(tzinfo=TIMEZONE)
+
+    try:
+        await update_task(
+            task_id,
+            content,
+            due_at,
+            task.priority,
+            task.urgency,
+            task.percent_complete,
+            work_start_at
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
 
     return get_task_record(task_id)
 
@@ -148,31 +161,22 @@ async def create_task(task: TaskCreate):
 
     embedding = await get_embedding(task.content)
 
-    task_id = save_task(
-        task.content,
-        due_at,
-        embedding,
-        source_event_id=task.source_event_id,
-        priority=task.priority,
-        urgency=task.urgency,
-        percent_complete=task.percent_complete
-    )
+    try:
+        task_id = save_task(
+            task.content,
+            due_at,
+            embedding,
+            source_event_id=task.source_event_id,
+            priority=task.priority,
+            urgency=task.urgency,
+            percent_complete=task.percent_complete,
+            work_start_at=task.work_start_at,
+            work_start_reference=now,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
 
-    return {
-        "id": task_id,
-        "content": task.content,
-        "created_at": now.isoformat(),
-        "updated_at": now.isoformat(),
-        "due_at": due_at.isoformat() if due_at else None,
-        "status": "open",
-        "source_event_id": task.source_event_id,
-        "archived": False,
-        "embedding_model": EMBEDDING_MODEL,
-        "embedding_dimensions": len(embedding),
-        "priority": task.priority,
-        "urgency": task.urgency,
-        "percent_complete": task.percent_complete
-    }
+    return get_task_record(task_id)
 
 @router.get("/api/tasks")
 async def get_tasks(
@@ -187,6 +191,7 @@ async def get_tasks(
                 created_at,
                 updated_at,
                 due_at,
+                work_start_at,
                 status,
                 source_event_id,
                 archived,
@@ -207,12 +212,13 @@ async def get_tasks(
             "created_at": row[2].isoformat(),
             "updated_at": row[3].isoformat(),
             "due_at": row[4].isoformat() if row[4] else None,
-            "status": row[5],
-            "source_event_id": row[6],
-            "archived": row[7],
-            "embedding_model": row[8],
-            "embedding_dimensions": row[9],
-            "priority":row[10],"urgency":row[11],"percent_complete":row[12]
+            "work_start_at": row[5].isoformat() if row[5] else None,
+            "status": row[6],
+            "source_event_id": row[7],
+            "archived": row[8],
+            "embedding_model": row[9],
+            "embedding_dimensions": row[10],
+            "priority":row[11],"urgency":row[12],"percent_complete":row[13]
         }
         for row in rows
     ]

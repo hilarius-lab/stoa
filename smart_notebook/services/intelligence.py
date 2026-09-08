@@ -143,8 +143,8 @@ def finalize_session(session_id, force=False):
         session=connection.execute("SELECT status FROM ingestion_sessions WHERE id=%s FOR UPDATE",(session_id,)).fetchone()
         if not session:return None
         wm=connection.execute("SELECT received_through_sequence,processed_through_sequence,artifact_through_sequence FROM ingestion_session_watermarks WHERE session_id=%s",(session_id,)).fetchone()
-        running=connection.execute("SELECT count(*) FROM processing_jobs WHERE ingestion_session_id=%s AND status IN('queued','running')",(session_id,)).fetchone()[0]
-        ready=wm and wm[0]==wm[1]==wm[2] and running==0
+        unfinished=connection.execute("SELECT count(*) FROM processing_jobs WHERE ingestion_session_id=%s AND status<>'done'",(session_id,)).fetchone()[0]
+        ready=wm and wm[0]==wm[1]==wm[2] and unfinished==0
         if not ready and not force: raise ValueError("session processing is not complete")
         now=datetime.now(TIMEZONE)
         connection.execute("""UPDATE session_artifacts a SET status='confirmed',updated_at=%s

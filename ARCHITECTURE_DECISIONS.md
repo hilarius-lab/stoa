@@ -181,3 +181,47 @@ Stand: 2026-08-26
 - Enrollment und Zwei-Phasen-Credentialrotation sind API-seitig abgeschlossen.
   Produktive Auth-/HTTPS-Aktivierung ist Deploymentarbeit; automatische Rotation ist
   verbleibende Firmwarearbeit und ändert den Vertrag nicht.
+
+## AD-012 – Strukturierte LLM-Ausgaben selektiv beibehalten
+
+- `response_format: json_schema` bleibt für kleine, nachweislich funktionierende
+  Fachschritte der Standard. Es wird nicht projektweit durch freie Textausgabe oder
+  pauschal durch mehrere kleinere Modellaufrufe ersetzt.
+- `artifacts.py::_propose_artifact_operations` bleibt eine ausdrücklich benannte
+  Ausnahme, weil der konfigurierte `llama.cpp`-Server bei genau diesem Request mit
+  jedem `response_format` reproduzierbar vor der Generierung hing. Der Ersatzpfad
+  muss JSON im Prompt verlangen, defensiv extrahieren und vollständig lokal
+  validieren; fehlende Pflichtdaten dürfen nicht erfunden werden.
+- Ein automatischer stiller Fallback von Constrained Decoding auf freie Textausgabe
+  ist verboten. Eine weitere Ausnahme benötigt einen reproduzierbaren Fehler,
+  einen fachtask-spezifischen Validator, einen Fehlerpfad und einen Regressionstest.
+- Kleinere aufeinanderfolgende Modellschritte sind zulässig, wenn ein Fachproblem
+  tatsächlich unabhängige Entscheidungen enthält und Messungen den zusätzlichen
+  Roundtrip, die Latenz sowie mögliche Widersprüche rechtfertigen. Sie sind kein
+  allgemeiner Workaround für Schema-Komplexität.
+- Die derzeit duplizierten HTTP-, Parsing- und `trust_env`-Varianten sind technische
+  Schuld. Ein späterer gemeinsamer LLM-Adapter soll Providertransport,
+  Observability und Parsing vereinheitlichen, aber pro Task weiterhin ausdrücklich
+  zwischen strukturiertem Modus und validiertem Ausnahmeweg unterscheiden.
+- Bei Provider-/`llama.cpp`-Upgrade oder wesentlicher Schemaänderung werden die
+  betroffenen realen LLM-Proben erneut ausgeführt. Ein erfolgreicher einzelner
+  Schemafall beweist nicht die Funktionsfähigkeit aller Schemas.
+
+## AD-013 – Task-Bearbeitungsfenster ist serverseitige Fachsemantik
+
+- `work_start_at` bedeutet „bearbeiten ab“, `due_at` bedeutet „erledigen bis“.
+  Beide Werte werden dauerhaft am Task gespeichert; Clients leiten den Beginn
+  nicht täglich neu aus der aktuellen Uhrzeit ab.
+- Existiert eine Frist ohne ausdrücklich belegten Beginn, setzt der zentrale
+  Task-Service den Beginn auf 00:00 des ursprünglichen Erfassungstags. Bei einer
+  bereits vergangenen Frist wird er höchstens auf den Fristzeitpunkt gesetzt.
+  Ein expliziter Beginn nach der Frist ist ungültig.
+- CalDAV bildet Beginn und Ende standardkonform als `DTSTART` und `DUE` in beide
+  Richtungen ab.
+- Die kleine ESP-Fläche zeigt offene, nicht archivierte Tasks ab ihrem Beginn
+  oder unabhängig davon ab `urgency >= 0.5`. Der nur technisch gesetzte
+  Policy-Default `0.4` ist keine moderate Dringlichkeit und reicht allein nicht.
+- Auswahl, lokale Zeitformatierung und der Text `Ab … · bis …` bleiben beim
+  Backend. Der historische Section-Key `today` bleibt für bestehende Firmware
+  erhalten; sichtbare Überschrift und Inhalt dürfen die erweiterte Semantik
+  korrekt als „Aufgaben“ benennen.

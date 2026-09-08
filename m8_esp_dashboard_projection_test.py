@@ -8,7 +8,8 @@ from smart_notebook.app import app
 from smart_notebook.config import CLIENT_DASHBOARD_CACHE_MAX_AGE_SECONDS,TIMEZONE
 from smart_notebook.database import get_db_connection,init_db
 from smart_notebook.services.client_dashboard import (ESP_DROP_KEYS,ESP_ITEMS_PER_SECTION,
-    ESP_PREVIEW_MAX,ESP_SURFACE,ESP_TITLE_MAX,_idle_content,get_dashboard_entity)
+    ESP_PREVIEW_MAX,ESP_SURFACE,ESP_TASK_ITEMS_PER_SECTION,ESP_TITLE_MAX,
+    _idle_content,_project_for_epaper,get_dashboard_entity)
 from smart_notebook.routers.client import _capabilities
 
 # The receive buffer the device shipped with when the surface first overflowed.
@@ -49,7 +50,8 @@ def check_epaper_projection():
     for section in snapshot["sections"]:
         assert section.get("id") not in ("recent-knowledge","topic-trends","open-chats")
         items=section.get("items") or []
-        assert len(items)<=ESP_ITEMS_PER_SECTION,f"{section.get('id')} carries {len(items)} items"
+        item_limit=ESP_TASK_ITEMS_PER_SECTION if section.get("id")=="today" else ESP_ITEMS_PER_SECTION
+        assert len(items)<=item_limit,f"{section.get('id')} carries {len(items)} items"
         for item in items:
             assert not set(item)&set(ESP_DROP_KEYS),f"unrendered keys survived: {set(item)&set(ESP_DROP_KEYS)}"
             assert len(item.get("title") or "")<=ESP_TITLE_MAX
@@ -82,12 +84,18 @@ def main():
     assert limits["dashboard_detail_max_chars"]==8000
     assert limits["dashboard_cache_max_age_seconds"]==CLIENT_DASHBOARD_CACHE_MAX_AGE_SECONDS
     token=uuid4().hex
-    now=datetime.now(TIMEZONE);task_id=list_id=item_id=other_task_id=None
+    now=datetime.now(TIMEZONE);task_id=list_id=item_id=other_task_id=future_low_id=future_moderate_id=None
     try:
         with get_db_connection() as db:
-            task_id=db.execute("""INSERT INTO tasks(content,created_at,updated_at,due_at,status,archived,priority,urgency,percent_complete,urgency_source)
-                VALUES(%s,%s,%s,%s,'open',FALSE,3,.8,0,'manual') RETURNING id""",
-                (f"ESP today {token}",now,now,now+timedelta(hours=1))).fetchone()[0]
+            task_id=db.execute("""INSERT INTO tasks(content,created_at,updated_at,work_start_at,due_at,status,archived,priority,urgency,percent_complete,urgency_source)
+                VALUES(%s,%s,%s,%s,%s,'open',FALSE,3,.8,0,'manual') RETURNING id""",
+                (f"ESP today {token}",now,now,now.replace(hour=0,minute=0,second=0,microsecond=0),now+timedelta(hours=1))).fetchone()[0]
+            future_low_id=db.execute("""INSERT INTO tasks(content,created_at,updated_at,work_start_at,due_at,status,archived,priority,urgency,percent_complete,urgency_source)
+                VALUES(%s,%s,%s,%s,%s,'open',FALSE,1,.4,0,'policy_default') RETURNING id""",
+                (f"ESP future low {token}",now,now,now+timedelta(days=2),now+timedelta(days=3))).fetchone()[0]
+            future_moderate_id=db.execute("""INSERT INTO tasks(content,created_at,updated_at,work_start_at,due_at,status,archived,priority,urgency,percent_complete,urgency_source)
+                VALUES(%s,%s,%s,%s,%s,'open',FALSE,1,.5,0,'manual') RETURNING id""",
+                (f"ESP future moderate {token}",now,now,now+timedelta(days=2),now+timedelta(days=3))).fetchone()[0]
             list_id=db.execute("INSERT INTO lists(title,description,created_at,updated_at,archived) VALUES(%s,%s,%s,%s,FALSE) RETURNING id",
                 (f"ESP list {token}","Projection test",now,now)).fetchone()[0]
             item_id=db.execute("INSERT INTO list_items(list_id,content,created_at,updated_at,status,archived) VALUES(%s,%s,%s,%s,'active',FALSE) RETURNING id",
@@ -96,8 +104,13 @@ def main():
         default=_idle_content();assert all(x["id"] not in ("today","lists") for x in default["sections"])
         esp=_idle_content("esp32_epaper");sections={x["id"]:x for x in esp["sections"]}
         assert any(token in x["title"] for x in sections["today"]["items"])
+        assert not any(f"future low {token}" in x["title"] for x in sections["today"]["items"])
+        assert any(f"future moderate {token}" in x["title"] for x in sections["today"]["items"])
+        projected_tasks=next(x for x in _project_for_epaper(esp)["sections"] if x["id"]=="today")
+        assert any(f"future moderate {token}" in x["title"] for x in projected_tasks["items"])
         assert any(token in x["title"] for x in sections["lists"]["items"])
         task=next(x for x in sections["today"]["items"] if token in x["title"])
+        assert task["preview"].startswith("Ab heute · bis "),task
         listing=next(x for x in sections["lists"]["items"] if token in x["title"])
         assert task["id"]==f"task:{task['entity_ref']['id']}"
         assert listing["id"]==f"list:{listing['entity_ref']['id']}"
@@ -105,16 +118,17 @@ def main():
         # must preserve both the opaque card id and persistent entity_ref.
         original_identity=(task["id"],task["entity_ref"])
         with get_db_connection() as db:
-            other_task_id=db.execute("""INSERT INTO tasks(content,created_at,updated_at,due_at,status,archived,priority,urgency,percent_complete,urgency_source)
-                VALUES(%s,%s,%s,%s,'open',FALSE,1,1,0,'manual') RETURNING id""",
-                (f"ESP reorder {token}",now,now,now+timedelta(minutes=1))).fetchone()[0]
+            other_task_id=db.execute("""INSERT INTO tasks(content,created_at,updated_at,work_start_at,due_at,status,archived,priority,urgency,percent_complete,urgency_source)
+                VALUES(%s,%s,%s,%s,%s,'open',FALSE,1,1,0,'manual') RETURNING id""",
+                (f"ESP reorder {token}",now,now,now,now+timedelta(minutes=1))).fetchone()[0]
             db.commit()
         later=_idle_content("esp32_epaper");later_task=next(
             x for section in later["sections"] for x in section["items"]
             if x.get("title","")==f"ESP today {token}"
         )
         assert (later_task["id"],later_task["entity_ref"])==original_identity
-        assert get_dashboard_entity("task",task["entity_ref"]["id"])["type"]=="task"
+        detail=get_dashboard_entity("task",task["entity_ref"]["id"])
+        assert detail["type"]=="task" and detail["work_start_at"] is not None
         assert get_dashboard_entity("list",listing["entity_ref"]["id"])["items"][0]["content"].endswith(token)
         size=check_epaper_projection()
         print(f"M8 ESP DASHBOARD PROJECTION TEST: PASS (esp32_epaper snapshot {size} bytes "
@@ -128,6 +142,10 @@ def main():
             if other_task_id is not None:
                 db.execute("DELETE FROM client_entity_identities WHERE entity_type='task' AND internal_id=%s",(other_task_id,))
                 db.execute("DELETE FROM tasks WHERE id=%s",(other_task_id,))
+            for extra_task_id in (future_low_id,future_moderate_id):
+                if extra_task_id is not None:
+                    db.execute("DELETE FROM client_entity_identities WHERE entity_type='task' AND internal_id=%s",(extra_task_id,))
+                    db.execute("DELETE FROM tasks WHERE id=%s",(extra_task_id,))
             if task_id is not None:db.execute("DELETE FROM tasks WHERE id=%s",(task_id,))
             db.commit()
 

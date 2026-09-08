@@ -34,7 +34,7 @@ from ..services.knowledge_sync import (SyncCursorExpired,SyncCursorInvalid,Usage
     get_synced_entity,initial_page,list_libraries,record_usage_batch)
 from ..services.unified_push import PushRegistrationConflict,confirm as confirm_push,list_registrations,register as register_push,unregister as unregister_push
 from ..services.client_sessions import (ClientSessionConflict,abort_client_session,create_client_session,
-    completion_status,finalize_client_session,finish_client_session,get_client_session,list_client_sessions,
+    completion_status,finalize_client_session_with_knowledge,finish_client_session,get_client_session,list_client_sessions,
     reconciliation,record_upload_conflict,transition_client_session)
 from ..services.device_auth import DeviceAuthError,enroll,rotate
 
@@ -357,7 +357,7 @@ async def finish_v1_session(client_session_id:UUID,request:FinishRequest):
 
 @router.post("/api/client/v1/sessions/{client_session_id}/finalize",response_model=ClientSessionResponse)
 async def finalize_v1_session(client_session_id:UUID):
-    try:item=finalize_client_session(client_session_id)
+    try:item=await finalize_client_session_with_knowledge(client_session_id,allow_text_only_compatibility=True)
     except ClientSessionConflict as exc:_conflict(exc)
     if not item:raise ClientAPIError(404,"SESSION_NOT_FOUND","Client session not found.","never")
     return _public_session(item)

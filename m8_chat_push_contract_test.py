@@ -31,7 +31,7 @@ def main():
     conflict=client.post("/api/client/v1/conversations",json={**request,"content":"Andere Eingabe"})
     assert conflict.status_code==409 and conflict.json()["code"]=="CHAT_IDEMPOTENCY_CONFLICT"
     dashboard=client.get("/api/client/v1/dashboard").json()
-    assert any(any(card.get("entity_ref",{}).get("id")==conversation["id"] for card in section["items"]) for section in dashboard["sections"])
+    assert any(any((card.get("entity_ref") or {}).get("id")==conversation["id"] for card in section["items"]) for section in dashboard["sections"])
     for _ in range(20):
         run=client.post("/api/workers/client-chat/run-once",json={"mode":"deterministic","deterministic_text":"Projekt Atlas befindet sich im Testbetrieb."}).json()
         if run.get("turn",{}).get("id")==turn["id"]:break

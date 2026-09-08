@@ -24,6 +24,14 @@ def main():
     due = expect("Der vollständige Kostenbericht muss am Donnerstag um 16 Uhr an Herrn Weber geschickt werden.", "task")
     assert due["normalized_data"]["due_at"] == "2026-08-27T16:00:00+02:00", due
 
+    today = expect("Ich muss heute um 20 Uhr den Rauchmelder im Flur prüfen.", "task")
+    assert today["normalized_data"]["due_at"] == "2026-08-25T20:00:00+02:00", today
+    assert "urgency" not in today["normalized_data"], today
+
+    window = expect("Ich muss ab morgen bis Freitag um 15 Uhr den Bericht prüfen.", "task")
+    assert window["normalized_data"]["work_start_at"] == "2026-08-26T09:00:00+02:00", window
+    assert window["normalized_data"]["due_at"] == "2026-08-28T15:00:00+02:00", window
+
     expect("Vorher müssen wir die Rechnungen kontrollieren und die fehlenden Belege ergänzen.", "task")
 
     shopping = expect("Bitte setze außerdem Reis, Zahnpasta und zwei Packungen Kaffee auf die Einkaufsliste.", "list_item")

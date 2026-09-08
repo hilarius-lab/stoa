@@ -103,11 +103,11 @@ flowchart TB
     REPAIR --> SEG["Semantisch segmentieren; Themen erkennen"]
     SEG --> AR["Regeln; bei Unsicherheit LLM; lokale Prüfung"]
     AR --> ART[("Session-Artefakte mit Quellen und Klassifizierung")]
-    AUTO -->|Memo| CAP["Capture-Auftrag; gesonderter Workeraufruf"]
+    AUTO -->|Memo| CAP["Capture-Auftrag; Standard-Worker"]
     CAP --> CLASS["LLM: eine Capture-Aktion klassifizieren"]
     CLASS --> DD["Typspezifische Ähnlichkeitssuche und Deduplizierung"]
     DD --> KNOW[("Notes, Tasks, Listen und Einträge")]
-    AUTO -->|Query| CHAT["Chat-Turn; gesonderter Workeraufruf"]
+    AUTO -->|Query| CHAT["Chat-Turn; Standard-Worker"]
     ART -.->|Fachliche Finalisierung / Promotion| KNOW
     KNOW --> SEARCH["Exakt + Volltext + Trigramm; bei Bedarf Vektorsuche"]
     SEARCH --> CHAT
@@ -144,7 +144,7 @@ Das Backend verwendet FastAPI als API-Schicht und PostgreSQL als autoritativen D
 | `session_topics` | Expliziter oder semantisch erkannter Kontext | Themen der laufenden Session samt Belegen und Konfidenz. |
 | `session_questions` | Explizite oder gesondert angelegte implizite Frage | Offene/beantwortete Frage mit Priorität, Quellen und Antwort. |
 | `notes` | Dauerhaft gespeicherter Inhalt | Persönliche Notiz mit Embedding, Zeitpunkten und Archivstatus. |
-| `tasks` | Handlung / Verpflichtung | Inhalt, Status, Frist, Urgency, CalDAV-Priority, Fortschritt und Embedding. |
+| `tasks` | Handlung / Verpflichtung | Inhalt, Status, persistentes Bearbeitungsfenster (`work_start_at`/`due_at`), Urgency, CalDAV-Priority, Fortschritt und Embedding. |
 | `lists`, `list_items` | Container und einzelne Einträge | Veränderliche Sammlung; Einträge mit Status und Listenbezug. |
 | `claims` | Atomare Aussage mit Subjekt, Prädikat und Wert | Fact, Opinion, Prediction, Requirement oder Decision; Polarität, Modalität, Gültigkeit, Konfidenz und Konfliktstatus. |
 | Fact | Ein Claim mit `claim_type='fact'` | Eigene Client-Wissensprojektion aus Claims; keine separate allgemeine `facts`-Tabelle. |
@@ -198,7 +198,7 @@ Eine Quelle, ein Zitat und die daraus extrahierte Aussage sind unterschiedliche 
 
 ### 5.3 Verarbeitung eines einzelnen Memos
 
-**Auslöser:** `run_capture_once`, erreichbar über `POST /api/workers/client-capture/run-once`. Nicht in `worker.py all` enthalten.
+**Auslöser:** `run_capture_once`, erreichbar über `POST /api/workers/client-capture/run-once` und seit dem Re-Audit vom 2026-09-08 Bestandteil von `worker.py all`.
 
 | Reihenfolge | Input | Verarbeitung | Output |
 |---|---|---|---|
@@ -310,7 +310,7 @@ Die Reihenfolge im Code:
 |---|---|
 | „auf die …liste“ mit vorangestellten Einträgen | Zielcontainer und einzeln aufzunehmende Items. |
 | „muss“, „soll“, „übernimmt“, „kümmert sich“ | Task-Kandidat, sofern nicht klarer Listen- oder Entscheidungskontext vorliegt. |
-| Benannter Wochentag, optional Uhrzeit | Absolute Frist relativ zum Sessionstart; gleicher Wochentag bedeutet im Parser die nächste Woche, Standarduhrzeit 09:00. |
+| „heute“, „morgen“, „übermorgen“ oder benannter Wochentag, optional Uhrzeit | Absoluter Zeitpunkt relativ zum Sessionstart; beim gleichen benannten Wochentag bedeutet der Parser die nächste Woche, Standarduhrzeit 09:00. `ab …` wird als `work_start_at`, `bis …`/`spätestens …` als `due_at` getrennt. Ohne Marker bleibt der Zeitpunkt die Frist. |
 | Explizite Dringlichkeit | Urgency und Herkunft `explicit`. |
 | Task-Signal ohne Datum und ohne explizite Dringlichkeit | Policy-Default `urgency=0.4`, Herkunft `policy_default`. Das ist eine Regelentscheidung, kein aus der Aussage belegter Dringlichkeitsgrad. |
 | Offene / beschlossene Entscheidung | `decision_status=open` oder `decided`. |
@@ -336,27 +336,28 @@ Das LLM kann `create`, `update`, `confirm`, `supersede`, `dismiss` oder `none` v
 1. Finish legt `expected_final_sequence` fest und setzt zunächst `draining`.
 2. Reconciliation prüft, ob der Upload-Horizont vollständig ist.
 3. Bei Vollständigkeit Ingestion-Finish ausführen, finale STT-Fenster einplanen und Clientzustand `processing` setzen. Ein wiederholtes Finish während `processing` führt nicht zurück zu `draining`.
-4. Finalisierung verlangt `processing` und vollständige Uploads. Sie prüft explizit `failed`-Jobs sowie `queued`/`running`-Jobs.
-5. Capture-Ergebnis materialisieren, bevor der Abschluss gesetzt wird:
+4. Finalisierung verlangt `processing` oder einen nach reparierten Jobs wiederaufnehmbaren Zustand `attention_required` sowie vollständige Uploads. Jeder Jobzustand ungleich `done` blockiert; `failed`, `parked` und `attention_required` ergeben den Completion-Status `attention_required`.
+5. Der gemeinsame Finalize-Pfad führt zuerst die fachliche Finalisierung und Promotion aus (8.2/8.3). Schlägt die Promotion fehl, bleibt die Client-Session `attention_required` und die Audiofreigabe gesperrt; derselbe idempotente Client-Finalize-Endpunkt kann den Versuch wiederholen.
+6. Capture-Ergebnis materialisieren, bevor der technische Abschluss gesetzt wird:
    - `meeting`: Ergebnis mit `resolved_intent=meeting`;
    - `memo`: zusammengefügter stabiler Transkripttext;
    - `query`: aus diesem Text Conversation und Turn anlegen;
    - `auto`: erst jetzt dieselbe Memo-/Query-Heuristik auf den gesamten Text anwenden.
-6. Client- und Ingestion-Session auf `completed` setzen.
-7. Monotone sessionsweite `local_audio_release_allowed`-Freigabe und Zeitpunkt setzen.
+7. Client- und Ingestion-Session auf `completed` setzen.
+8. Monotone sessionsweite `local_audio_release_allowed`-Freigabe und Zeitpunkt setzen.
 
 **Input:** Fertiger Upload und vorhandene Job-/Transkriptzustände. **Output:** Abgeschlossene Client-Session mit Capture-Ergebnis und Audiofreigabe.
 
-**Ergänzt 2026-09-08:** `settle_client_session_for_ingestion` schließt jetzt nach Schritt 7 automatisch die fachliche Finalisierung an (8.2) und ruft bei Erfolg `promote_session_artifacts` auf (8.3) — siehe dortige Auslöserzeile. Das schließt genau die in A09/D02 dokumentierte Lücke: bestätigte Artefakte wurden bislang nie automatisch dauerhaftes Wissen. Ein `ValueError` aus der fachlichen Finalisierung (Watermarks noch nicht deckungsgleich) wird dabei still abgefangen; die Funktion wird nach jedem weiteren erfolgreichen Worker-Job erneut aufgerufen, bis sie durchläuft. Live gegen eine frische Aufnahme verifiziert (session 401, 2026-09-08): `client_sessions.state` und `ingestion_sessions.status` liefen ohne jeden manuellen Aufruf auf `completed`, ein Fact-Artefakt wurde als Note (`knowledge_id=210`) und ein Task-Artefakt als Task (`knowledge_id=134`, mit Client-Entity-UUID) promoviert.
+**Ergänzt 2026-09-08, Re-Audit:** `settle_client_session_for_ingestion` und der öffentliche Client-Finalize-Endpunkt verwenden jetzt denselben wissenssicheren Abschlussweg. Fachliche Finalisierung und Promotion liegen vor `completed` und Audiofreigabe; eine bereits als `done` gespeicherte Worker-Arbeit wird bei einem nachgelagerten Promotionsfehler nicht rückwirkend auf `failed` gesetzt. Der frühere Happy-Path-Nachweis bleibt gültig (Session 401: automatische Promotion eines Fact- und eines Task-Artefakts). Neu regressionsgeprüft sind außerdem die Sperre durch einen `parked`-Job, gesperrte Audiofreigabe bei simuliertem Promotionsfehler und die anschließende idempotente Wiederaufnahme. Eine allgemeine autonome Retry-Queue für eine fehlgeschlagene Promotion existiert weiterhin nicht; Wiederaufnahme erfolgt über den Client-Finalize-Retry oder einen späteren Settlement-Aufruf.
 
-**Prüflücke im Code:** Die Abschlussabfrage behandelt `parked` und `attention_required` nicht wie `failed` oder offene Jobs. Deshalb darf die Dokumentation die beabsichtigte „vollständig fehlerfreie Worker-Kette“ nicht als für alle Jobzustände bewiesene Garantie ausgeben.
+**Eng begrenzte D03-Kompatibilitätsausnahme:** Eine Client-Session, in die ausschließlich über die direkte Ingestion-Text-API Chunks geschrieben wurden, besitzt historisch weder Audio noch automatisch angelegte Processing-Jobs. Der öffentliche Client-Finalize-Endpunkt darf nur in genau diesem Fall weiterhin das Capture-Ergebnis technisch materialisieren, obwohl die fachlichen Watermarks nicht deckungsgleich sind. Es gibt dabei kein lokales Audio freizugeben. Audio-Sessions oder Sessions mit irgendeinem Processing-Job erhalten diesen Bypass nicht.
 
 ### 8.2 Fachliche Finalisierung
 
-**Auslöser:** `POST /api/ingestion-sessions/{session_id}/finalize`, gesondert vom Client-Finalize-Endpunkt. **Ergänzt 2026-09-08:** zusätzlich automatisch aus `settle_client_session_for_ingestion` (8.1) nach jedem erfolgreichen Audio-/Text-/Artefakt-Worker-Job, ohne `force` und mit `promotion_mode='llm'` fest (nicht clientkonfigurierbar); ein `ValueError` bei noch nicht deckungsgleichen Watermarks wird dort abgefangen, kein Fehlerpfad.
+**Auslöser:** `POST /api/ingestion-sessions/{session_id}/finalize`; außerdem automatisch aus `settle_client_session_for_ingestion` und aus dem Client-Finalize-Endpunkt, jeweils ohne `force` und mit `promotion_mode='llm'` fest. Noch nicht deckungsgleiche Watermarks oder irgendein Jobzustand ungleich `done` verhindern den nicht erzwungenen Abschluss.
 
 1. Watermarks aktualisieren.
-2. Prüfen, ob empfangene, textverarbeitete und artefaktverarbeitete Sequenzen übereinstimmen und keine `queued`/`running`-Jobs vorhanden sind; `force` kann die Bereitschaftsprüfung übersteuern.
+2. Prüfen, ob empfangene, textverarbeitete und artefaktverarbeitete Sequenzen übereinstimmen und alle zugehörigen Jobs `done` sind; `force` kann die Bereitschaftsprüfung des direkten Ingestion-Endpunkts übersteuern.
 3. Aktive Artefakte nur dann bestätigen, wenn ihre Klassifizierung validiert und nicht abstainend ist.
 4. Ingestion-Session abschließen und Evidence-Zitate erzeugen.
 5. Vorhandene Fragen zurückgeben. Dies startet keine Question-Detection.
@@ -369,7 +370,7 @@ Das LLM kann `create`, `update`, `confirm`, `supersede`, `dismiss` oder `none` v
 | Artefakttyp | Bedingung und Ergebnis |
 |---|---|
 | Note, Fact, Decision | Inhalt und Embedding als **Note** speichern. Ein Fact-Artefakt allein erzeugt keinen Fact-Claim. |
-| Task | Validierte normalisierte Frist/Dringlichkeit verwenden oder zusätzliche Task-Feldprüfung durchführen. Ohne geeignete Frist oder positive Dringlichkeit zurückstellen. |
+| Task | Validierten normalisierten Bearbeitungsbeginn, Frist und Dringlichkeit verwenden oder zusätzliche Task-Feldprüfung durchführen. Ohne geeignete Frist oder positive Dringlichkeit zurückstellen. Bei Frist ohne explizites `work_start_at` setzt `save_task` dauerhaft den Beginn des ursprünglichen Event-/Sessiontags; bei bereits vergangener Frist spätestens auf den Fristzeitpunkt. |
 | List | Ab Konfidenz `0.85` eine Liste anlegen. |
 | List Item | Ab Konfidenz `0.85` und mit Zielthema die Listenauflösung/Deduplizierung verwenden. |
 | Bereits verknüpftes Artefakt | Vorhandenes Wissensobjekt zurückgeben; Claims-/Themenverknüpfungen ergänzen, kein reguläres erneutes Anlegen. |
@@ -432,7 +433,7 @@ Der zusätzliche `personal_knowledge_fast_path` ist eine einfache normalisierte 
 
 ### 10.1 Client-Chat
 
-**Auslöser:** `run_chat_turn_once`, erreichbar über `POST /api/workers/client-chat/run-once`; nicht in `worker.py all` eingebunden.
+**Auslöser:** `run_chat_turn_once`, erreichbar über `POST /api/workers/client-chat/run-once` und seit dem Re-Audit vom 2026-09-08 Bestandteil von `worker.py all`.
 
 1. Ältesten `queued`-Turn sperrend beanspruchen und auf `running` setzen; `started`-Ereignis speichern.
 2. Nutzernachricht laden und ein Event mit Quelle `client_chat` anlegen.
@@ -622,7 +623,7 @@ Die fachliche Aufbewahrungswirkung für Textwissen ist inzwischen in Abschnitt 1
 1. Kalenderkonfiguration und Zuordnungen prüfen.
 2. Nur Objekte mit Smart-Notebook-Markierungen verarbeiten; unmarkierte manuelle Nextcloud-Aufgaben bleiben außerhalb des Imports.
 3. Lokale/entfernte Fingerprints, ETags und Synczustände vergleichen.
-4. Tasks als VTODO, Listen als Parent-VTODO und Einträge als über `RELATED-TO` verbundene Subtasks abbilden.
+4. Tasks als VTODO, Listen als Parent-VTODO und Einträge als über `RELATED-TO` verbundene Subtasks abbilden. Bei Tasks wird `work_start_at` als `DTSTART` und `due_at` als `DUE` in beide Richtungen projiziert.
 5. Statusänderungen übernehmen. Remote-Abschluss und Remote-Löschung archivieren intern mit unterschiedlichem Grund; nach bestätigtem Abschluss kann das VTODO entfernt werden. Reopen exportiert erneut.
 6. Gleichzeitige Inhaltsänderungen als CalDAV-Konflikt dokumentieren. Remote-Status und semantische Inhaltsautorität werden getrennt behandelt; Auflösung über `keep_local`/`keep_remote`.
 
@@ -697,7 +698,7 @@ Die Verarbeitung muss den Archivierungsgrund aus Abschnitt 14.3 beachten. Automa
 | `worker.py audio` | Audio-Transkriptionsjobs | Client-Text-Capture und Chat. |
 | `worker.py text` | Textsegmentierung, Topics, Artefakt-Folgejob | Allgemeine Frageauflösung und dauerhafte Promotion. |
 | `worker.py artifacts` | Regeln/LLM für Session-Artefakte | Automatische vollständige Auto-Orchestrierung. |
-| `worker.py all` | Audio, Text, Artefakte pro Schleifenrunde nacheinander; seit 2026-09-08 schließt jeder erfolgreiche Job automatisch die fachliche Session-Finalisierung und Promotion an (8.1/8.3) | Capture-/Chat-Worker, allgemeiner permanenter Reconciler. |
+| `worker.py all` | Audio, Text, Artefakte, Einzeltext-Captures und Chat-Turns pro Schleifenrunde nacheinander; erfolgreiche Sessionjobs versuchen den wissenssicheren Abschluss aus 8.1/8.3 | Allgemeiner permanenter Reconciler und autonome Wiederholung fehlgeschlagener Promotionsversuche. |
 | `scheduler.py` | Täglicher Wartungslauf | Automatische externe Recherche. |
 | `caldav_worker.py` | Periodische CalDAV-Synchronisation | Verarbeitung unmarkierter Fremdobjekte. |
 | `background.py` | Startet Queue-Worker, CalDAV und Scheduler als Unterprozesse | Kein eigenständiger fachlicher Entscheidungsmechanismus. |
@@ -719,7 +720,7 @@ flowchart LR
 
 Jobs werden mit `FOR UPDATE SKIP LOCKED` beansprucht, Versuch und Besitzer gespeichert. Priorität, Bonus für aktive Sessions und Aging beeinflussen die Auswahl. Erfolgreiche Jobs sind `done`, nicht `completed`.
 
-**Die Schleife beansprucht nur `queued`.** Ein `failed`-Job wird nicht allein durch erneutes Polling wieder ausgeführt. Dafür braucht es `retry_processing_job_record` oder den passenden Repair-Pfad. Der vorhandene Session-Repair konzentriert sich auf Textverarbeitungsschritte: fehlende Steps/Jobs ergänzen, fehlgeschlagene Textjobs erneut einplanen, veraltete Textjob-Locks zurückstellen und Stepzustände synchronisieren. Er ist kein automatisch ständig laufender Reconciler aller Warteschlangen.
+**Die Verarbeitungsjob-Schleife beansprucht nur `queued`.** Ein `failed`-Job wird nicht allein durch erneutes Polling wieder ausgeführt. Dafür braucht es `retry_processing_job_record` oder den passenden Repair-Pfad. Der vorhandene Session-Repair konzentriert sich auf Textverarbeitungsschritte: fehlende Steps/Jobs ergänzen, fehlgeschlagene Textjobs erneut einplanen, veraltete Textjob-Locks zurückstellen und Stepzustände synchronisieren. Er ist kein automatisch ständig laufender Reconciler aller Warteschlangen. Capture- und Chat-Aufträge werden nun zwar im Standardprozess beansprucht, ihre eigenen `failed`-Zustände besitzen aber weiterhin nur die expliziten Retry-Wege.
 
 Watermarks beschreiben den **lückenlos zusammenhängenden** Stand empfangener, eingeplanter, textverarbeiteter und artefaktverarbeiteter Chunk-Sequenzen. Sie erkennen Lücken, erzwingen aber allein keine universelle Serialisierung aller Worker pro Session. Das Claim-SQL sperrt einzelne Jobs; mehrere Worker können unterschiedliche Jobs derselben Session erhalten. Eine streng geordnete fachliche Verarbeitung bei beliebiger Parallelisierung darf nicht vorausgesetzt werden.
 
@@ -759,6 +760,12 @@ Technische Logs und Worker-Heartbeats dienen der Diagnose. Normativ sollen sie k
 - Server-Audio-Retention beträgt standardmäßig sieben Tage. Ablauf kann Blobs löschen, unabhängig davon, ob sämtliche fachlichen Wünsche bereits umgesetzt wurden; der Purger filtert nicht generell auf fehlerfrei abgeschlossene Verarbeitung. Metadaten und Audit bleiben.
 - Die vorhandene `smart_notebook.db` ist kein Beleg für SQLite als aktuellen Hauptspeicher: `database.py` verbindet sich über psycopg mit PostgreSQL.
 
+### 17.5 Strukturierte LLM-Aufrufe und aktueller `llama.cpp`-Befund
+
+Der Re-Audit vom 2026-09-08 findet **zwölf** aktive `response_format.type='json_schema'`-Aufrufe in **zehn** Services: `capture.py`, `claims.py`, `consolidation.py`, `dedupe.py` (zweimal), `lists.py` (zweimal), `maintenance.py`, `nightly_consolidation.py`, `promotion.py`, `segmentation.py` und `shadow.py`. `chat.py` gehört entgegen der älteren Aufzählung nicht dazu. `artifacts.py::_propose_artifact_operations` bleibt der einzige bewusst unstrukturierte Workaround: Formatvorgabe im Prompt, JSON-Extraktion und lokale Validierung.
+
+Der aktuelle Code besitzt keinen gemeinsamen Adapter für diese Aufrufe; Schema, HTTP-Client, Parsing und Fehlerbehandlung liegen jeweils im Fachservice. Auch `trust_env=False` wird nicht einheitlich gesetzt. Das ist eine Wartungsinkonsistenz, aber kein Nachweis, dass projektweit auf textbasierte Ausgabe umgestellt werden sollte. Der nächtliche strukturierte Review wurde im Re-Audit live erfolgreich ausgeführt. Der kombinierte Alpha-Test für Artefakt, Shadow und Claims war wegen eines parallel laufenden Workers nicht aussagekräftig: Dieser beanspruchte den Testjob vor dem Test-Endpoint. **AD-012 entscheidet deshalb gegen eine pauschale Umstellung:** funktionierende kleine Schemas bleiben constrained; weitere freie Textpfade benötigen einen reproduzierbaren Taskfehler und gleichwertige lokale Validierung. Ein gemeinsamer Transport-/Parsing-Adapter bleibt technische Folgearbeit, ohne die taskweise Modusentscheidung zu verwischen.
+
 ## 18. Was zum gewünschten allgemeinen Auto-Modus noch fehlt
 
 Die folgende Liste konsolidiert das Gespräch und den tatsächlichen Integrationsstand. Die Produktentscheidungen zu Aufnahme, Fact-Einstufung, autonomer Konfliktklärung, Rückfrageninteraktion und Archivierung sind in den Abschnitten 2.1, 11.5–11.6, 12.1–12.2, 14.3 und 15.4 beschlossen. „Fehlt“ bedeutet dafür **Umsetzung offen**, nicht erneute Nutzerentscheidung erforderlich. Zahlenwerte und technische Details werden anhand dieser Regeln implementiert und geprüft; neue APIs werden hier nicht als bereits vorhanden behauptet.
@@ -775,8 +782,8 @@ Die folgende Liste konsolidiert das Gespräch und den tatsächlichen Integration
 | A06 | Referenzen aus Sprache und Gespräch auflösen | „Das ist erledigt“, „dort noch Brot“ → eindeutige Objekt-ID oder offene Rückfrage. |
 | A07 | Gemeinsamer Aktionsplan und Executor | Validierte Interpretation → anlegen, ergänzen, ändern, abhaken, wieder öffnen oder archivieren. |
 | A08 | Teilweise Unsicherheit behandeln | Gemischte sichere/unsichere Aktionen → sichere Teile ausführen, restliche mit Kontext zur Klärung speichern. |
-| A09 | Dauerhafte Übernahme und Claim-Kandidaten anschließen — **Übernahme seit 2026-09-08 automatisch verdrahtet** (`settle_client_session_for_ingestion` → `finalize_session` → `promote_session_artifacts`, 8.1/8.3), live verifiziert. Claim-Kandidaten-Aktivierung (Abschnitt 11.2) bleibt offen. | Geeignete bestätigte Inhalte → dauerhaftes Wissen; geprüfte Claim-Kandidaten → kontrolliert aktivierte Claims. |
-| A10 | Capture-/Chat-Verarbeitung automatisch betreiben | Persistierte Aufträge → ohne manuelle run-once-Aufrufe abgearbeitete Ergebnisse. |
+| A09 | Dauerhafte Übernahme und Claim-Kandidaten anschließen — **Übernahme seit 2026-09-08 automatisch und vor Audiofreigabe verdrahtet** (`settle_client_session_for_ingestion`/Client-Finalize → `finalize_session` → `promote_session_artifacts` → technischer Abschluss), live im Happy Path und regressionsgeprüft im Fehlerpfad. Claim-Kandidaten-Aktivierung (Abschnitt 11.2) bleibt offen. | Geeignete bestätigte Inhalte → dauerhaftes Wissen; geprüfte Claim-Kandidaten → kontrolliert aktivierte Claims. |
+| A10 | Capture-/Chat-Verarbeitung automatisch betreiben — **seit Re-Audit 2026-09-08 geschlossen:** Beide Queues sind Bestandteil von `worker.py all`; die manuellen Run-once-Endpunkte bleiben für Diagnose/Tests erhalten. Automatische Retries bereits fehlgeschlagener Capture-/Chat-Datensätze bleiben Teil von A11/W06. | Persistierte Aufträge → ohne manuelle run-once-Aufrufe abgearbeitete Ergebnisse. |
 | A11 | Idempotente Mehrfachaktionen und Recovery | Retry / Absturz → Fortsetzung ab offenem Teilschritt ohne doppelte Mutation. |
 | A12 | Verständliches Gesamtresultat | Ausgeführte Aktionen und offene Fragen → nachvollziehbare Rückmeldung, bei Bedarf Antwort. |
 | A13 | Aufnahmefilter mit niedriger Nutzenschwelle | Beliebige Eingabe → Smalltalk/Füllsätze ausfiltern, möglicherweise nützliche Inhalte als gekennzeichnete Kandidaten aufnehmen; siehe 2.1. |
@@ -792,7 +799,7 @@ Die folgende Liste konsolidiert das Gespräch und den tatsächlichen Integration
 | W05 | Question-/Clarification-Kreislauf | Ausgewählte Dashboard-Frage → gebundene Text-/Audiomemo oder ausdrücklich abgesendeter Antwortvorschlag → Wissen aktualisieren und abhängige Aktion fortsetzen; siehe 12.2. Freie Memos behalten einen separaten Zuordnungsfallback. |
 | W06 | Offene Vorgänge nachts nachholen | Zurückgestellte Kandidaten und Fehler → erneute Prüfung mit gespeichertem Kontext. |
 | W07 | Kalendergrenze und Fehlerisolation der Wartung korrigieren | Seit letztem Erfolg offene Events → vollständige Nachholung; Ausfall eines Schritts blockiert nicht dauerhaft Retention/Reparatur. |
-| W08 | Jobzustände und Abschlussbarriere vereinheitlichen | failed/parked/attention_required und offene Steps → konsistenter Sessionzustand ohne vorzeitige Freigabe. |
+| W08 | Jobzustände und Abschlussbarriere vereinheitlichen — **Abschlussbarriere seit Re-Audit 2026-09-08 geschlossen:** Im normalen Client-/Worker-Abschluss blockiert jeder Zustand ungleich `done` fachlichen und technischen Abschluss; problematische Zustände blockieren die Audiofreigabe. Der ausdrücklich erzwungene direkte Ingestion-Finalize bleibt ein Diagnose-/Reparaturweg ohne Client-Audiofreigabe. Offen bleibt ein allgemeiner autonomer Retry/Reconciler für die Wiederaufnahme. | failed/parked/attention_required und offene Steps → konsistenter Sessionzustand ohne vorzeitige Freigabe. |
 | W09 | Langfristige Selbstbereinigung | Niedrige Importance + schwache Evidence + lange Nichtnutzung → unter Beachtung geschützter Inhalte zurücknehmen/archivieren; siehe 2.1 und 15.4. |
 | W10 | Archivierungsgrund und Wiederaufnahmesperre | Automatische Archivierung, historische Ablösung oder Nutzerverwerfen → unterschiedliche Wiederaufnahmebehandlung, einschließlich alter Quellen und Ableitungen; siehe 14.3. |
 
@@ -827,12 +834,12 @@ Weitere notwendige Fälle:
 
 ## 19. Gefundene Widersprüche und Präzisierungen
 
-Diese Übersicht dokumentiert die Abweichungen, ohne ältere normative Dateien still umzuschreiben. „Codebefund“ beschreibt den lokalen Stand; „Entscheidungsbedarf“ markiert eine noch zu klärende Produkt-/Vertragsfrage.
+Diese Übersicht dokumentiert die Abweichungen, ohne ältere normative Dateien still umzuschreiben. „Codebefund“ beschreibt den lokalen Stand; „Entscheidungsbedarf“ markiert eine noch zu klärende Produkt-/Vertragsfrage. Beim Re-Audit vom 2026-09-08 wurden D01–D22 erneut gegen die genannten Funktionen und Aufrufstellen geprüft: D02 und D18 sind geschlossen, D11 ist durch A10 kleiner geworden, alle übrigen Befunde wurden im aktuellen Code erneut bestätigt.
 
 | ID | Quelle / frühere Aussage | Codebefund oder Gegenquelle | Einordnung in diesem Dokument |
 |---|---|---|---|
 | D01 | Handoff vom 24.08.: A2/Queue/Streaming vielfach geplant | Heutige Services enthalten Audio, Jobs, Segmente, Artefakte und Client-v1 | Handoff ist historische Baseline, kein aktueller Funktionsstatus. |
-| D02 | Roadmap M1: vollständige Artefakte automatisch bestätigen **und promoten** | War: neue validierte Artefakte werden bestätigt, Worker ruft Promotion nicht auf. **Seit 2026-09-08 behoben**, siehe 8.1/A09. | Automatische Bestätigung war schon vorhanden; automatische Promotion jetzt ergänzt. Widerspruch aufgelöst. |
+| D02 | Roadmap M1: vollständige Artefakte automatisch bestätigen **und promoten** | War: neue validierte Artefakte werden bestätigt, Worker ruft Promotion nicht auf. Seit 2026-09-08 behoben; der Re-Audit ordnet Promotion zusätzlich vor technischen Abschluss und Audiofreigabe. | Automatische Bestätigung war schon vorhanden; automatische Promotion und Fehlerbarriere sind ergänzt. Widerspruch aufgelöst. |
 | D03 | Chatdiagramme: Text-Chunk → Textjob | Direkte Chunk-Erzeugung speichert nur; Audio-Stabilisierung ruft Repair auf | Direkter Text-Ingest braucht explizite Jobanlage/Repair. |
 | D04 | Effizienzleiter als allgemeiner Weg sämtlicher Suchen | Capture-Deduplizierung nutzt separate Vektorsuchen; allgemeiner Retriever fragt mehrere SQL-Kanäle vor Vektor ab | Unterschiedliche Suchpfade ausdrücklich getrennt. |
 | D05 | „Alle Inhalte → Wissen/Fragen/Antwort“ | Einzelmemo, Query und Session besitzen unterschiedliche Aufrufketten | Keine bereits einheitliche Auto-Orchestrierung. |
@@ -841,14 +848,14 @@ Diese Übersicht dokumentiert die Abweichungen, ohne ältere normative Dateien s
 | D08 | Allgemeiner „Wissensspeicher“ vollständig für Antworten zugänglich | `search_knowledge` unterstützt keine Fact-Claims; Sync/Resolver schon | Potenzieller Verlust der Chat-Auffindbarkeit nach Note-Archivierung. |
 | D09 | Client-Chat als vollständig eigener Gesprächskontext | Promptkontext liest Legacy-Events mit `response`, nicht die Client-Conversation | Folgekontext-Lücke; getrennte Speicherung benannt. |
 | D10 | „Quellen in der Antwort“ als verwendete Evidence | Client-Citations stammen aus Retrieval-Liste; Resolver validiert echte Zitatspannen separat | Trefferreferenz ist kein Nachweis tatsächlich verwendeter Evidence. |
-| D11 | Roadmap M2: Retries/Stale-Recovery als vollständiger Dauerbetrieb | Standardworker verarbeitet nur queued; Repair primär Text; Capture/Chat fehlen in all | Vorhandene Mechanismen ohne pauschale autonome Wiederanlaufgarantie. |
+| D11 | Roadmap M2: Retries/Stale-Recovery als vollständiger Dauerbetrieb | Standardworker verarbeitet nur `queued`; Repair bleibt primär Text. Capture/Chat sind seit Re-Audit in `all`, ihre fehlgeschlagenen Datensätze werden aber nicht allgemein autonom reaktiviert. | A10 geschlossen; pauschale autonome Wiederanlaufgarantie bleibt offen. |
 | D12 | Streng geordnete Session-Verarbeitung als Architekturziel | SKIP-LOCKED-Claim sperrt Jobs, kein allgemeines Session-Gate | Watermarks sind Fortschrittskontrolle, keine universelle Reihenfolgesperre. |
 | D13 | „Nächtliche Tageskonsolidierung“ | 03:00-Lauf selektiert aktuellen Kalendertag ab 00:00 | Vorheriger Tag wird durch diesen Selektor nicht nachgeholt. |
 | D14 | „Semantische Änderungen nachts nur Shadow“ | Paarreview ist Shadow; Eventkonsolidierung kann LLM-basiert bestehendes Wissen aktualisieren | Geltungsbereich des Shadow-Modus präzisiert. |
 | D15 | AD-010 enthält externe Recherche, Paperless und monatliche Faktenupdates | M7 kennzeichnet große Teile offen; Resolver gibt nur Eskalationsbedarf aus | Architekturabsicht, keine implementierte Rechercheautomatik. |
 | D16 | Roadmap: Single User ohne eigene App-Authentifizierung | `app.py` und Device-Auth-Service unterstützen konfigurierbare Bearer-Geräteauth | Single User und Authentifizierung nicht gleichsetzen. |
 | D17 | Roadmap M3 / Teile des Clientvertrags: lokal nach durable ACK löschen | AD-011 fordert sessionsweite Freigabe; Matrix unterscheidet Android und ESP | Backendfreigabe erklären; widersprüchliche Client-Löschregel nicht still vereinheitlichen. Entscheidungsbedarf je Clientvertrag. |
-| D18 | AD-011: Freigabe nach fehlerfreier Kette | Client-Finalizer prüft failed, queued, running, nicht alle übrigen Problemzustände | Konkrete Abschluss-Prüflücke vermerkt. |
+| D18 | AD-011: Freigabe nach fehlerfreier Kette | Re-Audit-Fix: Der Client-/Worker-Abschluss und der nicht erzwungene Ingestion-Finalizer verlangen nun ausschließlich `done`; `failed`, `parked` und `attention_required` verhindern Clientabschluss und Audiofreigabe. Promotion läuft davor. | Widerspruch aufgelöst; Retry-Orchestrierung bleibt unter W06/W08 offen. |
 | D19 | Android-Grenze: keine Task-/Listenverwaltung; früherer Chat entsprechend knapp | Aktuelle Client-API enthält `complete_task` und Task-Detailprojektion; Idle-Tasks/Listen sind auf `esp32_epaper` begrenzt | Backendfähigkeit und Surface unterscheiden; Android-Scope bleibt gesonderter Vertragsabgleich. |
 | D20 | Audio-Aufbewahrung im alten Audio-Vorschlag noch offen | Config/Purger implementieren sieben Tage Default und Blob-Löschung | Implementierter Default; keine Garantie unbegrenzter Raw-Quellenaufbewahrung. |
 | D21 | Importance als allgemeine Wissensbewertung | Typabhängige unvollständige Zähler; keine generelle Retrieval-Verwendung | Aufmerksamkeitssignal, nicht universeller Wahrheits-/Prioritätswert. |
@@ -893,10 +900,46 @@ Diese Übersicht dokumentiert die Abweichungen, ohne ältere normative Dateien s
 
 ### 20.3 Verifikation und Pflege
 
+**Re-Audit 2026-09-08, Auto-Modus A01–A13/W01–W10:**
+
+| ID | Aktueller Integrationsstatus | Erneut geprüfter Codebezug |
+|---|---|---|
+| A01 | Offen | `client_capture.py::create_capture/run_capture_once` und `segmentation.py::run_text_processing_once` bleiben getrennte Interpretationspfade. |
+| A02 | Offen | `client_capture.py::_intent` und `client_sessions.py::_materialize_capture_result` verwenden weiterhin die Memo-/Query-Frageheuristik. |
+| A03 | Offen | `capture.py::classify_capture` liefert genau eine Aktion; mehrere Artefaktoperationen existieren nur im Sessionpfad `artifacts.py`. |
+| A04 | Offen | Capture-Schema, `semantic_router.py` und Artefaktvalidator besitzen weiterhin unterschiedliche Typmengen und Guards. |
+| A05 | Offen | Capture-Deduplizierung (`dedupe.py`, `lists.py`) und Session-Promotion (`promotion.py`) besitzen keinen gemeinsamen Vorab-Abgleich. |
+| A06 | Offen | `reference_resolver.py::resolve_internal` ist nicht an allgemeine Sprachänderungen oder `context_ref`-Verarbeitung angeschlossen. |
+| A07 | Offen | Es gibt keinen eingangswegübergreifenden Aktionsplan/Executor; Capture und Artefaktoperationen mutieren über eigene Services. |
+| A08 | Offen | Unsichere Artefakte/Questions können gespeichert werden, aber kein gemeinsamer Plan hält nur abhängige Teilmutationen zurück und setzt sie später fort. |
+| A09 | Teilweise geschlossen | `client_sessions.py::finalize_client_session_with_knowledge/settle_client_session_for_ingestion` schließen Promotion jetzt vor Clientabschluss und Audiofreigabe an; nur die ausdrücklich dokumentierte text-only D03-Kompatibilitätsausnahme überspringt die Session-Pipeline. `claims.py::extract_note_claim_candidates` erzeugt weiterhin nur Kandidaten. |
+| A10 | Geschlossen | `worker.py::WORKER_KINDS/run_worker_once` betreibt Capture und Chat nun im Standardmodus `all`. |
+| A11 | Offen | Stabile IDs und lokale Idempotenz existieren, aber kein Transaktionsjournal für mehrere fachliche Teilaktionen. |
+| A12 | Offen | Capture-, Promotion- und Chatresultate bleiben getrennte Rückmeldungen; kein einheitliches Gesamtresultat. |
+| A13 | Offen | Es gibt keinen gemeinsamen Aufnahmefilter, der Smalltalk, Hypothesen, Zitate und nützliche Kandidaten quellenbewusst trennt. |
+| W01 | Offen | `knowledge_sources` und Artefaktlinks sichern Quellen, aber es fehlt ein allgemeines Vorher/Nachher-Mutationsaudit mit Entscheidungsgrund. |
+| W02 | Offen | `retrieval.py::search_knowledge` erlaubt weiterhin nur Note, Task, List und List Item, keine Fact-Claims. |
+| W03 | Offen | `client_chat.py::run_chat_turn_once` ruft `chat.py::ask_llm`; `chat.py::get_recent_conversation` liest Legacy-Events statt Conversation-Nachrichten. |
+| W04 | Offen | `claims.py::run_changed_conflict_scan` läuft separat/nachts und ist kein allgemeiner Guard vor Antworten oder Mutationen. |
+| W05 | Offen | `context_ref` wird gespeichert, aber `client_capture.py::run_capture_once` ordnet keine Clarification zu und setzt keine abhängige Aktion fort. |
+| W06 | Offen | `jobs.py::queue_parked_jobs_for_night_repair` deckt nur Processing-Jobs ab; Capture-/Chat-/Promotionsfehler besitzen keinen gemeinsamen Nacht-Nachholer. |
+| W07 | Offen | `consolidation.py::get_today_unarchived_events` beginnt weiterhin bei 00:00 des Aufruftags; `maintenance.py::run_daily_maintenance` bricht bei Schrittfehlern ab. |
+| W08 | Teilweise geschlossen | `intelligence.py::finalize_session` ohne `force` und `client_sessions.py::finalize_client_session` verlangen nun ausschließlich `done`; autonome Reaktivierung aller Problemzustände bleibt offen. |
+| W09 | Offen | Die beschlossene Langzeitbereinigung ist nicht in `maintenance.py::run_daily_maintenance` enthalten. |
+| W10 | Offen | Vorhandene Archivfelder/-gründe bilden keine allgemeine Wiederaufnahmesperre für nutzerverworfene Inhalte und Ableitungen. |
+
+Für D01–D22 wurden zusätzlich die Aufrufstellen in `worker.py`, `client_sessions.py`, `ingestion.py`, `intelligence.py`, `retrieval.py`, `chat.py`, `client_chat.py`, `claims.py`, `consolidation.py`, `maintenance.py`, `activity.py`, `reference_resolver.py`, `knowledge_sync.py`, `client_dashboard.py` sowie Auth-/Retention-Services erneut gesucht. Es wurden keine still geschlossenen Lücken außer den oben ausdrücklich geänderten D02/D11/D18 gefunden. Eine lexikalische Prüfung aller Backend-Funktionsdefinitionen fand keine Funktion, deren Name ausschließlich an ihrer Definition vorkommt; das ist ein Indiz gegen einfache verwaiste Funktionen, ersetzt aber keine Laufzeit-Coverage.
+
 **Entscheidungsnachtrag 2026-09-08:** Vom Nutzer bestätigte Regeln in den jeweiligen Fachabschnitten ergänzt, Umsetzungsliste und Abnahmeszenarien angepasst. Die zusätzliche Dashboard-Interaktion bindet Schnellmemos explizit an die ausgewählte Rückfrage und erlaubt optionale, ausdrücklich abzusendende Antwortvorschläge. Der zuvor geprüfte Code-Ist-Stand wurde durch diese reine Dokumentationsänderung nicht geändert. Die Bereinigung anderer Dokumentationsdateien und die formale Neuordnung ihres Normrangs bleiben ein eigener Arbeitsschritt.
 
 Bei der Erstellung wurden Funktionsdefinitionen, direkte Aufrufstellen, SQL-Auswahlbedingungen und relevante Dokumentationspassagen abgeglichen. Backendimporte, die Datenbankinitialisierung oder Migrationen auslösen, sowie mutierende API-/Worker-/Wartungstests wurden dafür nicht gestartet. Die Datei und ihre lokalen Quellenlinks werden statisch geprüft; die Mermaid-Blöcke sind editierbare Ablaufbeschreibungen.
 
 Bei Änderungen an einer Verarbeitungskette sind in dieser Datei mindestens Auslöser, Input, Reihenfolge, Output, Fehlerpfad und Integrationsstatus anzupassen. Geschlossene Lücken aus Abschnitt 18 benötigen einen konkreten Nachweis; Widersprüche aus Abschnitt 19 sollen erst nach Code-/Vertragsabgleich als aufgelöst gelten. Ein neuer Workeraufruf oder ein geändertes Promotions-/Retentionverhalten ist dabei ebenso relevant wie ein neuer Endpoint.
 
-**Codeänderung 2026-09-08 (A09/D02, Übernahme-Hälfte):** `services/client_sessions.py::settle_client_session_for_ingestion` ist jetzt `async` und ruft nach dem technischen Abschluss zusätzlich `intelligence.py::finalize_session` und bei Erfolg `promotion.py::promote_session_artifacts` auf; alle vier Aufrufstellen (`audio.py` ×2, `segmentation.py`, `artifacts.py`) auf `await` umgestellt. Konkreter Nachweis bisher: volles M8-Gate grün (ein vorbekannter, unabhängiger Datenverschmutzungs-Ausreißer in `m8_chat_push_contract_test.py` ausgenommen), inklusive `m8_audio_recovery_e2e_test.py`, das den Finalize-Pfad zweimal idempotent durchläuft. Zusätzlich live gegen eine frische Aufnahme verifiziert (session 401): automatische Promotion eines Fact- und eines Task-Artefakts, ohne manuellen API-Aufruf. Damit ist A09 in seiner Übernahme-Hälfte vollständig geschlossen. Die Claim-Kandidaten-Aktivierung aus Abschnitt 11.2 bleibt offen.
+**Erste Codeänderung 2026-09-08 (A09/D02, Übernahme-Hälfte; historische Reihenfolge):** `services/client_sessions.py::settle_client_session_for_ingestion` wurde `async` und schloss erstmals `intelligence.py::finalize_session` sowie `promotion.py::promote_session_artifacts` an; alle vier Aufrufstellen (`audio.py` ×2, `segmentation.py`, `artifacts.py`) wurden auf `await` umgestellt. Der damalige Happy Path war im M8-Gate und live gegen Session 401 belegt (automatische Promotion eines Fact- und eines Task-Artefakts). Der nachfolgende Re-Audit erkannte, dass diese erste Fassung den technischen Abschluss noch vor die Promotion setzte; die heute gültige Reihenfolge steht im nächsten Absatz und in Abschnitt 8.1. Die Claim-Kandidaten-Aktivierung aus Abschnitt 11.2 bleibt offen.
+
+**Codeänderung 2026-09-08 (Re-Audit A09/A10/W08, Fehlerpfad):** `worker.py all` umfasst jetzt zusätzlich `capture` und `chat`. `services/client_sessions.py::finalize_client_session_with_knowledge` ist der gemeinsame Client-/Worker-Abschlussweg und ordnet `finalize_session` plus Promotion vor technischem `completed` und `local_audio_release_allowed` ein. `services/intelligence.py::finalize_session` sowie der technische Finalizer blockieren jeden Jobzustand ungleich `done`. Der M8-ESP-Backendtest simuliert `parked`, einen Promotionsfehler und die anschließende Wiederaufnahme. Der nächtliche strukturierte LLM-Review lief live grün. Der kombinierte Alpha-LLM-Test war nicht bewertbar, weil ein bereits laufender Hintergrundworker seinen Textjob vor dem Test-Endpoint beanspruchte; daraus wurde kein Schemafehler abgeleitet. Nach Behebung der null-unsafe Shared-DB-Assertion in `m8_chat_push_contract_test.py` lief das vollständige `m8_release_gate_test.py` einschließlich des logischen Vier-Stunden-Soaks grün. Vorherige Fehlversuche durch aktivierte lokale Device-Auth und eine fremdgeöffnete Test-Audiodatei waren Umgebungsbefunde, keine Regressionen der Änderung.
+
+**Live-Nachtrag 2026-09-08 (relative Tagesfristen):** Auslöser war die reale ESP-Memo-Session `388472e4-4401-4cd4-bc5a-54122947d333` mit dem stabilisierten Transkript „Ich muss heute um 20 Uhr den Rauchmelder im Flur prüfen.“ Upload, STT, Textverarbeitung, Artefaktbildung, Promotion und Audiofreigabe liefen fehlerfrei; das Task-Artefakt wurde zu dauerhaftem Wissen, aber mit `due_at=NULL`. Ursache: `semantic_router.py::_relative_due` erkannte nur benannte Wochentage. Deshalb erhielt der Task stattdessen die Policy-Default-Urgency und fiel anschließend aus der ESP-Heute-Projektion (`client_dashboard.py`, Filter `due_at < morgen`). `_relative_due` löst nun auch „heute“, „morgen“ und „übermorgen“ relativ zum Sessionstart auf, weiterhin mit optionaler Uhrzeit und 09:00 als Standard. Reihenfolge und Fehlerpfad bleiben unverändert; geändert ist die normalisierte Router-Ausgabe vor Artefaktpromotion. `semantic_router_test.py` deckt den realen Satz als Regression ab; anschließend lief das vollständige M8-Release-Gate inklusive logischem Vier-Stunden-Soak grün. Nach Neustart des nicht hot-reloadenden `background.py`-Prozesses bestätigte die reale Session `946b481a-4f53-4e04-83fb-ba7be2037871` den gesamten Gerätepfad: Das Transkript „Ich muss heute um 21 Uhr den Wasserfilter in der Küche prüfen.“ wurde zu Task 16 mit `due_at=2026-09-08T21:00:00+02:00`, erschien auf dem ESP, und Session sowie Audiofreigabe erreichten `completed`/`true`.
+
+**Codeänderung 2026-09-08 (Task-Bearbeitungsfenster nach Queue-Fix):** Auslöser war das bestätigte Zielbild, Tasks nicht nur am Fristtag, sondern in ihrem Bearbeitungszeitraum und ab moderater Dringlichkeit auf dem ESP zu zeigen. Migration `0039_task_work_window` ergänzt das nullable `work_start_at`, migriert bestehende Tasks mit Frist auf den Beginn ihres Erfassungstags (bei bereits früherer Frist höchstens den Fristzeitpunkt) und sichert `work_start_at <= due_at`. Task-CRUD, Capture, Deduplizierung, Tageskonsolidierung und Artefaktpromotion führen das Feld mit; `save_task` bildet bei vorhandener Frist ohne expliziten Start genau einmal einen persistenten Standard aus der ursprünglichen Event-/Sessionzeit. Der Regelrouter trennt `ab …` von `bis …`/`spätestens …`, damit ein Bearbeitungsbeginn nicht als Frist fehlgedeutet wird. CalDAV bildet Beginn/Ende als `DTSTART`/`DUE` ab. Die serverseitige `esp32_epaper`-Projektion wählt offene, nicht archivierte Tasks, wenn `work_start_at <= jetzt` oder `urgency >= 0.5`; der Policy-Default `0.4` genügt allein nicht. Die Karten zeigen `Ab … · bis …`; der bestehende Abschnittsschlüssel `today` bleibt aus Kompatibilitätsgründen erhalten, sein Titel lautet nun „Aufgaben“. Nach der realen Probe wurde das zunächst pauschale Drei-Karten-Limit als Grund für eine fehlende vierte, korrekt ausgewählte dringende Task erkannt. Nur die scrollbare Task-Sektion darf deshalb bis zu zehn Karten tragen; andere ESP-Sektionen bleiben auf drei begrenzt. Fehlerpfad: Ein expliziter Start nach der Frist wird im Service bzw. Operator-API mit Validierungsfehler abgelehnt; ungültige LLM-Zeitwerte bleiben im jeweiligen bestehenden Fehler-/Deferred-Pfad. Geprüft sind Parser, Standardbeginn, CalDAV-Roundtrip, Schwellen `0.4/0.5`, Entity-Detail, dringende Task jenseits Position drei, Wire-Budget (6247/8192 Byte im belasteten Projektionstest), generierter Client-OpenAPI-Vertrag und das vollständige M8-Release-Gate einschließlich logischem Vier-Stunden-Soak. Nach Kaltstart bestätigte der Nutzer die zuvor fehlende Balkonbeleuchtungs-Task sichtbar auf dem ESP; Diagnose danach: `compatible=1`, `gate_failed=0`, `upload_failed=0`, Queue `ready=0 acked=5 attention=0`.

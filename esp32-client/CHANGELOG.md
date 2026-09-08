@@ -1,5 +1,52 @@
 # Änderungen
 
+## 2026-09-08 – Taskkarten folgen Bearbeitungsfenster und Dringlichkeit
+
+Das Backend persistiert nun `work_start_at` („bearbeiten ab“) zusätzlich zur
+Frist `due_at` („erledigen bis“), setzt bei einer Frist ohne expliziten Beginn
+den Erfassungstag und synchronisiert beide Werte über CalDAV `DTSTART`/`DUE`.
+Die ESP-Projektion zeigt offene Tasks ab ihrem Beginn oder unabhängig davon ab
+moderater Dringlichkeit (`urgency >= 0.5`); der unbelegte Policy-Default `0.4`
+reicht nicht. Die Vorschau `Ab … · bis …` wird vollständig serverseitig
+formatiert. Daher war für diese Änderung kein erneuter Firmwareflash nötig.
+Parser-, CalDAV-, Vertrags- und Dashboardtests einschließlich Wire-Budget sind
+grün. Die reale Probe zeigte anschließend eine vierte, korrekt ausgewählte
+dringende Task nicht, weil die Projektion alle Sektionen pauschal nach drei
+Karten abschnitt. Nur die scrollbare Task-Sektion überträgt deshalb nun bis zu
+zehn Karten; alle anderen bleiben bei drei. Der belastete Wire-Test misst 6247
+von 8192 Bytes. Die Probe bestätigte zugleich erneut die selbstheilende Queue
+mit `ready=0 acked=5 attention=0` ohne Neustart. Nach Neuladen des erweiterten
+Snapshots bestätigte der Nutzer die zuvor fehlende Balkonbeleuchtungs-Task
+sichtbar auf dem ESP; der anschließende Gerätecheck war vertragskompatibel und
+ohne neue Gate-/Uploadfehler.
+
+## 2026-09-08 – Queuezähler heilt nach Upload aus dem Journal
+
+Eine reale Aufnahme war vollständig auf dem Server angekommen und in beiden
+lokalen Journalen als `acked` gespeichert, die Statuszeile zeigte aber weiter
+eine wartende Aufnahme. Die Diagnose vor dem Neustart belegte den Widerspruch:
+`queue-status` meldete `ready=1 acked=1`, während `memo-list` nach dem
+anschließenden Boot für beide Memos zusammen `ready=0 acked=2` ergab. Der
+Server und das E-Paper waren damit ausgeschlossen; der RAM-Cache der
+Queuezähler war gegenüber der SD-Journalwahrheit gedriftet.
+
+Jede erfolgreich journalierte Chunk- oder Sessionzustandsänderung fordert nun
+am Ende des Uploaddurchlaufs einen koaleszierten Neuaufbau der Zähler an. Der
+Neuaufbau läuft im Recorder-Task, der auch die übrige SD-Wartung besitzt, und
+kann deshalb weder mit einer Aufnahme konkurrieren noch pro Segment mehrfach
+laufen. Unveränderte Synchronisationsdurchläufe behalten den bisherigen
+billigen inkrementellen Pfad. Build und Flash auf COM9 sind erfolgreich.
+End-to-end bestätigt: vom Post-Flash-Ausgang `ready=0 acked=2` aus wurde eine
+dritte reale Aufnahme hochgeladen; ohne weiteren Neustart meldete das Gerät
+anschließend `ready=0 acked=3 attention=0`, während die zugehörige
+Server-Session bereits abgeschlossen und zur Audiolöschung freigegeben war.
+
+Das Diagnosewerkzeug öffnet bei `--no-reset` den seriellen Port außerdem nun
+erst, nachdem DTR und RTS deaktiviert wurden. Zuvor konnten bereits die
+PySerial-Standardleitungen beim Öffnen oder Schließen einen Reset auslösen und
+damit ausgerechnet den flüchtigen Queuezustand beseitigen, der untersucht
+werden sollte.
+
 ## 2026-09-07 – Refresh durch weiteres „Auf" auf dem Menü-Icon
 
 Neue Geste: In einer Dashboard-Familien-Ansicht (Dashboard/Tasks/Listen) ist

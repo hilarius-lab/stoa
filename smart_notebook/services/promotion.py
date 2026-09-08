@@ -15,9 +15,9 @@ from .topics import normalize_topic_key
 async def _task_fields(content,mode,started_at=None):
     if mode=='deterministic':
         urgency=0.9 if re.search(r'\b(dringend|sofort|unverzüglich|urgent)\b',content,re.I) else None
-        return {"can_promote":urgency is not None,"content":content,"due_at":"","urgency":urgency or 0}
+        return {"can_promote":urgency is not None,"content":content,"work_start_at":"","due_at":"","urgency":urgency or 0}
     profile=get_ai_task_profile('artifacts.task_promotion')
-    schema={"type":"object","properties":{"can_promote":{"type":"boolean"},"content":{"type":"string"},"due_at":{"type":"string"},"urgency":{"type":"number"}},"required":["can_promote","content","due_at","urgency"],"additionalProperties":False}
+    schema={"type":"object","properties":{"can_promote":{"type":"boolean"},"content":{"type":"string"},"work_start_at":{"type":"string"},"due_at":{"type":"string"},"urgency":{"type":"number"}},"required":["can_promote","content","work_start_at","due_at","urgency"],"additionalProperties":False}
     # Without today's date a relative reference like "heute"/"morgen" cannot
     # become an ISO due_at at all -- the model silently fell back to urgency
     # instead, and the task never carried a due date the dashboard could use.
@@ -25,7 +25,7 @@ async def _task_fields(content,mode,started_at=None):
     # semantic_router.py already resolves weekday references (BACKEND_LOGIK.md
     # 7.3), not wall-clock "now" at promotion time.
     reference=(started_at or datetime.now(TIMEZONE)).astimezone(TIMEZONE)
-    prompt=f"""Heutiges Datum/Sessionstart: {reference.isoformat()}. Prüfe ein bestätigtes Task-Artifact. Extrahiere eine ausschließlich im Text belegte Frist als ISO-8601 oder lasse due_at leer, relativ zu diesem Datum ("heute"/"morgen"/Wochentage entsprechend auflösen). Wenn keine Frist existiert, bewerte urgency von 0 bis 1 nur wenn Dringlichkeit aus Wortlaut/Kontext begründbar ist. can_promote ist nur wahr, wenn due_at gesetzt oder urgency begründet ist. Erfinde nichts."""
+    prompt=f"""Heutiges Datum/Sessionstart: {reference.isoformat()}. Prüfe ein bestätigtes Task-Artifact. Extrahiere einen ausdrücklich genannten Bearbeitungsbeginn (zum Beispiel 'ab morgen') als work_start_at und eine ausdrücklich genannte Frist (zum Beispiel 'bis Freitag') als due_at, jeweils ISO-8601 oder leer und relativ zu diesem Datum. Verwechsle work_start_at nicht mit due_at. Wenn keine Frist existiert, bewerte urgency von 0 bis 1 nur wenn Dringlichkeit aus Wortlaut/Kontext begründbar ist. can_promote ist nur wahr, wenn due_at gesetzt oder urgency begründet ist. Erfinde nichts."""
     payload={"model":profile['model'],"messages":[{"role":"system","content":prompt},{"role":"user","content":content}],"temperature":profile['temperature'],"response_format":{"type":"json_schema","json_schema":{"name":"task_promotion","strict":True,"schema":schema}}}
     async with httpx.AsyncClient(timeout=profile['timeout_seconds'], trust_env=False) as client:r=await client.post(profile['endpoint'],json=payload)
     r.raise_for_status();return json.loads(r.json()['choices'][0]['message']['content'])
@@ -81,18 +81,22 @@ async def promote_session_artifacts(session_id,mode='llm'):
                 knowledge_id=save_note(content,embedding);target='note'
             elif kind=='task':
                 data=normalized_data or {}
-                fields=({"can_promote":True,"content":content,"due_at":data.get('due_at',''),"urgency":data.get('urgency') or 0}
+                fields=({"can_promote":True,"content":content,"work_start_at":data.get('work_start_at',''),"due_at":data.get('due_at',''),"urgency":data.get('urgency') or 0}
                         if classification_validated and (data.get('due_at') or data.get('urgency') is not None) else await _task_fields(content,mode,started_at))
                 if not fields['can_promote'] or (not fields['due_at'] and fields['urgency']<=0):deferred.append({"artifact_id":artifact_id,"reason":"task_requires_due_or_urgency"});continue
                 due=None
                 if fields['due_at']:
                     due=datetime.fromisoformat(fields['due_at'].replace('Z','+00:00'));due=due.replace(tzinfo=TIMEZONE) if due.tzinfo is None else due
+                work_start=None
+                if fields.get('work_start_at'):
+                    work_start=datetime.fromisoformat(fields['work_start_at'].replace('Z','+00:00'));work_start=work_start.replace(tzinfo=TIMEZONE) if work_start.tzinfo is None else work_start
                 embedding=[0.0]*EMBEDDING_DIMENSIONS if mode=='deterministic' else await get_embedding(fields['content'] or content)
                 # Due date and urgency are independent CalDAV-facing task
                 # dimensions; an explicit urgency must survive even with a due.
                 urgency_value=fields['urgency'] if fields['urgency']>0 else None
                 knowledge_id=save_task(fields['content'] or content,due,embedding,urgency=urgency_value,
-                    urgency_source=(data.get('urgency_source') if urgency_value is not None else None));target='task'
+                    urgency_source=(data.get('urgency_source') if urgency_value is not None else None),
+                    work_start_at=work_start,work_start_reference=started_at);target='task'
             elif kind=='list':
                 if confidence<0.85:deferred.append({"artifact_id":artifact_id,"reason":"list_confidence_below_0.85"});continue
                 embedding=[0.0]*EMBEDDING_DIMENSIONS if mode=='deterministic' else None

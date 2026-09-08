@@ -158,6 +158,11 @@ alle Segmente genau einmal logisch zustellen und serverseitig vollständig verar
 - Offlineanzeige des letzten Snapshots mit sichtbarem Alter
 - SSE nur im Vordergrund, gebündelt für E-Paper; REST-Re-Snapshot bei Lücken
 - serverseitig projizierte „Heute“- und Listenbereiche rendern
+- [x] Taskprojektion nach dem Queue-Fix erweitert: persistentes Bearbeitungsfenster
+  „ab/bis“ vom Backend anzeigen; bereits gestartete offene Tasks und zusätzlich
+  Tasks ab moderater Dringlichkeit (`urgency >= 0.5`) in die Taskansicht
+  aufnehmen. Das neue `work_start_at`/CalDAV-`DTSTART` ist ein eigener
+  Backend-/Clientvertragsschritt, keine lokal erfundene Firmwaresemantik.
 
 ## H5 – Meetingmodus
 

@@ -106,6 +106,8 @@ class DashboardEntityResponse(ExtensibleModel):
     title:str|None=None;content:str|None=None;description:str|None=None;question:str|None=None
     question_kind:str|None=None;confidence:float|None=None;priority:float|None=None
     answer:str|None=None;answer_source:str|None=None
+    work_start_at:datetime|None=None;due_at:datetime|None=None
+    urgency:float|None=None;percent_complete:int|None=None
     # Set only while the detail view offers a mutation beyond navigation —
     # a task that is still open, so far. Absent once there is nothing left
     # to do, same convention as an unimplemented action on a dashboard card:

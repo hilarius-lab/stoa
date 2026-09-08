@@ -39,8 +39,8 @@ def row_for(kind,internal_id):
 def main():
     now=datetime.now(TIMEZONE);suffix=uuid4().hex;profile=f"_contract_test_caldav_{suffix}";gateway=FakeCalDAV()
     with get_db_connection() as db:
-        task=db.execute("""INSERT INTO tasks(content,created_at,updated_at,due_at,status,archived,priority,urgency,percent_complete,urgency_source)
-        VALUES(%s,%s,%s,%s,'open',FALSE,5,.4,0,'manual') RETURNING id""",(f"M8 CalDAV Aufgabe {suffix}",now,now,now+timedelta(days=1))).fetchone()[0]
+        task=db.execute("""INSERT INTO tasks(content,created_at,updated_at,work_start_at,due_at,status,archived,priority,urgency,percent_complete,urgency_source)
+        VALUES(%s,%s,%s,%s,%s,'open',FALSE,5,.4,0,'manual') RETURNING id""",(f"M8 CalDAV Aufgabe {suffix}",now,now,now,now+timedelta(days=1))).fetchone()[0]
         list_id=db.execute("INSERT INTO lists(title,description,created_at,updated_at,archived) VALUES(%s,'Testliste',%s,%s,FALSE) RETURNING id",(f"M8 CalDAV Liste {suffix}",now,now)).fetchone()[0]
         first=db.execute("INSERT INTO list_items(list_id,content,created_at,updated_at,status,archived) VALUES(%s,'Milch',%s,%s,'active',FALSE) RETURNING id",(list_id,now,now)).fetchone()[0]
         second=db.execute("INSERT INTO list_items(list_id,content,created_at,updated_at,status,archived) VALUES(%s,'Kaffee',%s,%s,'active',FALSE) RETURNING id",(list_id,now,now)).fetchone()[0];db.commit()
@@ -49,6 +49,7 @@ def main():
         initial=asyncio.run(synchronize_caldav(gateway=gateway,only_entities=scope,profile_key=profile))
         assert initial["ignored_unmarked"]==1 and len([x for x in initial["actions"] if x["action"]=="create_remote"])==4
         task_uuid=row_for("task",task);list_uuid=row_for("list",list_id);first_uuid=row_for("list_item",first);second_uuid=row_for("list_item",second)
+        assert gateway.objects[task_uuid]["work_start_at"] is not None
         assert gateway.objects[list_uuid]["entity_type"]=="list"
         assert gateway.objects[first_uuid]["parent_uid"]==gateway.objects[list_uuid]["uid"]
 

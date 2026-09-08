@@ -62,6 +62,7 @@ def parse_vtodo(text,href=None,etag=None):
         "percent_complete":max(0,min(100,int(properties.get("PERCENT-COMPLETE","0") or 0))),
         "priority":max(0,min(9,int(properties.get("PRIORITY","0") or 0))),
         "urgency":float(properties["X-SMART-NOTEBOOK-URGENCY"]) if properties.get("X-SMART-NOTEBOOK-URGENCY") else None,
+        "work_start_at":_parse_time(properties.get("DTSTART")),
         "due_at":_parse_time(properties.get("DUE")),"parent_uid":properties.get("RELATED-TO"),"raw":text}
 
 
@@ -72,6 +73,7 @@ def serialize_vtodo(entity):
         f"STATUS:{entity['status']}",f"PERCENT-COMPLETE:{entity['percent_complete']}",f"PRIORITY:{entity['priority']}",
         f"X-SMART-NOTEBOOK-ID:{entity['public_id']}",f"X-SMART-NOTEBOOK-TYPE:{entity['entity_type']}"]
     if entity.get("description"):lines.append(f"DESCRIPTION:{_ical_escape(entity['description'])}")
+    if entity.get("work_start_at"):lines.append(f"DTSTART:{_ical_time(entity['work_start_at'])}")
     if entity.get("due_at"):lines.append(f"DUE:{_ical_time(entity['due_at'])}")
     if entity.get("urgency") is not None:lines.append(f"X-SMART-NOTEBOOK-URGENCY:{entity['urgency']:.4f}")
     if entity.get("parent_uid"):lines.append(f"RELATED-TO;RELTYPE=PARENT:{_ical_escape(entity['parent_uid'])}")
@@ -85,7 +87,7 @@ def _jsonable_remote(item):
 def _hash(value):return hashlib.sha256(json.dumps(value,sort_keys=True,separators=(",",":"),default=str).encode()).hexdigest()
 def _local_fingerprint(entity):
     if entity is None:return None
-    keys=("entity_type","summary","description","due_at","status","priority","urgency","percent_complete","parent_uid")
+    keys=("entity_type","summary","description","work_start_at","due_at","status","priority","urgency","percent_complete","parent_uid")
     return _hash({k:entity.get(k) for k in keys})
 def _remote_fingerprint(entity):return _hash(_jsonable_remote(entity))
 
@@ -205,11 +207,11 @@ def _mapping_rows():
 def _local_entity(mapping):
     with get_db_connection() as c:
         if mapping["entity_type"]=="task":
-            r=c.execute("SELECT content,due_at,status,archived,priority,urgency,percent_complete FROM tasks WHERE id=%s",(mapping["internal_id"],)).fetchone()
+            r=c.execute("SELECT content,work_start_at,due_at,status,archived,priority,urgency,percent_complete FROM tasks WHERE id=%s",(mapping["internal_id"],)).fetchone()
             if not r:return None
-            complete=r[3] or r[2] in ("done","archived") or r[6]>=100
-            return {**mapping,"summary":r[0],"description":"","due_at":r[1],"status":"COMPLETED" if complete else "NEEDS-ACTION",
-                "priority":r[4],"urgency":r[5],"percent_complete":100 if complete else r[6],"parent_uid":None}
+            complete=r[4] or r[3] in ("done","archived") or r[7]>=100
+            return {**mapping,"summary":r[0],"description":"","work_start_at":r[1],"due_at":r[2],"status":"COMPLETED" if complete else "NEEDS-ACTION",
+                "priority":r[5],"urgency":r[6],"percent_complete":100 if complete else r[7],"parent_uid":None}
         if mapping["entity_type"]=="list":
             r=c.execute("SELECT title,description,archived FROM lists WHERE id=%s",(mapping["internal_id"],)).fetchone()
             if not r:return None
@@ -242,7 +244,10 @@ def _apply_remote(mapping,remote,status_only=False):
         if kind=="task":
             if not completed:
                 c.execute("UPDATE tasks SET status='open',archived=FALSE,archived_at=NULL,archive_reason=NULL,percent_complete=%s,updated_at=%s WHERE id=%s",(remote["percent_complete"],now,internal))
-            if not status_only:c.execute("UPDATE tasks SET content=%s,due_at=%s,priority=%s,urgency=COALESCE(%s,urgency),embedding=NULL,embedding_model=NULL,updated_at=%s WHERE id=%s",(remote["summary"],remote["due_at"],remote["priority"],remote["urgency"],now,internal))
+            if not status_only:c.execute("""UPDATE tasks SET content=%s,work_start_at=COALESCE(%s,
+                CASE WHEN %s IS NOT NULL THEN date_trunc('day',created_at AT TIME ZONE 'Europe/Berlin') AT TIME ZONE 'Europe/Berlin' END),
+                due_at=%s,priority=%s,urgency=COALESCE(%s,urgency),embedding=NULL,embedding_model=NULL,updated_at=%s WHERE id=%s""",
+                (remote["summary"],remote["work_start_at"],remote["due_at"],remote["due_at"],remote["priority"],remote["urgency"],now,internal))
         elif kind=="list":
             if not completed:
                 c.execute("UPDATE lists SET archived=FALSE,archived_at=NULL,archive_reason=NULL,updated_at=%s WHERE id=%s",(now,internal))

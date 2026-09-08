@@ -529,6 +529,16 @@ MIGRATIONS=[
         "UPDATE client_sessions SET sequence_base=0 WHERE device_metadata->>'sequence_base'='0'",
         "ALTER TABLE client_sessions ADD CONSTRAINT client_sessions_sequence_base_check CHECK(sequence_base IN(0,1))",
     ]),
+    ("0039_task_work_window","Persist when a task should enter active work",[
+        "ALTER TABLE tasks ADD COLUMN IF NOT EXISTS work_start_at TIMESTAMPTZ",
+        """UPDATE tasks SET work_start_at=LEAST(
+        date_trunc('day',created_at AT TIME ZONE 'Europe/Berlin') AT TIME ZONE 'Europe/Berlin',due_at)
+        WHERE due_at IS NOT NULL AND work_start_at IS NULL""",
+        """DO $$ BEGIN IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conname='tasks_work_window_check') THEN
+        ALTER TABLE tasks ADD CONSTRAINT tasks_work_window_check CHECK(
+        work_start_at IS NULL OR due_at IS NULL OR work_start_at <= due_at); END IF; END $$""",
+        "CREATE INDEX IF NOT EXISTS tasks_open_work_window_idx ON tasks(work_start_at,due_at) WHERE archived=FALSE AND status='open'",
+    ]),
 ]
 
 

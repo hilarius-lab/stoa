@@ -1,10 +1,29 @@
 # Task service
 from datetime import datetime
 
-from ..config import TIMEZONE, EMBEDDING_MODEL, EMBEDDING_DIMENSIONS, TASK_RETRIEVAL_LIMIT, TASK_RETRIEVAL_MIN_SIMILARITY
+from ..config import TIMEZONE, EMBEDDING_MODEL
 from ..database import get_db_connection
 from .embeddings import get_embedding, get_query_embedding, embedding_to_pgvector
 from .provenance import add_knowledge_source
+
+def _task_time(value: datetime | None):
+    if value is None:
+        return None
+    return value.replace(tzinfo=TIMEZONE) if value.tzinfo is None else value.astimezone(TIMEZONE)
+
+
+def _task_window(due_at: datetime | None, work_start_at: datetime | None, reference: datetime):
+    due_at = _task_time(due_at)
+    work_start_at = _task_time(work_start_at)
+    if due_at is not None and work_start_at is None:
+        reference_day = _task_time(reference).replace(hour=0, minute=0, second=0, microsecond=0)
+        # Imported or delayed tasks may already be overdue. Their implicit
+        # window starts no later than the deadline instead of becoming invalid.
+        work_start_at = min(reference_day, due_at)
+    if due_at is not None and work_start_at is not None and work_start_at > due_at:
+        raise ValueError("work_start_at must not be after due_at")
+    return due_at, work_start_at
+
 
 def save_task(
     content: str,
@@ -14,15 +33,20 @@ def save_task(
     priority: int = 0,
     urgency: float | None = None,
     urgency_source: str | None = None,
-    percent_complete: int = 0
+    percent_complete: int = 0,
+    work_start_at: datetime | None = None,
+    work_start_reference: datetime | None = None,
 ):
     now = datetime.now(TIMEZONE)
     vector_value = embedding_to_pgvector(embedding)
 
-    if due_at is not None and due_at.tzinfo is None:
-        due_at = due_at.replace(tzinfo=TIMEZONE)
-
     with get_db_connection() as connection:
+        reference = work_start_reference
+        if reference is None and source_event_id is not None:
+            event = connection.execute("SELECT created_at FROM events WHERE id=%s", (source_event_id,)).fetchone()
+            if event:
+                reference = event[0]
+        due_at, work_start_at = _task_window(due_at, work_start_at, reference or now)
         task_id = connection.execute(
             """
             INSERT INTO tasks (
@@ -30,6 +54,7 @@ def save_task(
                 created_at,
                 updated_at,
                 due_at,
+                work_start_at,
                 status,
                 source_event_id,
                 embedding,
@@ -39,7 +64,7 @@ def save_task(
                 percent_complete,
                 urgency_source
             )
-            VALUES (%s, %s, %s, %s, 'open', %s, %s::vector, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, 'open', %s, %s::vector, %s, %s, %s, %s, %s)
             RETURNING id
             """,
             (
@@ -47,6 +72,7 @@ def save_task(
                 now,
                 now,
                 due_at,
+                work_start_at,
                 source_event_id,
                 vector_value,
                 EMBEDDING_MODEL
@@ -65,11 +91,9 @@ def save_task(
 
     return task_id
 
-async def update_task(task_id: int, content: str, due_at: datetime | None, priority: int | None = None, urgency: float | None = None, percent_complete: int | None = None):
+async def update_task(task_id: int, content: str, due_at: datetime | None, priority: int | None = None, urgency: float | None = None, percent_complete: int | None = None, work_start_at: datetime | None = None):
     now = datetime.now(TIMEZONE)
-
-    if due_at is not None and due_at.tzinfo is None:
-        due_at = due_at.replace(tzinfo=TIMEZONE)
+    due_at, work_start_at = _task_window(due_at, work_start_at, now)
 
     embedding = await get_embedding(content)
     vector_value = embedding_to_pgvector(embedding)
@@ -80,6 +104,7 @@ async def update_task(task_id: int, content: str, due_at: datetime | None, prior
             UPDATE tasks
             SET content = %s,
                 due_at = %s,
+                work_start_at = %s,
                 updated_at = %s,
                 embedding = %s::vector,
                 embedding_model = %s
@@ -91,6 +116,7 @@ async def update_task(task_id: int, content: str, due_at: datetime | None, prior
             (
                 content,
                 due_at,
+                work_start_at,
                 now,
                 vector_value,
                 EMBEDDING_MODEL,
@@ -112,6 +138,7 @@ def get_task_record(task_id: int):
                 created_at,
                 updated_at,
                 due_at,
+                work_start_at,
                 status,
                 source_event_id,
                 archived,
@@ -136,12 +163,13 @@ def get_task_record(task_id: int):
         "created_at": row[2].isoformat(),
         "updated_at": row[3].isoformat(),
         "due_at": row[4].isoformat() if row[4] else None,
-        "status": row[5],
-        "source_event_id": row[6],
-        "archived": row[7],
-        "embedding_model": row[8],
-        "embedding_dimensions": row[9],
-        "priority": row[10], "urgency": row[11], "percent_complete": row[12], "urgency_source": row[13]
+        "work_start_at": row[5].isoformat() if row[5] else None,
+        "status": row[6],
+        "source_event_id": row[7],
+        "archived": row[8],
+        "embedding_model": row[9],
+        "embedding_dimensions": row[10],
+        "priority": row[11], "urgency": row[12], "percent_complete": row[13], "urgency_source": row[14]
     }
 
 def set_task_status(task_id: int, status: str):
@@ -171,6 +199,7 @@ def set_task_status(task_id: int, status: str):
                 id,
                 content,
                 due_at,
+                work_start_at,
                 status,
                 archived,
                 updated_at
@@ -196,9 +225,10 @@ def set_task_status(task_id: int, status: str):
         "id": row[0],
         "content": row[1],
         "due_at": row[2].isoformat() if row[2] else None,
-        "status": row[3],
-        "archived": row[4],
-        "updated_at": row[5].isoformat(), "priority":row[6],"urgency":row[7],"percent_complete":row[8]
+        "work_start_at": row[3].isoformat() if row[3] else None,
+        "status": row[4],
+        "archived": row[5],
+        "updated_at": row[6].isoformat(), "priority":row[7],"urgency":row[8],"percent_complete":row[9]
     }
 
 def expire_overdue_tasks():
@@ -293,6 +323,7 @@ async def search_tasks(query: str, limit: int = 5):
                 created_at,
                 updated_at,
                 due_at,
+                work_start_at,
                 status,
                 source_event_id,
                 embedding_model,
@@ -319,10 +350,11 @@ async def search_tasks(query: str, limit: int = 5):
             "created_at": row[2].isoformat(),
             "updated_at": row[3].isoformat(),
             "due_at": row[4].isoformat() if row[4] else None,
-            "status": row[5],
-            "source_event_id": row[6],
-            "embedding_model": row[7],
-            "similarity": float(row[8]), "priority":row[9],"urgency":row[10],"percent_complete":row[11]
+            "work_start_at": row[5].isoformat() if row[5] else None,
+            "status": row[6],
+            "source_event_id": row[7],
+            "embedding_model": row[8],
+            "similarity": float(row[9]), "priority":row[10],"urgency":row[11],"percent_complete":row[12]
         }
         for row in rows
     ]

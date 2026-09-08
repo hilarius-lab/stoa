@@ -1,5 +1,6 @@
 """Regression gate for backend guarantees consumed by the ESP32 client."""
 import asyncio
+from unittest.mock import AsyncMock,patch
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
@@ -8,6 +9,7 @@ from smart_notebook.app import app
 from smart_notebook.config import CLIENT_DASHBOARD_CACHE_MAX_AGE_SECONDS
 from smart_notebook.database import get_db_connection,init_db
 from smart_notebook.services.artifacts import run_session_artifact_worker_once
+from smart_notebook.services.client_sessions import completion_status,finalize_client_session_with_knowledge
 from smart_notebook.services.jobs import enqueue_processing_job_record
 
 
@@ -62,6 +64,38 @@ def main():
         released_at=body["local_audio_release_at"]
         repeat=client.post(f"/api/client/v1/sessions/{sid}/finalize")
         assert repeat.status_code==200 and repeat.json()["local_audio_release_at"]==released_at
+
+        # Every non-done processing state is part of the release barrier.  A
+        # promotion failure must likewise leave source audio unreleased and
+        # remain retryable through the same idempotent finalize operation.
+        blocked_sid=str(uuid4());created_ids.append(blocked_sid)
+        blocked=client.post("/api/client/v1/sessions",json={**identity,"client_session_id":blocked_sid})
+        assert blocked.status_code==201,blocked.text
+        with get_db_connection() as db:
+            blocked_ingestion=db.execute("SELECT ingestion_session_id FROM client_sessions WHERE client_session_id=%s",(blocked_sid,)).fetchone()[0]
+        ingestion_ids.append(blocked_ingestion)
+        blocked_finish=client.post(f"/api/client/v1/sessions/{blocked_sid}/finish",json={"final_sequence":0})
+        assert blocked_finish.status_code==200 and blocked_finish.json()["session"]["state"]=="processing"
+        blocked_job=enqueue_processing_job_record("session_artifacts",ingestion_session_id=blocked_ingestion,
+                                                  payload={"contract_test":True},
+                                                  idempotency_key=f"esp-blocked:{blocked_sid}")
+        with get_db_connection() as db:
+            db.execute("UPDATE processing_jobs SET status='parked' WHERE id=%s",(blocked_job["id"],));db.commit()
+        assert completion_status(blocked_sid)=="attention_required"
+        rejected=client.post(f"/api/client/v1/sessions/{blocked_sid}/finalize")
+        assert rejected.status_code==409,rejected.text
+        assert client.get(f"/api/client/v1/sessions/{blocked_sid}").json()["local_audio_release_allowed"] is False
+        with get_db_connection() as db:
+            db.execute("UPDATE processing_jobs SET status='done' WHERE id=%s",(blocked_job["id"],));db.commit()
+        with patch("smart_notebook.services.promotion.promote_session_artifacts",new=AsyncMock(side_effect=RuntimeError("simulated"))):
+            try:asyncio.run(finalize_client_session_with_knowledge(blocked_sid,"deterministic"))
+            except RuntimeError:pass
+            else:raise AssertionError("simulated promotion failure was swallowed")
+        failed_promotion=client.get(f"/api/client/v1/sessions/{blocked_sid}").json()
+        assert failed_promotion["state"]=="attention_required"
+        assert failed_promotion["local_audio_release_allowed"] is False
+        recovered=asyncio.run(finalize_client_session_with_knowledge(blocked_sid,"deterministic"))
+        assert recovered["state"]=="completed" and recovered["local_audio_release_allowed"] is True
 
         # The no-query route retains the Android active-session behavior. A
         # bounded query selects deterministic ESP history, including closed rows.

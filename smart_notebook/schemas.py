@@ -154,6 +154,7 @@ class NoteUpdate(BaseModel):
 
 class TaskCreate(BaseModel):
     content: str
+    work_start_at: datetime | None = None
     due_at: datetime | None = None
     priority: int = Field(default=0, ge=0, le=9)
     urgency: float | None = Field(default=None, ge=0, le=1)
@@ -168,6 +169,8 @@ class TaskCreate(BaseModel):
 
 class TaskUpdate(BaseModel):
     content: str | None = None
+    work_start_at: datetime | None = None
+    clear_work_start_at: bool = False
     due_at: datetime | None = None
     clear_due_at: bool = False
     priority: int | None = Field(default=None, ge=0, le=9)

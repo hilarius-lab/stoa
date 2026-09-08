@@ -77,6 +77,7 @@ async def extract_daily_candidates(events: list[dict]):
                     'type': 'object',
                     'properties': {
                         'content': {'type': 'string'},
+                        'work_start_at': {'type': 'string'},
                         'due_at': {'type': 'string'},
                         'source_event_ids': {
                             'type': 'array',
@@ -85,7 +86,7 @@ async def extract_daily_candidates(events: list[dict]):
                             'uniqueItems': True
                         }
                     },
-                    'required': ['content', 'due_at', 'source_event_ids'],
+                    'required': ['content', 'work_start_at', 'due_at', 'source_event_ids'],
                     'additionalProperties': False
                 }
             },
@@ -128,7 +129,10 @@ async def extract_daily_candidates(events: list[dict]):
                     'Gib dauerhafte Informationen ausschließlich unter notes aus, '
                     'Aufgaben mit belastbarer Frist unter tasks und fortlaufende '
                     'Sammlungs-/Listenpunkte unter list_items. '
-                    'Notes und Listeneinträge haben kein due_at-Feld.\n\n'
+                    'Bei Tasks bedeutet work_start_at "bearbeiten ab" und due_at "erledigen bis"; '
+                    'ein ausdrücklich genannter Beginn darf nicht als Frist ausgegeben werden. '
+                    'Ist nur eine Frist belegt, bleibt work_start_at leer und wird später auf den Erfassungstag gesetzt. '
+                    'Notes und Listeneinträge haben weder work_start_at noch due_at.\n\n'
                     + event_text
                 )
             }
@@ -164,6 +168,7 @@ async def extract_daily_candidates(events: list[dict]):
         candidates.append({
             'kind': 'task',
             'content': task['content'],
+            'work_start_at': task['work_start_at'],
             'due_at': task['due_at'],
             'source_event_ids': task['source_event_ids']
         })
@@ -271,8 +276,10 @@ async def consolidate_today():
             results.append(result)
 
         elif kind == 'task':
+            work_start_at_raw = candidate['work_start_at'].strip()
             due_at_raw = candidate['due_at'].strip()
             try:
+                work_start_at = _optional_due_at(work_start_at_raw)
                 due_at = _optional_due_at(due_at_raw)
             except ValueError:
                 results.append({
@@ -286,12 +293,13 @@ async def consolidate_today():
                 })
                 continue
 
-            decision = await decide_task_deduplication(content, due_at)
+            decision = await decide_task_deduplication(content, due_at, work_start_at)
             result = {
                 'kind': 'task',
                 'candidate': content,
                 'source_event_id': source_event_id,
                 'source_event_ids': source_event_ids,
+                'work_start_at': work_start_at.isoformat() if work_start_at else None,
                 'due_at': due_at.isoformat() if due_at else None,
                 'deduplication': decision['action'],
                 'saved_id': None,
@@ -300,13 +308,15 @@ async def consolidate_today():
 
             if decision['action'] == 'save_new':
                 final_content = decision['content'].strip() or content
+                final_work_start_at = _optional_due_at(decision['work_start_at'])
                 final_due_at = _optional_due_at(decision['due_at'])
                 embedding = await get_embedding(final_content)
                 result['saved_id'] = save_task(
                     final_content,
                     final_due_at,
                     embedding,
-                    source_event_id=source_event_id
+                    source_event_id=source_event_id,
+                    work_start_at=final_work_start_at,
                 )
                 add_knowledge_sources(
                     "task",
@@ -316,11 +326,13 @@ async def consolidate_today():
                 )
             elif decision['action'] == 'update_existing':
                 final_content = decision['content'].strip() or content
+                final_work_start_at = _optional_due_at(decision['work_start_at'])
                 final_due_at = _optional_due_at(decision['due_at'])
                 await update_task(
                     decision['target_id'],
                     final_content,
-                    final_due_at
+                    final_due_at,
+                    work_start_at=final_work_start_at,
                 )
                 add_knowledge_sources(
                     "task",

@@ -128,6 +128,10 @@ def _bootstrap_schema():
         """)
 
         connection.execute("""
+            ALTER TABLE tasks ADD COLUMN IF NOT EXISTS work_start_at TIMESTAMPTZ
+        """)
+
+        connection.execute("""
             ALTER TABLE tasks ADD COLUMN IF NOT EXISTS priority INTEGER NOT NULL DEFAULT 0
         """)
 
@@ -148,6 +152,11 @@ def _bootstrap_schema():
             END IF;
             IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='tasks_percent_complete_check') THEN
                 ALTER TABLE tasks ADD CONSTRAINT tasks_percent_complete_check CHECK(percent_complete BETWEEN 0 AND 100);
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='tasks_work_window_check') THEN
+                ALTER TABLE tasks ADD CONSTRAINT tasks_work_window_check CHECK(
+                    work_start_at IS NULL OR due_at IS NULL OR work_start_at <= due_at
+                );
             END IF;
         END $$""")
 

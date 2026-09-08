@@ -76,7 +76,7 @@ async def decide_note_deduplication(content: str):
     result['matches'] = matches
     return result
 
-async def decide_task_deduplication(content: str, due_at: datetime | None):
+async def decide_task_deduplication(content: str, due_at: datetime | None, work_start_at: datetime | None = None):
     profile = get_ai_task_profile("deduplication.task")
     matches = await search_tasks(content, CONSOLIDATION_DEDUPE_LIMIT)
 
@@ -85,6 +85,7 @@ async def decide_task_deduplication(content: str, due_at: datetime | None):
             'action': 'save_new',
             'target_id': 0,
             'content': content,
+            'work_start_at': work_start_at.isoformat() if work_start_at else '',
             'due_at': due_at.isoformat() if due_at else '',
             'matches': []
         }
@@ -98,15 +99,16 @@ async def decide_task_deduplication(content: str, due_at: datetime | None):
             },
             'target_id': {'type': 'integer'},
             'content': {'type': 'string'},
+            'work_start_at': {'type': 'string'},
             'due_at': {'type': 'string'}
         },
-        'required': ['action', 'target_id', 'content', 'due_at'],
+        'required': ['action', 'target_id', 'content', 'work_start_at', 'due_at'],
         'additionalProperties': False
     }
 
     existing_text = '\n'.join(
         (
-            f"[Task {m['id']}] {m['content']} | due_at={m['due_at']} "
+            f"[Task {m['id']}] {m['content']} | work_start_at={m['work_start_at']} | due_at={m['due_at']} "
             f"(similarity={m['similarity']:.3f})"
         )
         for m in matches
@@ -119,13 +121,14 @@ async def decide_task_deduplication(content: str, due_at: datetime | None):
                 'role': 'system',
                 'content': DEDUPLICATION_SYSTEM_PROMPT + (
                     '\nBei Tasks berücksichtige zusätzlich, ob sich Aufgabe oder '
-                    'Fälligkeit materiell geändert haben.'
+                    'Bearbeitungsbeginn oder Fälligkeit materiell geändert haben.'
                 )
             },
             {
                 'role': 'user',
                 'content': (
                     f"Neuer Task-Kandidat:\n{content}\n"
+                    f"work_start_at={work_start_at.isoformat() if work_start_at else 'nicht festgelegt'}\n"
                     f"due_at={due_at.isoformat() if due_at else 'nicht festgelegt'}\n\n"
                     f"Ähnlichste vorhandene offene Tasks:\n{existing_text}"
                 )
@@ -154,6 +157,7 @@ async def decide_task_deduplication(content: str, due_at: datetime | None):
             'action': 'save_new',
             'target_id': 0,
             'content': content,
+            'work_start_at': work_start_at.isoformat() if work_start_at else '',
             'due_at': due_at.isoformat() if due_at else ''
         }
 

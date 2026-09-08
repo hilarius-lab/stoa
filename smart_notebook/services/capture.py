@@ -10,7 +10,7 @@ from .embeddings import get_embedding
 from .provenance import add_knowledge_source
 from .lists import process_list_item_candidate
 from .notes import save_note, update_note
-from .tasks import save_task, update_task
+from .tasks import get_task_record, save_task, update_task
 from .dedupe import decide_note_deduplication, decide_task_deduplication
 from .ai_tasks import get_ai_task_profile
 
@@ -57,6 +57,9 @@ async def classify_capture(text: str, event_time: datetime):
             "content": {
                 "type": "string"
             },
+            "work_start_at": {
+                "type": "string"
+            },
             "due_at": {
                 "type": "string"
             },
@@ -67,6 +70,7 @@ async def classify_capture(text: str, event_time: datetime):
         "required": [
             "action",
             "content",
+            "work_start_at",
             "due_at",
             "list_title"
         ],
@@ -122,12 +126,14 @@ async def process_capture_action(
 
     action = result["action"]
     content = result["content"].strip()
+    work_start_at_raw = result["work_start_at"].strip()
     due_at_raw = result["due_at"].strip()
     list_title = result["list_title"].strip()
 
     saved = {
         "action": action,
         "content": content,
+        "work_start_at": work_start_at_raw or None,
         "due_at": due_at_raw or None,
         "list_title": list_title or None,
         "deduplication": None,
@@ -212,6 +218,7 @@ async def process_capture_action(
             return saved
 
         try:
+            work_start_at = _optional_due_at(work_start_at_raw)
             due_at = _optional_due_at(due_at_raw)
         except ValueError:
             saved["action"] = "none"
@@ -222,7 +229,8 @@ async def process_capture_action(
 
         decision = await decide_task_deduplication(
             content,
-            due_at
+            due_at,
+            work_start_at,
         )
 
         saved["deduplication"] = decision["action"]
@@ -237,6 +245,7 @@ async def process_capture_action(
             )
 
             final_due_at = _optional_due_at(decision["due_at"])
+            final_work_start_at = _optional_due_at(decision["work_start_at"])
 
             embedding = await get_embedding(
                 final_content
@@ -246,10 +255,16 @@ async def process_capture_action(
                 final_content,
                 final_due_at,
                 embedding,
-                source_event_id=event_id
+                source_event_id=event_id,
+                work_start_at=final_work_start_at,
+                work_start_reference=event_time,
             )
+            stored_task = get_task_record(saved["task_id"])
 
             saved["content"] = final_content
+            saved["work_start_at"] = (
+                stored_task["work_start_at"] if stored_task else None
+            )
             saved["due_at"] = (
                 final_due_at.isoformat() if final_due_at else None
             )
@@ -261,11 +276,13 @@ async def process_capture_action(
             )
 
             final_due_at = _optional_due_at(decision["due_at"])
+            final_work_start_at = _optional_due_at(decision["work_start_at"])
 
             await update_task(
                 decision["target_id"],
                 final_content,
-                final_due_at
+                final_due_at,
+                work_start_at=final_work_start_at,
             )
 
             add_knowledge_source(
@@ -279,6 +296,9 @@ async def process_capture_action(
                 decision["target_id"]
             )
             saved["content"] = final_content
+            saved["work_start_at"] = (
+                final_work_start_at.isoformat() if final_work_start_at else None
+            )
             saved["due_at"] = (
                 final_due_at.isoformat() if final_due_at else None
             )

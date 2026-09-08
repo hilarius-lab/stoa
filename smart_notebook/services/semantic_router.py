@@ -24,6 +24,16 @@ def _relative_due(text, started_at):
         started_at = started_at.replace(tzinfo=TIMEZONE)
     else:
         started_at = started_at.astimezone(TIMEZONE)
+    hour = 9; minute = 0
+    time_match = re.search(r"\b(?:um\s+)?(\d{1,2})(?::(\d{2}))?\s*uhr\b", text, re.I)
+    if time_match:
+        hour = int(time_match.group(1)); minute = int(time_match.group(2) or 0)
+    relative_match = re.search(r"\b(heute|morgen|übermorgen)\b", text, re.I)
+    if relative_match:
+        delta = {"heute": 0, "morgen": 1, "übermorgen": 2}[relative_match.group(1).casefold()]
+        due = (started_at + timedelta(days=delta)).replace(hour=hour, minute=minute, second=0, microsecond=0)
+        evidence = relative_match.group(0) + (f" {time_match.group(0)}" if time_match else "")
+        return due, evidence
     weekday_match = re.search(r"\b(" + "|".join(WEEKDAYS) + r")\b", text, re.I)
     if not weekday_match:
         return None, None
@@ -32,13 +42,24 @@ def _relative_due(text, started_at):
     # A named weekday means the next occurrence when today has already started.
     if delta == 0:
         delta = 7
-    hour = 9; minute = 0
-    time_match = re.search(r"\b(?:um\s+)?(\d{1,2})(?::(\d{2}))?\s*uhr\b", text, re.I)
-    if time_match:
-        hour = int(time_match.group(1)); minute = int(time_match.group(2) or 0)
     due = (started_at + timedelta(days=delta)).replace(hour=hour, minute=minute, second=0, microsecond=0)
     evidence = weekday_match.group(0) + (f" {time_match.group(0)}" if time_match else "")
     return due, evidence
+
+
+def _task_window(text, started_at):
+    """Separate an explicit work start from a deadline before normal routing."""
+    start_match = re.search(r"\bab\s+(.+?)(?=\s+\b(?:bis|spätestens)\b|[,.!?;]|$)", text, re.I)
+    due_match = re.search(r"\b(?:bis|spätestens(?:\s+bis)?)\s+([^,.!?;]+)", text, re.I)
+    work_start, start_evidence = _relative_due(start_match.group(1), started_at) if start_match else (None, None)
+    if due_match:
+        due, due_evidence = _relative_due(due_match.group(1), started_at)
+    elif start_match:
+        # Do not reinterpret the start as a deadline when only "ab ..." was said.
+        due, due_evidence = None, None
+    else:
+        due, due_evidence = _relative_due(text, started_at)
+    return work_start, start_evidence, due, due_evidence
 
 
 def _list_parts(text):
@@ -82,11 +103,14 @@ def route_artifact(text, session_started_at=None, active_topics=None):
         evidence.append(question_signal if isinstance(question_signal, str) else text)
 
     task_signal = _span(text, r"\b(muss|müssen|soll|sollen|übernimmt|bitte|zu erledigen|kümmert sich)\b")
-    due, due_evidence = _relative_due(text, session_started_at)
+    work_start, work_start_evidence, due, due_evidence = _task_window(text, session_started_at)
     explicit_urgency = _span(text, r"\b(sehr wichtig|dringend|sofort|unverzüglich|höchste priorität)\b")
     if task_signal and scores["list_item"] < 0.9 and scores["decision"] < 0.9:
-        scores["task"] = 0.94 if due else 0.86
+        scores["task"] = 0.94 if due or work_start else 0.86
         reasons.append("action_or_responsibility"); evidence.append(task_signal)
+        if work_start:
+            normalized["work_start_at"] = work_start.isoformat(); normalized["work_start_source"] = "explicit_relative"
+            evidence.append(work_start_evidence)
         if due:
             normalized["due_at"] = due.isoformat(); normalized["due_source"] = "explicit_relative"
             evidence.append(due_evidence)

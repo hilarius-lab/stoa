@@ -107,6 +107,13 @@ teilweise als Tasks klassifiziert.
 - [x] proaktive Anzeige nur oberhalb konfigurierbarer Relevanz-/Confidence-Schwellen;
   vollständige Knowledge-Datensätze bleiben Darstellungs-Scope des Clients
 - [ ] Reference-Resolver-Interface mit Provenienz und Privacy-Klasse
+- [x] Task-Zeitfenster als eigener Vertragsschritt: persistentes
+  `work_start_at` („bearbeiten ab“) zusätzlich zu `due_at` („erledigen bis“),
+  bei vorhandener Frist ohne expliziten Start standardmäßig Beginn des
+  Erfassungstags; CalDAV-`DTSTART`, Task-CRUD, Capture/Promotion und
+  Clientprojektionen gemeinsam migrieren. Die ESP-Taskansicht nimmt offene,
+  bereits gestartete Tasks sowie unabhängig von der Frist Tasks ab
+  `urgency >= 0.5` auf; Policy-Default `0.4` genügt nicht.
 
 ### M5 – Effizienter Dauerbetrieb und Konsolidierung
 

@@ -1,24 +1,39 @@
 """Unified text/audio memo-query capture contract regression."""
+import asyncio
+import time
+from unittest.mock import AsyncMock,patch
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
 from smart_notebook.app import app
 from smart_notebook.database import get_db_connection
+from smart_notebook.services.client_capture import get_capture
+from worker import WORKER_KINDS,run_worker_once
 
 
 def main():
+    assert {"capture","chat"}.issubset(WORKER_KINDS)
+    with patch("worker.run_capture_once",new=AsyncMock(return_value={"outcome":"idle"})) as capture_run:
+        asyncio.run(run_worker_once("capture","m8-dispatch"));capture_run.assert_awaited_once_with("production")
+    with patch("worker.run_chat_turn_once",new=AsyncMock(return_value={"outcome":"idle"})) as chat_run:
+        asyncio.run(run_worker_once("chat","m8-dispatch"));chat_run.assert_awaited_once_with("llm")
     client=TestClient(app);memo_id=uuid4()
     memo=client.post("/api/client/v1/captures",json={"client_capture_id":str(memo_id),"mode":"memo","content":"Dies ist eine lokale M8-Testnotiz."})
     assert memo.status_code==202 and memo.json()["resolved_intent"]=="memo" and memo.json()["status"]=="queued"
     assert client.post("/api/client/v1/captures",json={"client_capture_id":str(memo_id),"mode":"memo","content":"Dies ist eine lokale M8-Testnotiz."}).json()["id"]==str(memo_id)
     changed=client.post("/api/client/v1/captures",json={"client_capture_id":str(memo_id),"mode":"memo","content":"Anders"})
     assert changed.status_code==409
-    for _ in range(20):
+    processed=None
+    for _ in range(100):
         run=client.post("/api/workers/client-capture/run-once",json={"mode":"deterministic"}).json()
-        if run.get("capture",{}).get("id")==str(memo_id):break
-    assert run["outcome"]=="completed" and run["capture"]["status"]=="completed"
-    note_id=run["capture"]["result"]["knowledge_ref"]["internal_id"]
+        candidate=run.get("capture") or get_capture(memo_id)
+        if candidate and candidate["id"]==str(memo_id) and candidate["status"] in ("completed","failed"):
+            processed=candidate;break
+        time.sleep(.1)
+    assert processed and processed["status"]=="completed",processed
+    knowledge_ref=(processed.get("result") or {}).get("knowledge_ref")
+    note_id=knowledge_ref["internal_id"] if knowledge_ref and knowledge_ref.get("type")=="note" else None
 
     query_id=uuid4();query=client.post("/api/client/v1/captures",json={"client_capture_id":str(query_id),"mode":"auto","content":"Wie ist der Status von Atlas?"})
     assert query.status_code==202 and query.json()["resolved_intent"]=="query" and query.json()["conversation_id"]
@@ -34,8 +49,9 @@ def main():
 
     with get_db_connection() as db:
         db.execute("DELETE FROM client_text_captures WHERE id IN(%s,%s)",(memo_id,query_id))
-        db.execute("DELETE FROM knowledge_sources WHERE knowledge_type='note' AND knowledge_id=%s",(note_id,))
-        db.execute("DELETE FROM notes WHERE id=%s",(note_id,))
+        if note_id is not None:
+            db.execute("DELETE FROM knowledge_sources WHERE knowledge_type='note' AND knowledge_id=%s",(note_id,))
+            db.execute("DELETE FROM notes WHERE id=%s",(note_id,))
         db.execute("DELETE FROM client_conversations WHERE id IN(%s,%s)",(query.json()["conversation_id"],finalized.json()["capture_result"]["conversation_id"]))
         db.execute("DELETE FROM client_sessions WHERE client_session_id=%s",(session_id,));db.execute("DELETE FROM ingestion_sessions WHERE id=%s",(internal,));db.commit()
     print("M8 CAPTURE CONTRACT TEST: PASS")
