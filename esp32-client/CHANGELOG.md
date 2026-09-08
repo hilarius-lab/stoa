@@ -1,5 +1,46 @@
 # Änderungen
 
+## 2026-09-08 – Interaktive, ausfallsichere Listendetails
+
+Listendetails sind kein Fließtext mehr. Der Server liefert bis zu 20 aktive
+Items mit stabiler öffentlicher UUID; die Firmware zeigt darunter „Zurück“ und
+eine scrollbare Folge einzeln fokussierbarer Kontrollkästchen. Der Fokus beginnt
+auf „Zurück“. Ein Kurzdruck toggelt ein Item lokal und kann es vor dem Verlassen
+wieder zurücksetzen.
+
+Jeder sichtbare Toggle wird sofort als Desired-State in NVS journalisiert. Erst
+„Zurück“ gibt den Netto-Stand zur Übertragung frei; ein Neustart behandelt noch
+offene Drafts als implizites Verlassen. Der Worker sendet `active|done`
+idempotent über den neuen Client-Endpoint und löscht lokale Aktionen erst nach
+passender `200`-Bestätigung. Abgehakte Items fehlen im nächsten Listendetail und
+Dashboard. Backend-Projektion, OpenAPI-Hauptvertrag und ESP-Teilvertrag sind
+konsistent; Backend-Vertragstests und ESP-IDF-Build sind grün. Die physische
+Bedienprobe auf COM9 bestätigte Fokusstart, Scrollen, Toggle, Zurücktoggeln,
+Versand und das Verschwinden von „Hafermilch“. Das zunächst vor „Zurück“
+verwendete, im lokalen Font nicht vorhandene Zeichen `‹` erschien als sichtbare
+Ersatzbox und wurde deshalb ersatzlos entfernt.
+
+## 2026-09-08 – Ruhiges Dashboard und lesbare Listen
+
+Die ESP-Projektion überträgt nur noch `entity_card`-Komponenten, die der
+Firmware-Renderer tatsächlich zeichnet, und entfernt danach leere Sektionen.
+Damit erscheinen `alert` und `input_prompt` nicht mehr als leere Überschriften
+„Systemhinweise“ beziehungsweise „Neue Eingabe“. „Offene Sessions“ entfällt
+auf dem Hauptdashboard der E-Paper-Surface vollständig; Aufnahmen bleiben im
+paginierten Verlauf mit ihrem Zustand erreichbar, ohne denselben technischen
+`processing`-Token als Titel, Untertitel und Detailinhalt zu wiederholen. Der
+Default-Snapshot für andere Clients bleibt unverändert.
+
+Listenkarten zeigen nun die Zahl offener Einträge statt des technischen Status
+`active`. Die bestehende Detailantwort führt die strukturierten Items weiterhin
+mit, ergänzt aber zusätzlich eine lesbare, auf aktive Einträge begrenzte
+`content`-Projektion für den generischen ESP-Detailrenderer. Regressionstests
+prüfen zugleich, dass nur darstellbare Karten und keine leeren Überschriften
+auf der E-Paper-Surface verbleiben. Die Session-/Capture-Vertragstests räumen
+ihre Test-Sessions künftig auch nach einer Assertion oder Ausnahme beim
+Prozessende auf, damit die geteilte Datenbank nicht erneut das Dashboard
+verschmutzt.
+
 ## 2026-09-08 – Taskkarten folgen Bearbeitungsfenster und Dringlichkeit
 
 Das Backend persistiert nun `work_start_at` („bearbeiten ab“) zusätzlich zur

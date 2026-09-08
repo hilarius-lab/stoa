@@ -19,6 +19,7 @@
 #include "clock.h"
 #include "card.h"
 #include "dashboard.h"
+#include "list_detail.h"
 #include "cJSON.h"
 #include "api_client.h"
 #include "freertos/semphr.h"
@@ -138,6 +139,13 @@ static int detail_line;
  * implements (see dashboard_entity_has_action()). */
 static char detail_entity_id[40];
 static int detail_action_focus;
+/* Lists are the one structured detail on this surface. Focus 0 is Back and
+ * 1..N are items; desired states live separately from the immutable server
+ * JSON so they can be toggled freely before leaving. */
+static bool detail_list_mode, detail_list_initialized;
+static int detail_list_focus, detail_list_scroll, detail_list_count;
+static char detail_list_ids[LIST_DETAIL_MAX_ITEMS][LIST_DETAIL_ID_CHARS];
+static bool detail_list_done[LIST_DETAIL_MAX_ITEMS];
 /* The history view. Same handover as the snapshot and the entity: written by
  * the upload worker, parsed by the display task, so it needs the same lock. */
 #define HISTORY_MAX 8192
@@ -255,6 +263,23 @@ static bool entity_take(char *into, size_t capacity) {
     return into[0] != 0;
 }
 
+static bool prepare_list_detail(const char *copy) {
+    if (!detail_list_mode) return false;
+    if (detail_list_initialized) return true;
+    memset(detail_list_ids, 0, sizeof(detail_list_ids));
+    memset(detail_list_done, 0, sizeof(detail_list_done));
+    detail_list_count = list_detail_items(copy, detail_list_ids, LIST_DETAIL_MAX_ITEMS);
+    for (int i = 0; i < detail_list_count; i++) {
+        bool desired = false;
+        if (api_client_list_item_desired(detail_list_ids[i], &desired))
+            detail_list_done[i] = desired;
+    }
+    detail_list_focus = 0;
+    detail_list_scroll = 0;
+    detail_list_initialized = true;
+    return true;
+}
+
 static void draw_detail(unsigned char *buffer) {
     if (detail_waiting) {
         const char *line = "wird geladen …";
@@ -265,6 +290,16 @@ static void draw_detail(unsigned char *buffer) {
     if (!copy || !entity_take(copy, ENTITY_MAX)) {
         const char *line = "Details nicht abrufbar";
         text_draw(buffer, &text_font_body, 24, BODY_TOP + 24, line, strlen(line));
+        free(copy);
+        return;
+    }
+    if (detail_list_mode) {
+        prepare_list_detail(copy);
+        int count = list_detail_draw(buffer, copy, BODY_TOP, BODY_BOTTOM,
+                                     detail_list_scroll, detail_list_focus,
+                                     detail_list_done);
+        ESP_LOGI("detail", "list focus=%d count=%d scroll=%d",
+                 detail_list_focus, count, detail_list_scroll);
         free(copy);
         return;
     }
@@ -287,6 +322,42 @@ static void page_detail(int delta) {
     if (next > total - page) next = total - page;
     if (next < 0) next = 0;
     detail_line = next;
+}
+
+static void move_list_detail_focus(int delta) {
+    char *copy = heap_caps_malloc(ENTITY_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!copy || !entity_take(copy, ENTITY_MAX)) { free(copy); return; }
+    prepare_list_detail(copy);
+    int next = detail_list_focus + delta;
+    if (next < 0) next = 0;
+    if (next > detail_list_count) next = detail_list_count;
+    detail_list_focus = next;
+    detail_list_scroll = list_detail_scroll_for(copy, BODY_TOP, BODY_BOTTOM,
+                                                detail_list_focus,
+                                                detail_list_scroll);
+    free(copy);
+}
+
+static void activate_list_detail(void) {
+    if (detail_list_focus <= 0) {
+        /* UI exit is immediate. The durable queue owns delivery and retries;
+         * the next dashboard fetched after success no longer contains the
+         * completed items. */
+        if (api_client_commit_list_items())
+            detail_open = detail_waiting = false;
+        else
+            ESP_LOGW("detail", "list changes could not be committed");
+        return;
+    }
+    int item = detail_list_focus - 1;
+    if (item < 0 || item >= detail_list_count) return;
+    bool next = !detail_list_done[item];
+    if (api_client_stage_list_item(detail_list_ids[item], next)) {
+        detail_list_done[item] = next;
+        ESP_LOGI("detail", "list item %d staged=%s", item, next ? "done" : "active");
+    } else {
+        ESP_LOGW("detail", "list item %d could not be journaled", item);
+    }
 }
 
 /* Whether the currently open detail's own entity carries an action this
@@ -349,6 +420,9 @@ static void open_detail(void) {
     detail_waiting = true;
     detail_line = 0;
     detail_action_focus = 0;
+    detail_list_mode = strcmp(plan.focus_type, "list") == 0;
+    detail_list_initialized = false;
+    detail_list_focus = detail_list_scroll = detail_list_count = 0;
     snprintf(detail_entity_id, sizeof(detail_entity_id), "%s", plan.focus_id);
     api_client_open_entity(plan.focus_type, plan.focus_id);
 }
@@ -699,7 +773,10 @@ static void screen_task(void *unused) {
                      * entities that carry an action today are short enough
                      * that paging was never doing anything there anyway. */
                     bool has_action = detail_current_has_action();
-                    if (has_action) {
+                    if (detail_list_mode) {
+                        move_list_detail_focus(message.focus_delta);
+                        ESP_LOGI("detail", "diag: list focus=%d", detail_list_focus);
+                    } else if (has_action) {
                         int next = detail_action_focus - message.focus_delta;
                         if (next < 0) next = 0;
                         if (next > 1) next = 1;
@@ -719,7 +796,9 @@ static void screen_task(void *unused) {
                  * same as before. The action focused: fire the mutation and
                  * stay open — the response redraws the same view once it
                  * lands, through screen_entity_received like any other fetch. */
-                if (detail_action_focus == 1 && detail_current_has_action())
+                if (detail_list_mode)
+                    activate_list_detail();
+                else if (detail_action_focus == 1 && detail_current_has_action())
                     api_client_complete_task(detail_entity_id);
                 else
                     detail_open = detail_waiting = false;   /* back to the overview */

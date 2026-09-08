@@ -123,6 +123,14 @@ Sections werden nicht fokussiert, nicht ein- oder ausgeklappt und nicht
 zusammengefasst. Ihre Reihenfolge bestimmt der Server über `rank`, ersatzweise
 `priority`, ersatzweise die Arrayposition.
 
+Die E-Paper-Projektion liefert nur Sektionen, die mindestens eine vom aktuellen
+Renderer gezeichnete `entity_card` enthalten. Andere erlaubte Komponenten wie
+`alert`, `status_banner`, `text_block` oder `input_prompt` werden auf dieser
+Surface nicht als leere Überschrift angedeutet. Sie bleiben im Default-Vertrag
+für andere Clients unverändert erhalten. Technische offene Sessions erscheinen
+nicht zusätzlich auf dem ESP-Hauptdashboard: Aufnahmezustände gehören in den
+paginierten Verlauf, und die lokale Statusleiste zeigt Aufnahme und Queue.
+
 ## Karten
 
 Eine `entity_card` ist eine Bubble mit abgerundeten Ecken. Aufbau von links:
@@ -307,7 +315,9 @@ Sie zeigt in dieser Reihenfolge:
 4. Metadaten: `status`, `entity_type`, Zeitstempel
 5. bei Rückfragen zusätzlich `question`, `answer` und `answer_source`
 
-Die Vorschau entfällt hier. Die Ansicht führt keine fachliche Mutation aus.
+Die Vorschau entfällt hier. Generische Details führen keine fachliche Mutation
+aus; offene Tasks und Listen besitzen die nachfolgend beschriebenen eng
+begrenzten Aktionen.
 
 - obere Taste: vorheriger Textabschnitt
 - untere Taste: nächster Textabschnitt
@@ -325,6 +335,18 @@ Entity-Antwort in einen lokalen Detail-Lesesnapshot. Dashboardupdates werden im
 Hintergrund weiter atomar übernommen, verändern oder schließen die geöffnete
 Detailansicht aber nicht. Beim Schließen erscheint sofort der neueste Snapshot.
 Wurde die Karte inzwischen entfernt, greift die Fokus-Fallbackregel.
+
+Bei einer Liste bleibt `content` als lesbarer Fallback erhalten. Der ESP nutzt
+jedoch das strukturierte `items`-Array: ausschließlich aktive Einträge in
+Reihenfolge, jeweils mit stabiler UUID, `content` und `status=active`.
+
+Die Listendetailansicht hält den Titel fest und zeigt darunter eine scrollbare
+Zeilenliste. Fokus startet auf „Zurück“ und läuft anschließend durch jedes Item.
+Der Kurzdruck toggelt das Kontrollkästchen lokal; ein zweiter Druck vor dem
+Verlassen entfernt den Haken. Beim Auslösen von „Zurück“ wird nur der Netto-
+Desired-State zur dauerhaften Versandqueue freigegeben. Erfolgreich auf `done`
+gesetzte Items liefert der Server bei späteren Details nicht mehr zurück.
+Übersicht und Detail zeigen die Anzahl der weiterhin offenen Einträge.
 
 ## Verlauf
 

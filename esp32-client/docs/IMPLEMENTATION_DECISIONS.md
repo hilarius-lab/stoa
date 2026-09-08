@@ -52,8 +52,26 @@ werden, ohne die Architektur neu zu entscheiden.
 - Ein geöffnetes Detail ist eine unveränderliche lokale Kopie. Hintergrundupdates
   ersetzen den Dashboardcache, niemals das offene Detail. Zurück zeigt den
   neuesten Cache und verwirft die Detailkopie.
-- Nur Übersicht und Detail existieren. Keine einklappbaren Sektionen, Menüs oder
-  verschachtelten Aktionen. Nicht unterstützte Aktionen sind nicht fokussierbar.
+- Nur Übersicht und Detail existieren. Keine einklappbaren Sektionen oder
+  Kontextmenüs. Die Listendetailansicht ist die ausdrücklich festgelegte
+  strukturierte Ausnahme: „Zurück“ plus einzeln fokussierbare, lokal anhakbare
+  Items. Nicht unterstützte Aktionen sind nicht fokussierbar.
+
+## Listenänderungen: lokal sofort, Versand beim Verlassen
+
+- Jedes Listendetail enthält höchstens 20 aktive Items mit stabiler öffentlicher
+  UUID. Fokus `0` ist „Zurück“, `1..N` sind die Zeilen; Hoch/Runter hält die
+  fokussierte Zeile vollständig sichtbar.
+- Ein Item-Kurzdruck ändert nur den lokalen Desired-State und schreibt ihn als
+  Draft in den NVS-Blob `list_actions`. Noch in derselben Ansicht kann der
+  Nutzer ihn zurücktoggeln; ein ungecommiteter Netto-Nullstand wird entfernt.
+- „Zurück“ promoviert alle Drafts zu sendebereiten Aktionen und verlässt die
+  Ansicht sofort. Der Uploadworker sendet `active|done` idempotent und entfernt
+  einen Eintrag erst nach einer passenden `200`-Antwort.
+- Neustart ist ein implizites Verlassen: gefundene Drafts werden sendebereit.
+  Dadurch kann weder Stromverlust noch WLAN-Ausfall einen bereits sichtbaren
+  Haken still verlieren. Noch nicht bestätigte Aktionen zählen in der lokalen
+  Warteschlangenanzeige mit.
 
 ## E-Paper-Aktualisierung
 

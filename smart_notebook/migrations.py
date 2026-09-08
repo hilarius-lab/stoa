@@ -539,6 +539,10 @@ MIGRATIONS=[
         work_start_at IS NULL OR due_at IS NULL OR work_start_at <= due_at); END IF; END $$""",
         "CREATE INDEX IF NOT EXISTS tasks_open_work_window_idx ON tasks(work_start_at,due_at) WHERE archived=FALSE AND status='open'",
     ]),
+    ("0040_client_list_item_identity","Opaque identities for client-visible list items",[
+        "ALTER TABLE client_entity_identities DROP CONSTRAINT client_entity_identities_entity_type_check",
+        "ALTER TABLE client_entity_identities ADD CONSTRAINT client_entity_identities_entity_type_check CHECK(entity_type IN('session_artifact','session_topic','question','task','list','list_item'))",
+    ]),
 ]
 
 

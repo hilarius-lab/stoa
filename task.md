@@ -2,6 +2,8 @@
 
 ## Open
 
+- [x] ESP32-Dashboard und Listenansicht verfeinern: nicht gerenderte Komponenten/leere Überschriften entfernt, technische Sessionkarten auf den Verlauf begrenzt, Listenanzahl verständlich dargestellt und Listendetails als scrollbare, einzeln anhakbare, ausfallsicher journalisierte Items umgesetzt. Reale Memo→Liste→ESP- sowie Toggle/Zurücktoggeln→Server→ESP-Probe bestanden; „Hafermilch“ verschwand nach bestätigtem Versand. Shared-DB-Testfixtures räumen auch bei Fehlschlag auf. — Erledigt 2026-09-08.
+
 - [ ] ESP32: dauerhafte Uploadqueue mit Recovery, Verschluesselung und vertraglichem API-Client. H2-Entwicklungspfad gegen Mock und echtes FastAPI-Backend am Gerät bestanden: 0-basierte ESP-Wire-Sequenzen werden über das unveränderliche Top-Level-Feld `sequence_base` deklariert, Quick-Memos laden ohne Meeting-`start`, durable ACK/Reconciliation/Finish sind nachgewiesen. Backendseitig sind Create-Identität, paginierte Sessionhistorie, stabile Fokus-IDs, SSE, Enrollment/Rotation und die monotone sessionsweite Audiofreigabe abgeschlossen und im M8-Gate. Firmwareseitig müssen `local_audio_release_allowed`/`local_audio_release_at` noch ausgewertet und Audio nur nach zusätzlicher lokaler Abschlussprüfung gelöscht werden. Offen bleiben außerdem Produktionsauthentisierung/HTTPS, automatische Credentialrotation, vollständige persistierte Retryklassen, Verschlüsselung und ACK-Stromausfalltests. Normative Grenze: `esp32-client/docs/BACKEND_REQUIREMENTS.md`.
 
 - [ ] Implementiere feste, einzeln abschließbare Audiosegmente mit Sequenz, Zeitstempeln, Dauer, Größe und SHA-256 und teste Prozessabbruch, Display-aus-Simulation, Segmentgrenzen und beschädigte Dateien ohne echten Backendzugriff.

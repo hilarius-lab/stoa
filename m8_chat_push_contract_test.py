@@ -34,7 +34,7 @@ def main():
     assert any(any((card.get("entity_ref") or {}).get("id")==conversation["id"] for card in section["items"]) for section in dashboard["sections"])
     for _ in range(20):
         run=client.post("/api/workers/client-chat/run-once",json={"mode":"deterministic","deterministic_text":"Projekt Atlas befindet sich im Testbetrieb."}).json()
-        if run.get("turn",{}).get("id")==turn["id"]:break
+        if (run.get("turn") or {}).get("id")==turn["id"]:break
     assert run["outcome"]=="completed"
     polled=client.get(f"/api/client/v1/conversation-turns/{turn['id']}").json();assert polled["status"]=="completed"
     detail=client.get(f"/api/client/v1/conversations/{conversation['id']}").json()

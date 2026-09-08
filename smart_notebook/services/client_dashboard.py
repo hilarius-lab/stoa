@@ -38,12 +38,18 @@ ESP_SURFACE="esp32_epaper"
 #    need once it acts on more than entities.
 ESP_DROP_KEYS=("entity_type","spacing_role","preferred_span","priority","layout",
                "rank","reason_code","reason_text")
-# 2. Sections the device has no compact interaction or browser for. Chat,
-#    knowledge history and topic browsing stay off this surface; task completion
-#    remains available through the task detail action.
+# 2. Sections the device has no useful compact interaction or browser for.
+#    Chat, knowledge history and topic browsing stay off this surface. Active
+#    sessions already live in the paginated recording history; their home cards
+#    only repeated technical state tokens and opened a mostly empty view.
 #    This is the one product judgement in this file and the easiest thing to
 #    revert: put an id back and it reappears.
-ESP_DROP_SECTIONS=("recent-knowledge","topic-trends","open-chats")
+ESP_DROP_SECTIONS=("recent-knowledge","topic-trends","open-chats","active-sessions")
+# dashboard.c currently lays out entity cards only. Sending alerts, status
+# banners, text blocks or input prompts produces an empty section heading, not
+# a degraded rendering. Filter those components server-side and remove their
+# now-empty section so the panel never claims there is content it cannot show.
+ESP_RENDERED_COMPONENTS=("entity_card",)
 # 3. Counts and lengths. General sections stay at a handful of cards with a
 #    two-line preview. The dedicated Tasks view scrolls and must not silently
 #    drop an actionable task merely because three others sort ahead of it, so
@@ -89,7 +95,8 @@ def _project_component(item):
         if result[key] is None and key not in item:del result[key]
     if isinstance(result.get("items"),list):
         item_limit=ESP_TASK_ITEMS_PER_SECTION if item.get("id")=="today" else ESP_ITEMS_PER_SECTION
-        result["items"]=[_project_component(child) for child in result["items"][:item_limit]]
+        visible=[child for child in result["items"] if child.get("component") in ESP_RENDERED_COMPONENTS]
+        result["items"]=[_project_component(child) for child in visible[:item_limit]]
     return result
 
 
@@ -100,8 +107,11 @@ def _project_for_epaper(content):
     revision belongs to the projected surface rather than to a payload the
     device never receives.
     """
-    sections=[_project_component(section) for section in content["sections"]
-              if section.get("id") not in ESP_DROP_SECTIONS]
+    sections=[]
+    for section in content["sections"]:
+        if section.get("id") in ESP_DROP_SECTIONS:continue
+        projected=_project_component(section)
+        if projected.get("items"):sections.append(projected)
     return {**content,"sections":sections,"sessions":content["sessions"][:ESP_SESSIONS_MAX]}
 
 def _card(kind,entity_id,title,preview,status="active",priority=.5,icon=None,action=None,ref_type=None):
@@ -174,6 +184,7 @@ def _idle_content(surface="default"):
         if surface=="esp32_epaper":
             _ensure_identities(c,"task","tasks","archived=FALSE AND status='open'")
             _ensure_identities(c,"list","lists","archived=FALSE")
+            _ensure_identities(c,"list_item","list_items","archived=FALSE AND status='active'")
         c.commit()
         now=datetime.now(TIMEZONE)
         failures=c.execute("SELECT count(*) FROM processing_jobs WHERE status='failed'").fetchone()[0]
@@ -206,7 +217,7 @@ def _idle_content(surface="default"):
     if questions:sections.append(_section("open-clarifications","Offene Fragen","clarification_due",[_card("question_open",r[0],r[1],r[1],priority=r[2],icon="question",action={"type":"open_clarification","params":{"question_id":str(r[0])}},ref_type="question") for r in questions],10))
     if sessions:sections.append(_section("active-sessions","Offene Sessions","active_session",[_card("session",s["client_session_id"],s.get("state","Session"),s.get("state",""),s["state"],.7,"session",{"type":"open_session","params":{"client_session_id":s["client_session_id"]}}) for s in sessions],20))
     if tasks:sections.append(_section("today","Aufgaben","due_today",[_card("task",r[0],r[1][:100],_task_window_preview(r[2],r[3],r[4],now),"open",r[4],"task",ref_type="task") for r in tasks],25))
-    if lists:sections.append(_section("lists","Listen","active_lists",[_card("list",r[0],r[1],(r[4] or r[2] or "")[:240],"active",min(1,.4+r[3]/20),"list",ref_type="list") for r in lists],27))
+    if lists:sections.append(_section("lists","Listen","active_lists",[_card("list",r[0],r[1],(r[4] or r[2] or "")[:240],f"{r[3]} offen",min(1,.4+r[3]/20),"list",ref_type="list") for r in lists],27))
     knowledge=[_card("note",r[0],r[1][:100],r[1],priority=.5) for r in notes]+[_card("fact",r[0],r[1][:100],r[1],r[2],r[3],"fact") for r in facts]
     if knowledge:sections.append(_section("recent-knowledge","Zuletzt relevantes Wissen","recent_knowledge",knowledge,30))
     if topics:sections.append(_section("topic-trends","Themen","topic_trend",[_card("topic",r[0],r[1],r[1]) for r in topics],40))
@@ -268,7 +279,21 @@ def get_dashboard_entity(entity_type,public_id):
         if entity_type=="list":
             r=c.execute("SELECT title,description,created_at,updated_at FROM lists WHERE id=%s",(internal_id,)).fetchone()
             if not r:return None
-            items=c.execute("SELECT content,status FROM list_items WHERE list_id=%s AND archived=FALSE ORDER BY created_at,id LIMIT 20",(internal_id,)).fetchall()
-            return {"id":str(public_id),"type":"list","title":_clip(r[0],TITLE_MAX),"description":_clip(r[1],DETAIL_MAX),"status":"active","items":[{"content":_clip(x[0],DETAIL_MAX),"status":x[1]} for x in items],"created_at":r[2].isoformat(),"updated_at":r[3].isoformat()}
+            # A list detail is an actionable snapshot. Every active item gets
+            # an opaque, stable client identity; completed items are absent,
+            # not merely labelled done, so a successful completion cannot
+            # reappear on the next fetch. The text projection remains for
+            # clients that have not implemented structured list interaction.
+            _ensure_identities(c,"list_item","list_items","list_id=%s AND archived=FALSE AND status='active'",(internal_id,))
+            c.commit()
+            items=c.execute("""SELECT i.public_id,li.content FROM list_items li
+            JOIN client_entity_identities i ON i.entity_type='list_item' AND i.internal_id=li.id
+            WHERE li.list_id=%s AND li.archived=FALSE AND li.status='active'
+            ORDER BY li.created_at,li.id LIMIT 20""",(internal_id,)).fetchall()
+            body=_clip(" · ".join(f"• {x[1]}" for x in items),DETAIL_MAX)
+            return {"id":str(public_id),"type":"list","title":_clip(r[0],TITLE_MAX),"content":body,
+                    "description":_clip(r[1],DETAIL_MAX),"status":f"{len(items)} offen",
+                    "items":[{"id":str(x[0]),"content":_clip(x[1],DETAIL_MAX),"status":"active"} for x in items],
+                    "created_at":r[2].isoformat(),"updated_at":r[3].isoformat()}
         r=c.execute("SELECT question_text,question_kind,status,confidence,priority,answer_text,answer_source,created_at,updated_at FROM session_questions WHERE id=%s",(internal_id,)).fetchone()
         return {"id":str(public_id),"type":"question","question":_clip(r[0],DETAIL_MAX),"question_kind":r[1],"status":r[2],"confidence":r[3],"priority":r[4],"answer":_clip(r[5],DETAIL_MAX),"answer_source":r[6],"created_at":r[7].isoformat(),"updated_at":r[8].isoformat()} if r else None

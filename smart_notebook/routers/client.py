@@ -13,7 +13,7 @@ from ..client_models import (AudioAckResponse,AudioDiagnosticResponse,Capabiliti
     ChatSSEEvent,ClientSessionResponse,ConversationCreatedResponse,ConversationDetailResponse,
     ConversationListResponse,DashboardEntityResponse,DashboardResponse,DashboardSSEEvent,ErrorResponse,
     FinishResponse,HealthResponse,KnowledgeDeltaResponse,KnowledgeEntityResponse,KnowledgeSnapshotResponse,
-    LibrariesResponse,PushRegistration,PushRegistrationCreateResponse,PushRegistrationListResponse,
+    LibrariesResponse,ListItemStatusResponse,ListItemStatusUpdate,PushRegistration,PushRegistrationCreateResponse,PushRegistrationListResponse,
     ReconciliationResponse,SessionListResponse,TurnResponse,UsageResponse)
 from ..config import (
     APP_VERSION, AUDIO_RETENTION_DAYS, SYSTEM_LOG_RETENTION_HOURS,
@@ -27,6 +27,7 @@ from ..services.audio import AudioChunkConflictError,create_audio_chunk
 from ..services.audio_diagnostics import diagnose_audio_bytes
 from ..services.client_dashboard import ESP_SURFACE,dashboard_snapshot,get_dashboard_entity
 from ..services.tasks import set_task_status
+from ..services.lists import set_list_item_status
 from ..services.client_chat import (ConversationConflict,abort_turn,add_turn,create_conversation,get_conversation,
     get_turn,list_conversations,list_messages,retry_turn,run_chat_turn_once,turn_events)
 from ..services.client_capture import CaptureConflict,create_capture,get_capture,run_capture_once
@@ -96,7 +97,7 @@ def _capabilities():
         "dashboard": {
             "schema_version": "1",
             "component_types": ["section","status_banner","text_block","entity_card","card_list","timeline","metric","alert","input_prompt","chat_preview","action_group","empty_state"],
-            "actions": ["open_entity","open_conversation","open_session","open_clarification","submit_capture","retry_operation","dismiss_local","open_settings","open_external_https"],
+            "actions": ["open_entity","open_conversation","open_session","open_clarification","complete_task","set_list_item_status","submit_capture","retry_operation","dismiss_local","open_settings","open_external_https"],
             "color_roles": ["primary","secondary","neutral","muted","info","success","warning","danger","recording","offline"],
             "icon_tokens": ["generic","microphone","recording","session","question","warning","task","list","note","fact","decision","topic","chat","info"],
             "border_roles": ["none","subtle","emphasis","critical"],
@@ -534,6 +535,22 @@ async def post_v1_complete_task(entity_id:UUID):
     result=get_dashboard_entity("task",entity_id)
     if result is None:raise ClientAPIError(404,"ENTITY_NOT_FOUND","Client entity not found.","never")
     return result
+
+
+@router.put("/api/client/v1/entities/list-item/{entity_id}/status",response_model=ListItemStatusResponse)
+async def put_v1_list_item_status(entity_id:UUID,request:ListItemStatusUpdate):
+    """Set one list item's desired state.
+
+    The operation is idempotent so an offline client may durably queue and
+    retry the final state after a lost response. Public identities keep the
+    database key private and remain stable while an item is active or done.
+    """
+    with get_db_connection() as c:
+        identity=c.execute("SELECT internal_id FROM client_entity_identities WHERE entity_type='list_item' AND public_id=%s",(entity_id,)).fetchone()
+    if not identity:raise ClientAPIError(404,"ENTITY_NOT_FOUND","Client entity not found.","never")
+    result=await set_list_item_status(identity[0],request.status)
+    if result is None:raise ClientAPIError(404,"ENTITY_NOT_FOUND","Client entity not found.","never")
+    return {"id":entity_id,"status":result["status"],"updated_at":result["updated_at"]}
 
 
 @router.post("/api/client/v1/knowledge/usage",response_model=UsageResponse)

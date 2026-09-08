@@ -2,12 +2,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdatomic.h>
+#include <stdint.h>
 #include <dirent.h>
 #include <unistd.h>
 #include <sys/stat.h>
 #include <limits.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "esp_http_client.h"
 #include "esp_crt_bundle.h"
 #include "esp_log.h"
@@ -108,6 +110,154 @@ static atomic_bool complete_task_pending;
 static atomic_bool history_pending;
 static char session_id_wanted[40];
 static atomic_bool session_pending;
+
+/* A small durable desired-state queue for list items. Unlike the audio queue,
+ * these records contain no user content, only opaque UUIDs and active/done.
+ * `committed=0` is a draft while its list detail is open; leaving promotes all
+ * drafts. Loading promotes them too, so a reset cannot silently discard a
+ * visible check mark. NVS blobs span pages, and this fixed store stays below
+ * four KiB while covering more items than one dashboard snapshot can expose. */
+#define LIST_ACTIONS_MAGIC 0x4c534131u
+#define LIST_ACTIONS_MAX 64
+typedef struct {
+    char id[37];
+    uint8_t done;
+    uint8_t committed;
+} list_action;
+typedef struct {
+    uint32_t magic;
+    uint16_t count;
+    uint16_t reserved;
+    list_action items[LIST_ACTIONS_MAX];
+} list_action_store;
+static list_action_store list_actions;
+static SemaphoreHandle_t list_actions_lock;
+static void publish_queue_status(void);
+
+static bool list_actions_save_locked(void) {
+    nvs_handle_t n;
+    if (nvs_open("notebook", NVS_READWRITE, &n) != ESP_OK) return false;
+    esp_err_t result = nvs_set_blob(n, "list_actions", &list_actions, sizeof(list_actions));
+    if (result == ESP_OK) result = nvs_commit(n);
+    nvs_close(n);
+    if (result != ESP_OK) ESP_LOGW("api", "list action journal save failed: %s", esp_err_to_name(result));
+    return result == ESP_OK;
+}
+
+static void list_actions_load(void) {
+    list_actions_lock = xSemaphoreCreateMutex();
+    memset(&list_actions, 0, sizeof(list_actions));
+    list_actions.magic = LIST_ACTIONS_MAGIC;
+    if (!list_actions_lock) return;
+    nvs_handle_t n;
+    size_t size = sizeof(list_actions);
+    if (nvs_open("notebook", NVS_READONLY, &n) == ESP_OK) {
+        if (nvs_get_blob(n, "list_actions", &list_actions, &size) != ESP_OK ||
+            size != sizeof(list_actions) || list_actions.magic != LIST_ACTIONS_MAGIC ||
+            list_actions.count > LIST_ACTIONS_MAX) {
+            memset(&list_actions, 0, sizeof(list_actions));
+            list_actions.magic = LIST_ACTIONS_MAGIC;
+        }
+        nvs_close(n);
+    }
+    bool recovered = false;
+    for (unsigned i = 0; i < list_actions.count; i++) {
+        if (!list_actions.items[i].committed) {
+            list_actions.items[i].committed = 1;
+            recovered = true;
+        }
+    }
+    if (recovered) {
+        list_actions_save_locked();
+        ESP_LOGI("api", "recovered %u staged list item action(s)", list_actions.count);
+    }
+}
+
+static int list_action_find_locked(const char *id) {
+    for (unsigned i = 0; i < list_actions.count; i++)
+        if (strcmp(list_actions.items[i].id, id) == 0) return (int)i;
+    return -1;
+}
+
+static unsigned list_action_count(bool committed_only) {
+    if (!list_actions_lock || xSemaphoreTake(list_actions_lock, pdMS_TO_TICKS(200)) != pdTRUE) return 0;
+    unsigned count = 0;
+    for (unsigned i = 0; i < list_actions.count; i++)
+        if (!committed_only || list_actions.items[i].committed) count++;
+    xSemaphoreGive(list_actions_lock);
+    return count;
+}
+
+bool api_client_list_item_desired(const char *item_id, bool *done) {
+    if (!item_id || !done || !list_actions_lock ||
+        xSemaphoreTake(list_actions_lock, pdMS_TO_TICKS(200)) != pdTRUE) return false;
+    int index = list_action_find_locked(item_id);
+    if (index >= 0) *done = list_actions.items[index].done != 0;
+    xSemaphoreGive(list_actions_lock);
+    return index >= 0;
+}
+
+bool api_client_stage_list_item(const char *item_id, bool done) {
+    if (!item_id || strlen(item_id) != 36 || !list_actions_lock ||
+        xSemaphoreTake(list_actions_lock, pdMS_TO_TICKS(500)) != pdTRUE) return false;
+    list_action_store *before = malloc(sizeof(*before));
+    if (!before) { xSemaphoreGive(list_actions_lock); return false; }
+    *before = list_actions;
+    int index = list_action_find_locked(item_id);
+    /* Every item in a fresh detail starts active. Reversing an unsent local
+     * completion therefore removes the draft instead of queuing a no-op. */
+    if (!done && index >= 0 && !list_actions.items[index].committed) {
+        memmove(&list_actions.items[index], &list_actions.items[index + 1],
+                (list_actions.count - (unsigned)index - 1) * sizeof(list_action));
+        list_actions.count--;
+    } else if (!done && index < 0) {
+        free(before);
+        xSemaphoreGive(list_actions_lock);
+        return true;
+    } else {
+        if (index < 0) {
+            if (list_actions.count >= LIST_ACTIONS_MAX) {
+                free(before);
+                xSemaphoreGive(list_actions_lock);
+                ESP_LOGW("api", "list action journal full");
+                return false;
+            }
+            index = (int)list_actions.count++;
+            memset(&list_actions.items[index], 0, sizeof(list_action));
+            snprintf(list_actions.items[index].id, sizeof(list_actions.items[index].id), "%s", item_id);
+        }
+        list_actions.items[index].done = done ? 1 : 0;
+        list_actions.items[index].committed = 0;
+    }
+    bool saved = list_actions_save_locked();
+    if (!saved) list_actions = *before;
+    free(before);
+    xSemaphoreGive(list_actions_lock);
+    publish_queue_status();
+    return saved;
+}
+
+bool api_client_commit_list_items(void) {
+    if (!list_actions_lock || xSemaphoreTake(list_actions_lock, pdMS_TO_TICKS(500)) != pdTRUE) return false;
+    bool changed = false;
+    uint64_t promoted = 0;
+    for (unsigned i = 0; i < list_actions.count; i++) {
+        if (!list_actions.items[i].committed) {
+            list_actions.items[i].committed = 1;
+            promoted |= (uint64_t)1 << i;
+            changed = true;
+        }
+    }
+    if (changed && !list_actions_save_locked()) {
+        for (unsigned i = 0; i < list_actions.count; i++)
+            if (promoted & ((uint64_t)1 << i)) list_actions.items[i].committed = 0;
+        changed = false;
+    }
+    xSemaphoreGive(list_actions_lock);
+    publish_queue_status();
+    if (changed && worker) xTaskNotifyGive(worker);
+    return changed || promoted == 0;
+}
 
 static void auth_load(void) {
     nvs_handle_t n;if(nvs_open("notebook",NVS_READWRITE,&n)!=ESP_OK)return;
@@ -368,7 +518,7 @@ static bool enroll_if_needed(void) {
  * panel until the next recording. */
 static void publish_queue_status(void) {
     memo_queue_status queued = memo_queue_get();
-    screen_status(queued.ready, queued.attention, queued.space_low);
+    screen_status(queued.ready + list_action_count(false), queued.attention, queued.space_low);
     screen_status_storage_block(queued.space_block);
     if (!recorder_busy()) screen_memo(SCREEN_READY, 0);
 }
@@ -1166,6 +1316,62 @@ static void submit_complete_task(void) {
     atomic_store(&complete_task_pending, false);
 }
 
+/* Take a copy without holding the journal lock across an HTTP request. The
+ * display may still revise the same item while the request is in flight; the
+ * completion step below removes it only if the desired state still matches. */
+static bool list_action_next(list_action *out) {
+    if (!out || !list_actions_lock ||
+        xSemaphoreTake(list_actions_lock, pdMS_TO_TICKS(200)) != pdTRUE) return false;
+    bool found = false;
+    for (unsigned i = 0; i < list_actions.count; i++) {
+        if (list_actions.items[i].committed) {
+            *out = list_actions.items[i];
+            found = true;
+            break;
+        }
+    }
+    xSemaphoreGive(list_actions_lock);
+    return found;
+}
+
+static void list_action_acked(const list_action *sent) {
+    if (!sent || !list_actions_lock ||
+        xSemaphoreTake(list_actions_lock, pdMS_TO_TICKS(500)) != pdTRUE) return;
+    int index = list_action_find_locked(sent->id);
+    if (index >= 0 && list_actions.items[index].committed &&
+        list_actions.items[index].done == sent->done) {
+        memmove(&list_actions.items[index], &list_actions.items[index + 1],
+                (list_actions.count - (unsigned)index - 1) * sizeof(list_action));
+        list_actions.count--;
+        list_actions_save_locked();
+    }
+    xSemaphoreGive(list_actions_lock);
+}
+
+static void submit_list_actions(void) {
+    list_action action;
+    while (list_action_next(&action)) {
+        char path[128], request[32];
+        snprintf(path, sizeof(path), "/api/client/v1/entities/list-item/%s/status", action.id);
+        snprintf(request, sizeof(request), "{\"status\":\"%s\"}", action.done ? "done" : "active");
+        char *body = malloc(API_RESPONSE_MAX);
+        int http = 0;
+        bool ok = body && call(HTTP_METHOD_PUT, path, request, body, API_RESPONSE_MAX, &http) && http == 200;
+        if (ok) {
+            cJSON *root = cJSON_Parse(body);
+            ok = cJSON_IsObject(root) && string_is(root, "id", action.id) &&
+                 string_is(root, "status", action.done ? "done" : "active");
+            cJSON_Delete(root);
+        }
+        status.last_http = http;
+        ESP_LOGI("api", "list_item %s=%s http=%d", ok ? "ok" : "failed",
+                 action.done ? "done" : "active", http);
+        if (body) { memset(body, 0, API_RESPONSE_MAX); free(body); }
+        if (!ok) break;
+        list_action_acked(&action);
+    }
+}
+
 /* The session list for the history view. Unlike the dashboard this is a plain
  * array, so the only check is that it is one: a body of the wrong shape is
  * reported as unavailable rather than drawn as an empty history, which would
@@ -1235,6 +1441,10 @@ static void synchronize(void) {
     }
     status.compatible = true;
     status.gates_ok++;
+    /* Apply queued list mutations before fetching the dashboard. A successful
+     * check therefore disappears from both the following list detail and the
+     * overview snapshot in the same synchronization pass. */
+    submit_list_actions();
     /* The dashboard comes first, before any housekeeping. What the user sees
      * must not wait behind the session sweep: over TLS a pass costs seconds per
      * request, and with a card full of recordings the panel stayed empty for
@@ -1376,7 +1586,7 @@ static void api_task(void *unused) {
          * queue until another recording or WLAN reconnect happens. */
         memo_queue_status queued = memo_queue_get();
         TickType_t wait;
-        if (queued.ready || atomic_load(&entity_pending) ||
+        if (queued.ready || list_action_count(true) || atomic_load(&entity_pending) ||
             atomic_load(&history_pending) || atomic_load(&session_pending))
             wait = pdMS_TO_TICKS(5000);
         else if (retry_ms)
@@ -1434,6 +1644,7 @@ void api_client_start(const char *base_url) {
         ESP_LOGW("api", "development profile: plain HTTP, credential and "
                         "audio travel unencrypted");
     auth_load();
+    list_actions_load();
     while (strlen(base) && base[strlen(base)-1] == '/') base[strlen(base)-1] = 0;
     /* Priority 1, below the display task and level with the input loop in
      * app_main. It used to be 3, which put background housekeeping above the
@@ -1481,12 +1692,12 @@ void api_client_queue_changed(void) { if (worker) xTaskNotifyGive(worker); }
 void api_client_request_sync(void) { if (worker) xTaskNotifyGive(worker); }
 
 void api_client_report(void) {
-    printf("@API configured=%d authenticated=%d compatible=%d gate_ok=%u gate_failed=%u sessions=%u create_ok=%u create_failed=%u replay_failed=%u settled=%u abandoned=%u acked=%u upload_failed=%u reconciled=%u resynced=%u unresyncable=%u released=%u refused=%u withheld=%u finish=%u last_http=%d\n",
+    printf("@API configured=%d authenticated=%d compatible=%d gate_ok=%u gate_failed=%u sessions=%u create_ok=%u create_failed=%u replay_failed=%u settled=%u abandoned=%u acked=%u upload_failed=%u reconciled=%u resynced=%u unresyncable=%u released=%u refused=%u withheld=%u finish=%u list_actions=%u last_http=%d\n",
            base[0] ? 1 : 0, credential[0] ? 1 : 0, status.compatible ? 1 : 0, status.gates_ok,
            status.gates_failed, status.sessions_seen, status.creates_ok,
            status.creates_failed, status.replay_failed, status.settled_skipped,
            status.abandoned, status.uploads_acked, status.uploads_failed,
            status.reconciled, status.resynced, status.resync_impossible, status.released,
-           status.release_refused, status.release_withheld, status.finishes_ok,
+           status.release_refused, status.release_withheld, status.finishes_ok, list_action_count(false),
            status.last_http);
 }

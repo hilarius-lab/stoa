@@ -676,6 +676,61 @@ Position vier abgeschnittenen Balkonbeleuchtungs-Task sichtbar an. Die
 anschließende Diagnose meldete `compatible=1`, `gate_ok=1`, `gate_failed=0`,
 `upload_failed=0` und weiterhin `ready=0 acked=5 attention=0`.
 
+## Dashboard-Leerüberschriften und Listeninhalt — Backend korrigiert, 8. September
+
+Der am Gerät gemeldete Zustand bestand aus „Systemhinweise“, „Offene Sessions“
+und „Neue Eingabe“, wobei nur zwei Sessionkarten sichtbar waren und jede
+`processing` als Titel, Vorschau und Status wiederholte. Die DB-Prüfung zeigte:
+beide Sessions waren liegengebliebene Regressionstest-Fixtures (`audio_prompt`
+beziehungsweise `esp32_epaper_audio` mit Firmwarekennung `test`), keine echten
+Nutzeraufnahmen. Die aktuelle E-Paper-Projektion enthielt daneben fünf korrekte
+Taskkarten, die wegen der getrennten Tasks-Ansicht nicht zum Hauptdashboard
+gehören.
+
+Der eigentliche Darstellungsfehler lag zwischen Projektion und Renderer:
+`_idle_content()` lieferte auch `alert` und `input_prompt`, während
+`main/dashboard.c` innerhalb von Sektionen ausschließlich `entity_card`
+zeichnete. So blieben leere Überschriften stehen. `_project_for_epaper()` lässt
+jetzt nur tatsächlich gerenderte Karten durch und entfernt leere Sektionen.
+`active-sessions` entfällt nur auf der ESP-Hauptprojektion; der Verlauf bleibt
+die autoritative Geräteansicht für Aufnahmen. Default-Surface und andere Clients
+ändern sich nicht.
+
+Die Listenansicht war nur bis zur Übersicht vollständig: Die Detailantwort
+enthielt zwar `items`, der generische ESP-Detailrenderer liest aber `content`.
+Listendetails liefern deshalb zusätzlich eine kompakte Lesefassung der aktiven
+Einträge, während das strukturierte Array bestehen bleibt. Karte und Detail
+zeigen `<n> offen` statt des technischen Tokens `active`. Projektionstest,
+Wire-Budget sowie die beiden gehärteten Session-/Capture-Vertragstests sind
+grün. Der ältere B6-Test kollidierte wie dokumentiert mit dem gleichzeitig
+laufenden Background-Worker (`idle`, weil dieser den Job zuerst beanspruchte);
+der deterministische Listenrouter selbst ist grün. Die reale
+Memo→Liste→ESP-Probe steht noch aus.
+
+## Interaktive Listenpunkte — Backend/Firmware und physische Probe abgeschlossen, 8. September
+
+Nach der erfolgreichen realen Memo-Probe mit „Hafermilch, Zitronen und
+Spülmaschinentabs“ wurde das bestätigte Zielbild als eigener Contract-Task
+umgesetzt. `client_entity_identities` erlaubt nun `list_item`; Listendetails
+liefern nur aktive Einträge mit stabiler öffentlicher UUID. Der idempotente
+Endpoint `PUT /api/client/v1/entities/list-item/{id}/status` setzt den
+Desired-State `active|done`; erledigte Items fehlen im nächsten Detail.
+
+Die Firmware besitzt dafür eine eigene Listendetailansicht statt des generischen
+Fließtexts: Fokus beginnt auf „Zurück“, Hoch/Runter scrollt durch vollständige
+Itemzeilen und der Mitteldruck toggelt das Kontrollkästchen. Änderungen werden
+sofort als Draft im NVS-Blob `list_actions` gesichert, beim Verlassen committed
+und vom Netzwerkworker wiederholbar übertragen. Drafts überleben einen Neustart
+und werden dann als implizit verlassen nachgeliefert. Der lokale Queueindikator
+zählt noch nicht quittierte Listaktionen mit.
+
+Geprüft: neue Statusoperation einschließlich Wiederholung und Rücksetzung,
+Filterung erledigter Items, OpenAPI-/Referenzvertrag, E-Paper-Wire-Budget und
+vollständiger ESP-IDF-Build. Die physische Bedienprobe bestätigte Fokusstart,
+Scrollen, Toggle/Zurücktoggeln, Verlassen und das Verschwinden von „Hafermilch“
+nach erneutem Öffnen. Das vor „Zurück“ gesetzte Zeichen `‹` fehlte im Font und
+erschien als Ersatzbox; es wurde anschließend ersatzlos entfernt.
+
 ## Reihenfolge für den nächsten Chat
 
 1. `worktree-esp32-cleanup` gemerged nach `main` (PR #1) — erledigt.

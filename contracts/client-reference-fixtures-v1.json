@@ -146,6 +146,8 @@
     "open_conversation",
     "open_session",
     "open_clarification",
+    "complete_task",
+    "set_list_item_status",
     "submit_capture",
     "retry_operation",
     "dismiss_local",
@@ -547,6 +549,11 @@
     },
     "LibrariesResponse": {
       "libraries": []
+    },
+    "ListItemStatusResponse": {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "status": "active",
+      "updated_at": "2026-08-27T12:00:00+02:00"
     },
     "PushRegistration": {
       "id": "00000000-0000-4000-8000-000000000001",

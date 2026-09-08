@@ -1,4 +1,5 @@
 """Unified text/audio memo-query capture contract regression."""
+import atexit
 import asyncio
 import time
 from unittest.mock import AsyncMock,patch
@@ -12,13 +13,42 @@ from smart_notebook.services.client_capture import get_capture
 from worker import WORKER_KINDS,run_worker_once
 
 
+_CLEANUP_CAPTURE_IDS=[]
+_CLEANUP_CONVERSATION_IDS=[]
+_CLEANUP_NOTE_IDS=[]
+_CLEANUP_SESSION_IDS=[]
+
+
+def _cleanup_test_records():
+    """Make assertion failures harmless to the repository's shared database."""
+    with get_db_connection() as db:
+        for capture_id in _CLEANUP_CAPTURE_IDS:
+            db.execute("DELETE FROM client_text_captures WHERE id=%s",(capture_id,))
+        for note_id in _CLEANUP_NOTE_IDS:
+            db.execute("DELETE FROM knowledge_sources WHERE knowledge_type='note' AND knowledge_id=%s",(note_id,))
+            db.execute("DELETE FROM notes WHERE id=%s",(note_id,))
+        for conversation_id in _CLEANUP_CONVERSATION_IDS:
+            db.execute("DELETE FROM client_conversations WHERE id=%s",(conversation_id,))
+        for session_id in _CLEANUP_SESSION_IDS:
+            row=db.execute("SELECT ingestion_session_id FROM client_sessions WHERE client_session_id=%s",(session_id,)).fetchone()
+            ingestion_id=row[0] if row else None
+            db.execute("DELETE FROM client_dashboard_snapshots WHERE scope_key=%s",(f"session:{session_id}",))
+            db.execute("DELETE FROM client_session_audit WHERE client_session_id=%s",(session_id,))
+            db.execute("DELETE FROM client_sessions WHERE client_session_id=%s",(session_id,))
+            if ingestion_id:db.execute("DELETE FROM ingestion_sessions WHERE id=%s",(ingestion_id,))
+        db.commit()
+
+
+atexit.register(_cleanup_test_records)
+
+
 def main():
     assert {"capture","chat"}.issubset(WORKER_KINDS)
     with patch("worker.run_capture_once",new=AsyncMock(return_value={"outcome":"idle"})) as capture_run:
         asyncio.run(run_worker_once("capture","m8-dispatch"));capture_run.assert_awaited_once_with("production")
     with patch("worker.run_chat_turn_once",new=AsyncMock(return_value={"outcome":"idle"})) as chat_run:
         asyncio.run(run_worker_once("chat","m8-dispatch"));chat_run.assert_awaited_once_with("llm")
-    client=TestClient(app);memo_id=uuid4()
+    client=TestClient(app);memo_id=uuid4();_CLEANUP_CAPTURE_IDS.append(memo_id)
     memo=client.post("/api/client/v1/captures",json={"client_capture_id":str(memo_id),"mode":"memo","content":"Dies ist eine lokale M8-Testnotiz."})
     assert memo.status_code==202 and memo.json()["resolved_intent"]=="memo" and memo.json()["status"]=="queued"
     assert client.post("/api/client/v1/captures",json={"client_capture_id":str(memo_id),"mode":"memo","content":"Dies ist eine lokale M8-Testnotiz."}).json()["id"]==str(memo_id)
@@ -34,11 +64,15 @@ def main():
     assert processed and processed["status"]=="completed",processed
     knowledge_ref=(processed.get("result") or {}).get("knowledge_ref")
     note_id=knowledge_ref["internal_id"] if knowledge_ref and knowledge_ref.get("type")=="note" else None
+    if note_id is not None:_CLEANUP_NOTE_IDS.append(note_id)
 
-    query_id=uuid4();query=client.post("/api/client/v1/captures",json={"client_capture_id":str(query_id),"mode":"auto","content":"Wie ist der Status von Atlas?"})
+    query_id=uuid4();_CLEANUP_CAPTURE_IDS.append(query_id)
+    query=client.post("/api/client/v1/captures",json={"client_capture_id":str(query_id),"mode":"auto","content":"Wie ist der Status von Atlas?"})
     assert query.status_code==202 and query.json()["resolved_intent"]=="query" and query.json()["conversation_id"]
+    _CLEANUP_CONVERSATION_IDS.append(query.json()["conversation_id"])
 
-    session_id=uuid4();created=client.post("/api/client/v1/sessions",json={"client_session_id":str(session_id),"source_type":"audio_prompt","capture_mode":"query"})
+    session_id=uuid4();_CLEANUP_SESSION_IDS.append(session_id)
+    created=client.post("/api/client/v1/sessions",json={"client_session_id":str(session_id),"source_type":"audio_prompt","capture_mode":"query"})
     assert created.status_code==201;client.post(f"/api/client/v1/sessions/{session_id}/start").raise_for_status()
     with get_db_connection() as db:internal=db.execute("SELECT ingestion_session_id FROM client_sessions WHERE client_session_id=%s",(session_id,)).fetchone()[0]
     chunk=client.post(f"/api/ingestion-sessions/{internal}/chunks",json={"sequence":1,"client_chunk_id":"m8-audio-query-text","text":"Welche Frist gilt für Projekt Atlas?","source_start_ms":0,"source_end_ms":3000})
@@ -46,6 +80,7 @@ def main():
     finished=client.post(f"/api/client/v1/sessions/{session_id}/finish",json={"final_sequence":0,"final_source_end_ms":3000});assert finished.status_code==200
     finalized=client.post(f"/api/client/v1/sessions/{session_id}/finalize");assert finalized.status_code==200,finalized.text
     assert finalized.json()["capture_result"]["resolved_intent"]=="query" and finalized.json()["capture_result"]["conversation_id"]
+    _CLEANUP_CONVERSATION_IDS.append(finalized.json()["capture_result"]["conversation_id"])
 
     with get_db_connection() as db:
         db.execute("DELETE FROM client_text_captures WHERE id IN(%s,%s)",(memo_id,query_id))

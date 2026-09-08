@@ -209,16 +209,26 @@ Entity-Antwort mit aktualisiertem `status`/`percent_complete` zurück, jetzt
 ohne `action`-Feld. Firmwareseitig ist das ein zusätzliches fokussierbares
 Element neben „Zurück" in der Detailansicht, nicht eine zweite Bedeutung des
 Kurzdrucks: der Fokusring wählt zwischen beiden, der Kurzdruck aktiviert stets
-das Fokussierte. Listen-Einträge einzeln löschen (analog geplant) ist noch
-nicht umgesetzt — dafür fehlt in der Detailansicht eines Listeneintrags
-bislang das Konzept einzeln fokussierbarer Positionen, das die Task-Lösung so
-nicht braucht.
+das Fokussierte.
+
+Listendetails sind dagegen eine scrollbare, strukturierte Einheit. Die
+Detailantwort enthält ausschließlich aktive Items als `{id, content, status}`
+mit stabiler öffentlicher UUID. Fokus `0` liegt beim Öffnen auf „Zurück“, danach
+folgen die Items. Ein Kurzdruck auf ein Item toggelt lokal `done`; ein weiterer
+Kurzdruck nimmt den Haken wieder zurück. Jede lokale Änderung wird sofort in NVS
+journalisiert, aber erst beim Verlassen der Ansicht zur Übertragung freigegeben.
+Der Worker setzt den endgültigen Desired-State idempotent mit
+`PUT /api/client/v1/entities/list-item/{id}/status`. Ein beim Boot gefundenes
+offenes Detail-Journal gilt als implizit verlassen und wird nachgeliefert.
+Erfolgreich abgehakte Items fehlen im nächsten Listendetail und im nächsten
+Dashboard-Snapshot. Netzwerkfehler schließen die Ansicht nicht wieder auf;
+die dauerhafte Queue versucht den Zustand weiter zuzustellen.
 
 Ein kurzer Mitteldruck auf eine fokussierte Karte führt deren erlaubte
 `open_entity`-, `open_conversation`-, `open_session`- oder
 `open_clarification`-Navigation aus. In der ersten ESP-Ausbaustufe werden
-`open_entity` und, für eine offene Task in ihrer Detailansicht, `complete_task`
-umgesetzt; andere nicht implementierte erlaubte Aktionen bleiben sichtbar,
+`open_entity`, für eine offene Task `complete_task` und für Listendetails
+`set_list_item_status` umgesetzt; andere nicht implementierte erlaubte Aktionen bleiben sichtbar,
 werden aber nicht ausgeführt. In der Detailansicht ist ein Kurzdruck auf das
 fokussierte Element „Zurück" lokal und löst keine Servermutation aus; ein
 Kurzdruck auf ein fokussiertes `complete_task`-Element tut es ausdrücklich.

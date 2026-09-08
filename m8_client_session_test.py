@@ -1,4 +1,5 @@
 """Deterministic M8 client-session contract and recovery test."""
+import atexit
 from pathlib import Path
 from uuid import uuid4
 
@@ -10,6 +11,33 @@ from smart_notebook.database import get_db_connection
 from smart_notebook.services.client_dashboard import dashboard_snapshot
 
 
+_CLEANUP_SESSION_IDS=[]
+
+
+def _cleanup_test_sessions():
+    """Keep a failed run from leaking technical cards into the shared DB."""
+    if not _CLEANUP_SESSION_IDS:return
+    root=Path(AUDIO_RETENTION_CACHE_DIR).resolve()
+    with get_db_connection() as db:
+        for session_id in _CLEANUP_SESSION_IDS:
+            row=db.execute("SELECT ingestion_session_id FROM client_sessions WHERE client_session_id=%s",(session_id,)).fetchone()
+            if not row:continue
+            ingestion_id=row[0]
+            if ingestion_id:
+                keys=[item[0] for item in db.execute("SELECT storage_key FROM audio_chunks WHERE session_id=%s",(ingestion_id,)).fetchall()]
+                for key in keys:
+                    path=(root/key).resolve()
+                    if root in path.parents:path.unlink(missing_ok=True)
+            db.execute("DELETE FROM client_dashboard_snapshots WHERE scope_key=%s",(f"session:{session_id}",))
+            db.execute("DELETE FROM client_session_audit WHERE client_session_id=%s",(session_id,))
+            db.execute("DELETE FROM client_sessions WHERE client_session_id=%s",(session_id,))
+            if ingestion_id:db.execute("DELETE FROM ingestion_sessions WHERE id=%s",(ingestion_id,))
+        db.commit()
+
+
+atexit.register(_cleanup_test_sessions)
+
+
 def check_error(response,code,status):
     assert response.status_code==status,response.text
     body=response.json();assert body["code"]==code and body["retry_class"] and body["request_id"]
@@ -17,6 +45,7 @@ def check_error(response,code,status):
 
 def main():
     client=TestClient(app);sid=str(uuid4())
+    _CLEANUP_SESSION_IDS.append(sid)
     create={"client_session_id":sid,"source_type":"_contract_test_client_session","title":"M8 lifecycle",
             "device_metadata":{"model":"untrusted-test-device","app_version":"test"}}
     first=client.post("/api/client/v1/sessions",json=create);assert first.status_code==201,first.text
@@ -73,6 +102,7 @@ def main():
     # and processing model remains one-based internally.  Quick memos upload
     # directly from `created`, without the meeting-only start transition.
     esp_sid=str(uuid4())
+    _CLEANUP_SESSION_IDS.append(esp_sid)
     esp_create={"client_session_id":esp_sid,"source_type":"esp32_epaper_audio","capture_mode":"memo",
                 "device_metadata":{"client":"waveshare-esp32-s3-epaper-3.97","firmware_version":"test",
                                    "sequence_base":0}}

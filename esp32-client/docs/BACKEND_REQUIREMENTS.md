@@ -165,7 +165,7 @@ und hier neu verifiziert (`main/api_client.c::create_session()` und
 4. **Offen.** Der Fokus hängt weiterhin am Index, nicht an der Komponenten-ID.
    SSE bleibt bewusst ungenutzt.
 
-## 11. Task abhaken aus der Detailansicht — festgelegt und umgesetzt, 7. September, vierte Runde
+## 11. Task und Listenpunkte abhaken — festgelegt und umgesetzt, 7./8. September
 
 Ausdrücklich getrennter Contract-Task, nach explizitem Auftrag. Neue,
 geschlossene Aktion `complete_task`: `GET /api/client/v1/entities/task/{id}`
@@ -182,11 +182,13 @@ Firmwareseitig ein zusätzliches fokussierbares Element neben „Zurück" in der
 Detailansicht, keine neue Bedeutung des Kurzdrucks — Details in
 `docs/API_INTERACTION.md`.
 
-**Bewusst nicht in dieser Runde:** Einzelne Listen-Einträge löschen. Die
-Task-Lösung überträgt sich nicht direkt, weil eine Liste mehrere Einträge
-hat und die Detailansicht bisher keine einzeln fokussierbaren Positionen
-kennt — eine zusätzliche Firmware-UI-Entscheidung, noch offen. Ganze Listen
-per Sprachbefehl löschen bleibt ebenfalls offen; dafür fehlt die
+Listendetails liefern ausschließlich aktive Items als
+`{id: UUID, content, status: "active"}`. `PUT
+/api/client/v1/entities/list-item/{id}/status` akzeptiert `active|done` und
+liefert den gespeicherten Desired-State idempotent zurück. Der ESP journalisiert
+lokale Toggles sofort, überträgt den Netto-Stand beim Verlassen und wiederholt
+bei Netzfehlern. Abgehakte Items fehlen im nächsten Detail; ganze Listen per
+Sprachbefehl löschen bleibt weiterhin offen, denn dafür fehlt die
 Lösch-Interpretation in der Klassifikationskette
 (`services/artifacts.py`), die heute nur Dringlichkeitsänderungen für
 „diese Aufgabe" erkennt (`_task_modifier`), keine Lösch- oder
@@ -205,6 +207,22 @@ ESP-Sektionen bleiben aus Payloadgründen auf drei begrenzt. Die Karte erhält b
 noch Zeitzonenlogik werden in der Firmware dupliziert. Der historische
 Section-Key `today` bleibt wire-kompatibel, die sichtbare Überschrift lautet
 „Aufgaben“.
+
+## 13. Ruhige E-Paper-Projektion und Listenlesbarkeit — festgelegt und umgesetzt, 8. September
+
+Die E-Paper-Surface enthält nur Sektionen mit wenigstens einer `entity_card`,
+weil `main/dashboard.c` nur diesen Komponententyp zeichnet. Nicht gerenderte
+`alert`-, `status_banner`-, `text_block`- und `input_prompt`-Komponenten dürfen
+keine leeren Überschriften auf dem Panel hinterlassen. Die Sektion „Offene
+Sessions“ bleibt auf dieser Surface aus: dieselben Aufnahmen stehen im
+paginierten Verlauf, einschließlich Zustand und Fehlermarke. Default-Surface
+und gemeinsamer Komponentenvertrag werden dadurch nicht beschnitten.
+
+Listenkarten liefern einen verständlichen Status `<n> offen`. Die
+Entity-Detailantwort für `type=list` enthält das strukturierte `items`-Array mit
+stabilen öffentlichen Item-UUIDs sowie `content` als kompatiblen Lesefallback.
+Der ESP rendert daraus eine eigene scrollbare Detailansicht und darf genau den
+Item-Status `active|done` ändern; sonstige Listenmutation bleibt ausgeschlossen.
 
 ## Was das Backend *nicht* liefern muss
 

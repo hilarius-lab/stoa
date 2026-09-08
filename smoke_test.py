@@ -72,6 +72,7 @@ EXPECTED_OPERATIONS = {
     ("GET", "/api/client/v1/knowledge/entities/{entity_id}"),
     ("GET", "/api/client/v1/entities/{entity_type}/{entity_id}"),
     ("POST", "/api/client/v1/entities/task/{entity_id}/complete"),
+    ("PUT", "/api/client/v1/entities/list-item/{entity_id}/status"),
     ("POST", "/api/client/v1/captures"),
     ("GET", "/api/client/v1/captures/{capture_id}"),
     ("POST", "/api/workers/client-capture/run-once"),
@@ -255,8 +256,8 @@ if missing or extra:
         "API stimmt nicht exakt mit der erwarteten Operationenliste überein"
     )
 
-assert len(EXPECTED_OPERATIONS) == 180
-assert len(operations) == 180
+assert len(EXPECTED_OPERATIONS) == 181
+assert len(operations) == 181
 
 print("[OK] FastAPI-App importierbar")
 print("[OK] 177 effektive Smart-Notebook-Operationen")

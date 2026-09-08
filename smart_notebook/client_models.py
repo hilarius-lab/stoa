@@ -108,11 +108,17 @@ class DashboardEntityResponse(ExtensibleModel):
     answer:str|None=None;answer_source:str|None=None
     work_start_at:datetime|None=None;due_at:datetime|None=None
     urgency:float|None=None;percent_complete:int|None=None
+    items:list["DashboardListItem"]|None=None
     # Set only while the detail view offers a mutation beyond navigation —
     # a task that is still open, so far. Absent once there is nothing left
     # to do, same convention as an unimplemented action on a dashboard card:
     # the client acts on what is present, not on a fixed type per entity_type.
     action:DashboardAction|None=None
+class DashboardListItem(BaseModel):
+    id:UUID;content:str;status:Literal["active"]
+class ListItemStatusUpdate(BaseModel):status:Literal["active","done"]
+class ListItemStatusResponse(BaseModel):
+    id:UUID;status:Literal["active","done"];updated_at:datetime
 class UsageResponse(BaseModel):batch_id:UUID;accepted_count:int;idempotent:bool
 
 class AgentInfo(BaseModel):key:str;display_name:str

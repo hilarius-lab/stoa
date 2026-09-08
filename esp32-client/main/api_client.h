@@ -1,4 +1,5 @@
 #pragma once
+#include <stdbool.h>
 
 /* Start the H2 REST worker. An empty URL keeps the device fully local. */
 void api_client_start(const char *base_url);
@@ -19,6 +20,14 @@ void api_client_open_entity(const char *type, const char *id);
  * action) comes back through the same screen_entity_received the detail view
  * already redraws from. */
 void api_client_complete_task(const char *task_id);
+/* Persist one list item's locally selected desired state. Staging never sends:
+ * the list detail may toggle it back before the reader leaves. Committing
+ * marks all staged changes ready for idempotent background delivery. A staged
+ * draft found at boot is treated as an implicit leave and delivered. */
+bool api_client_stage_list_item(const char *item_id, bool done);
+bool api_client_commit_list_items(void);
+/* Overlay a durable staged/queued desired state on a stale list detail. */
+bool api_client_list_item_desired(const char *item_id, bool *done);
 /* Fetch the session list for the history view. Same split as the detail: HTTP
  * belongs to the worker, drawing to the display task; the result comes back
  * through screen_history_received. */

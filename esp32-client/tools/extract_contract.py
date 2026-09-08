@@ -13,6 +13,8 @@ PATHS = {
     "/api/client/v1/dashboard/events",
     "/api/client/v1/diagnostics/audio-upload-test",
     "/api/client/v1/entities/{entity_type}/{entity_id}",
+    "/api/client/v1/entities/list-item/{entity_id}/status",
+    "/api/client/v1/entities/task/{entity_id}/complete",
     "/api/client/v1/installations/enroll",
     "/api/client/v1/installations/{client_installation_id}/credentials/rotate",
     "/api/client/v1/sessions",

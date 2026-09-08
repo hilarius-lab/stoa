@@ -200,9 +200,11 @@ Fenster und verweist für die vollständige Historie auf einen Detailendpunkt.
 - [x] Tasks und Listen sind ephemere Handlungsinformationen, werden weder in reine
   Wissensbibliotheken synchronisiert noch im Smart-Notebook-Client gelesen/verwaltet;
   die Benutzeroberfläche dafür liefern später vorhandene CalDAV-Clients
-- [x] Der eigenständige ESP32-Geräteclient darf sie ausschließlich als flüchtige,
-  read-only Dashboardprojektion über `surface=esp32_epaper` erhalten. Das erweitert
-  weder Offline-Knowledge-Sync noch Schreibaktionen oder den Android-Standardsnapshot.
+- [x] Der eigenständige ESP32-Geräteclient erhält sie als flüchtige
+  Dashboardprojektion über `surface=esp32_epaper`. Seine einzigen fachlichen
+  Schreibaktionen sind der idempotente Taskabschluss und der idempotente
+  Desired-State `active|done` eines einzeln identifizierten Listenpunkts. Das
+  erweitert weder Offline-Knowledge-Sync noch den Android-Standardsnapshot.
 - [x] Taskdetails dürfen für diese Projektion optional `work_start_at` („bearbeiten ab“),
   `due_at` („erledigen bis“), `urgency` und `percent_complete` tragen. Die ESP-Sektion
   zeigt bereits gestartete offene Tasks sowie Tasks ab `urgency >= 0.5`; der
