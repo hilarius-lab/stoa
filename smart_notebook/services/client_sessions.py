@@ -219,14 +219,32 @@ def _release_local_audio(client_session_id):
     return True
 
 
-def settle_client_session_for_ingestion(ingestion_session_id):
-    """Finalize a ready client session after its final processing job completes."""
+async def settle_client_session_for_ingestion(ingestion_session_id):
+    """Finalize a ready client session after its final processing job completes,
+    then run the ingestion-level finalize and promote its confirmed
+    session_artifacts into durable knowledge (tasks/notes/lists) -- the
+    automatic counterpart to POST .../finalize?promotion_mode=llm.
+
+    BACKEND_LOGIK.md A09/D02: new validated artifacts were auto-confirmed,
+    but nothing in the automatic worker chain ever promoted them, so a
+    recorded memo never became a visible task without a manual API call.
+    Both finalize_session() and promote_session_artifacts() are idempotent
+    and safe to call again on a later, more complete pass; a not-ready
+    ValueError here just means the ingestion session isn't fully caught up
+    yet and gets retried after the next successful worker job.
+    """
     if ingestion_session_id is None:return None
     with get_db_connection() as c:
         row=c.execute("SELECT client_session_id FROM client_sessions WHERE ingestion_session_id=%s AND state='processing'",(ingestion_session_id,)).fetchone()
     if not row:return None
-    try:return finalize_client_session(row[0])
+    try:result=finalize_client_session(row[0])
     except ClientSessionConflict:return None
+    from .intelligence import finalize_session
+    from .promotion import promote_session_artifacts
+    try:finalize_session(ingestion_session_id)
+    except ValueError:return result
+    await promote_session_artifacts(ingestion_session_id)
+    return result
 
 
 def _materialize_capture_result(client_session_id):

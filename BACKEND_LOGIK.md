@@ -1,0 +1,902 @@
+# Smart Notebook – Logik der Verarbeitung und des Wissens
+
+Stand der Zusammenführung: **2026-09-08**. Grundlage: lokaler Quellcode, bestehende Projektdokumentation und das Gespräch über einen allgemeinen Auto-Modus.
+
+Fachliche Ergänzung vom **2026-09-08**: Die Produktentscheidungen zu Aufnahmefilter, langfristiger Wissensverdichtung, Facts, Konfliktklärung, Dashboard-Rückfragen und Archivierung wurden vom Nutzer bestätigt. Die entsprechend markierten Abschnitte beschreiben beschlossenes Soll-Verhalten; sie sind kein Nachweis seiner Implementierung.
+
+## 1. Zweck, Geltungsbereich und Lesereihenfolge
+
+Dieses Dokument erklärt, was mit einer Information geschieht: vom Eingang über Verstehen, Einordnen und Bewerten bis zu einer Aktion, einer Antwort und der späteren Konsolidierung. Es ist der zentrale fachliche Einstieg in das Backend. Es beschreibt auch die noch fehlenden Verbindungen zum gewünschten Auto-Modus.
+
+Die Beschreibung beruht auf einer **statischen Prüfung von Code und Aufrufstellen**. Sie ist kein Nachweis einer laufenden Serverinstallation und keine erneute Abnahme der vorhandenen Tests. Aussagen aus älteren Dokumenten und dem Chat wurden nicht ungeprüft übernommen.
+
+Die bestehenden API-Verträge und Architekturentscheidungen bleiben bestehen. Dieses Dokument erfindet keine neuen Endpoints, ändert keine Wire-Semantik und erklärt Implementierungsabweichungen nicht stillschweigend zu neuen Produktentscheidungen. Widersprüche stehen in Abschnitt 19. Historische Dokumente bleiben als Herkunftsnachweis erhalten.
+
+### Inhaltsübersicht
+
+1. Zweck und Statusbegriffe
+2. Zielbild des allgemeinen Auto-Modus
+3. Logische Gesamtübersicht des Ist-Stands
+4. Entitäten und Speicherbeziehungen
+5. Eingangswege und ihre unterschiedlichen Folgen
+6. Audio, Text-Chunks und Session-Verarbeitung
+7. Klassifizierung, Themen und Artefaktaktionen
+8. Finalisierung und Übernahme in dauerhaftes Wissen
+9. Suche, Deduplication und Wiederverwendung
+10. Chat und Antworten
+11. Evidence, Claims und Facts
+12. Questions, implizite Fragen und Clarifications
+13. Konfidenz, Relevanz, Importance und Priorität
+14. Änderungen, Erledigung, Archivierung und CalDAV
+15. Nächtliche Konsolidierung in tatsächlicher Reihenfolge
+16. Worker, Fehler, Wiederaufnahme und Reihenfolgegarantien
+17. Dashboard, Offline-Sync, Push und Betrieb
+18. Fehlende Verbindungen zum Auto-Modus und Abnahmeszenarien
+19. Widersprüche und Präzisierungen
+20. Quellenregister, Prüfung und Pflege
+
+### Statusbegriffe
+
+| Kennzeichnung | Bedeutung |
+|---|---|
+| **Automatisch im Pfad** | Der vorhergehende Schritt ruft diesen Schritt auf oder legt den passenden Auftrag an. Ein benötigter Worker muss tatsächlich laufen. |
+| **Separat aufrufbar** | Implementierung und API/Funktion existieren, aber die zentrale Verarbeitung ruft sie nicht generell auf. |
+| **Shadow / Kandidat** | Ergebnisse werden zur Prüfung gespeichert; daraus folgt keine entsprechende Mutation des dauerhaften Wissens. |
+| **Ziel / offen** | Gewünschtes Verhalten aus diesem Gespräch oder einer Planung, für das noch keine durchgängige Implementierung gefunden wurde. |
+| **Beschlossen / Umsetzung offen** | Vom Nutzer bestätigte fachliche Regel. Die Produktentscheidung ist getroffen; Code und gegebenenfalls Clientvertrag müssen noch angepasst werden. |
+
+Ein registriertes KI-Taskprofil, ein Datenbankfeld, ein API-Endpunkt oder ein abgehakter Roadmap-Punkt beweist allein keine automatische Integration.
+
+## 2. Zielbild: Ein Auto-Eingang für beliebige Informationen
+
+Der gewünschte Auto-Modus nimmt beliebigen Text oder Sprache entgegen: zufälliges Wissen, persönliche Angaben, Memos, Notizen, Aufgaben, Listen, Korrekturen, Erledigungen und Fragen. Eine Eingabe darf mehrere davon enthalten. Der Nutzer soll die fachlichen Typen nicht vorher auswählen müssen.
+
+**Memo** bezeichnet dabei eine Erfassungsabsicht ohne erwartete direkte Gesprächsantwort. Es ist keine zusätzliche dauerhafte Wissensentität. Ein Memo kann mehrere Notes, Tasks, Listeneinträge oder Fragen enthalten. Eine knappe Verarbeitungsbestätigung ist davon unabhängig und im beschlossenen Soll vorgesehen.
+
+Der angestrebte Ablauf lautet:
+
+```mermaid
+flowchart TB
+    I["Beliebige Information: Text oder Sprache"] --> S["Quelle und Kontext sichern"]
+    S --> U["Sinneinheiten und mehrere Absichten erkennen"]
+    U --> K["Vorhandenes Wissen und Gesprächskontext heranziehen"]
+    K --> B["Neuheit, Zielbezug, Belege und Widersprüche bewerten"]
+    B --> D{"Ausreichend eindeutig?"}
+    D -->|Ja| A["Aktionen planen und nachvollziehbar ausführen"]
+    D -->|Teilweise| Q["Sichere Teile verarbeiten; offene Punkte klären"]
+    Q --> K
+    A --> W[("Strukturiertes dauerhaftes Wissen")]
+    W --> K
+    A --> R["Ergebnis melden und gegebenenfalls Frage beantworten"]
+    W --> N["Nachts prüfen, konsolidieren und offene Arbeit nachholen"]
+    N --> W
+```
+
+**Dieses Diagramm ist das Zielbild, nicht die Behauptung einer bereits vollständigen Auto-Pipeline.** Der aktuelle Code besitzt mehrere Eingangswege und viele passende Bausteine. Die fehlende gemeinsame Steuerung wird in Abschnitt 18 konkretisiert.
+
+### 2.1 Beschlossen: Niedrige Aufnahmeschwelle und langfristige Wissensverdichtung
+
+**Status: Beschlossen / Umsetzung offen.** Der Auto-Modus soll möglichst viel nützlichen Inhalt erkennen, aber nicht jeden Satz als dauerhaftes Wissen behandeln. Dafür gelten zwei getrennte Ebenen:
+
+1. **Aufnahmefilter:** Smalltalk, Füllsätze und reine Gesprächsorganisation werden als Wissensinhalt ausgesiebt. Die Schwelle für möglicherweise nützliche Informationen bleibt niedrig. Solche Inhalte dürfen zunächst Kandidaten sein, ohne schon als gesicherte Facts zu gelten. Zitate, Hypothesen, Meinungen und Angaben anderer Personen werden mit ihrem jeweiligen Kontext gekennzeichnet.
+2. **Langfristige Verdichtung:** Schwache Evidence, niedrige Importance und lange ausbleibende Nutzung werden gemeinsam bewertet. Wenig tragfähige Inhalte werden aus der aktiven Auswahl zurückgenommen und anschließend gegebenenfalls archiviert. Neue Belege, Bestätigungen und tatsächliche Nutzung können ihre aktive Relevanz erhalten oder erneuern.
+
+Seltene Nutzung allein rechtfertigt keine Archivierung. Explizite Merkaufträge, wichtige persönliche Angaben wie Allergien, wichtige Entscheidungen und offene Verpflichtungen werden vor rein nutzungsbasierter Bereinigung geschützt. Wiederholungen derselben Quelle erhöhen nicht automatisch die Zahl unabhängiger Belege.
+
+Die Aufnahmeschwelle und die langfristige Bereinigung sind getrennt zu kalibrieren. Konkrete Zahlenwerte sind Implementierungs-/Evaluationsarbeit, keine noch ausstehende Grundsatzentscheidung des Nutzers. Die Regeln für Archivierungsgründe und Wiederaufnahme stehen in Abschnitt 14.3; der Anschluss an die Nachtwartung in Abschnitt 15.4.
+
+## 3. Logische Gesamtübersicht des implementierten Stands
+
+Durchgezogene Pfeile zeigen vorhandene Aufrufe oder Datenflüsse. Gestrichelte Pfeile markieren einen gesonderten Auslöser. Sie bedeuten nicht, dass eine Funktion fehlt.
+
+```mermaid
+flowchart TB
+    IN["Information kommt rein"] --> KIND{"Eingangsweg"}
+    KIND -->|Roh-Event| EV[("Event speichern")]
+    KIND -->|Einzeltext-Capture| AUTO["memo / query / auto-Heuristik"]
+    KIND -->|Audio-Session| STT["Audio speichern und transkribieren"]
+    KIND -->|Text-Session| CH[("Text-Chunks speichern")]
+    STT --> STABLE["Transkript stabilisieren"]
+    STABLE --> CH
+    STABLE --> REPAIR["Textverarbeitung über Repair einplanen"]
+    CH -.->|Repair-API| REPAIR
+    REPAIR --> SEG["Semantisch segmentieren; Themen erkennen"]
+    SEG --> AR["Regeln; bei Unsicherheit LLM; lokale Prüfung"]
+    AR --> ART[("Session-Artefakte mit Quellen und Klassifizierung")]
+    AUTO -->|Memo| CAP["Capture-Auftrag; gesonderter Workeraufruf"]
+    CAP --> CLASS["LLM: eine Capture-Aktion klassifizieren"]
+    CLASS --> DD["Typspezifische Ähnlichkeitssuche und Deduplizierung"]
+    DD --> KNOW[("Notes, Tasks, Listen und Einträge")]
+    AUTO -->|Query| CHAT["Chat-Turn; gesonderter Workeraufruf"]
+    ART -.->|Fachliche Finalisierung / Promotion| KNOW
+    KNOW --> SEARCH["Exakt + Volltext + Trigramm; bei Bedarf Vektorsuche"]
+    SEARCH --> CHAT
+    CHAT --> ANSWER["Antwort und Chat-Ereignisse speichern"]
+    SEG -.->|Question-Detection-API| Q[("Explizite Session-Fragen")]
+    KNOW -.->|Claim-Extraktion| CC[("Geprüfte Claim-Kandidaten; noch keine Claims")]
+    CLAIM[("Claims und Evidence")]
+    CLAIM -.->|Fact-Promotion| FACT[("Fact-Projektion; ursprüngliche Note archivieren")]
+    EV --> NIGHT["Tägliche Wartung"]
+    KNOW --> NIGHT
+    CLAIM --> NIGHT
+    NIGHT --> KNOW
+    NIGHT --> CLAIM
+```
+
+Das Backend verwendet FastAPI als API-Schicht und PostgreSQL als autoritativen Datenbestand. PostgreSQL enthält auch Jobs, Zustände und Suchindizes. Audio-Bytes liegen separat im Dateispeicher. Embeddings sind abgeleitete Suchrepräsentationen, keine unabhängige Wissensquelle. Ein zusätzlicher Broker oder Suchcluster ist für diese Abläufe nicht eingebunden.
+
+## 4. Welche Entitäten es gibt und wie sie zusammenhängen
+
+### 4.1 Quellen, Arbeitsgedächtnis und dauerhaftes Wissen
+
+| Ebene / Entität | Input und Bedeutung | Gespeichertes Ergebnis / Nutzung |
+|---|---|---|
+| `events` | Einzelner Rohtext, Zeit, Herkunft, gegebenenfalls `client_event_id` | Ursprüngliche Mitteilung; Capture-Ergebnis und optional Legacy-Chatantwort. Noch kein geprüftes Wissen. |
+| `client_text_captures` | Capture-ID, Modus, Inhalt, `context_ref` | Routingentscheidung, Event-/Chat-Bezug, Status und Ergebnis. |
+| `client_sessions` | Öffentliche Client-ID, Aufnahmeart, Kontext, Sequenzbasis | Geräte-/Uploadzustand, Verbindung zur Ingestion-Session und sessionsweite Audiofreigabe. |
+| `ingestion_sessions` | Zusammengehörige Aufnahme oder Texteingabe | Fachlicher Container mit Anfang, Ende und Verarbeitungszustand. |
+| `audio_chunks` | Audio-Bytes und Transportmetadaten | Metadaten, relativer Dateischlüssel, Hash, Status, Retention. |
+| `transcript_windows`, `transcript_segments` | STT-Ergebnisse mit Zeitbezug | Vorläufige, bestätigte oder ersetzte Texthypothesen. |
+| `ingestion_chunks` | Stabiler Transkripttext oder direkt eingespeister Text | Geordnete Texteingaben für semantische Verarbeitung; nicht identisch mit Audio-Transport-Chunks. |
+| `semantic_segments` | Ein Chunk und vorheriger Kontext | Einzelne Sinneinheiten mit Typ, Konfidenz und Status. |
+| `session_artifacts` | Interpretierte Segmente | Veränderbare Note-/Task-/List-/List-Item-/Fact-/Decision-Kandidaten der Session. |
+| `artifact_classifications` | Regel- oder LLM-Entscheidung | Belegspannen, normalisierte Felder, Gründe, fehlende Felder, `validated`, `abstained`. |
+| `session_topics` | Expliziter oder semantisch erkannter Kontext | Themen der laufenden Session samt Belegen und Konfidenz. |
+| `session_questions` | Explizite oder gesondert angelegte implizite Frage | Offene/beantwortete Frage mit Priorität, Quellen und Antwort. |
+| `notes` | Dauerhaft gespeicherter Inhalt | Persönliche Notiz mit Embedding, Zeitpunkten und Archivstatus. |
+| `tasks` | Handlung / Verpflichtung | Inhalt, Status, Frist, Urgency, CalDAV-Priority, Fortschritt und Embedding. |
+| `lists`, `list_items` | Container und einzelne Einträge | Veränderliche Sammlung; Einträge mit Status und Listenbezug. |
+| `claims` | Atomare Aussage mit Subjekt, Prädikat und Wert | Fact, Opinion, Prediction, Requirement oder Decision; Polarität, Modalität, Gültigkeit, Konfidenz und Konfliktstatus. |
+| Fact | Ein Claim mit `claim_type='fact'` | Eigene Client-Wissensprojektion aus Claims; keine separate allgemeine `facts`-Tabelle. |
+| `knowledge_topics` | Dauerhafte Themen | Verbindungen, Aliasse und Themenrelationen zum Wissensbestand. |
+| `knowledge_activity`, `knowledge_signals` | Nutzung und Aktivierung von Entitäten | Importance-, Aktualitäts- und Trendsignale. |
+| `client_conversations`, Nachrichten und Turns | Online-Unterhaltung | Nutzer-/Assistant-Nachrichten, Turnstatus und persistierte SSE-Ereignisse. |
+
+### 4.2 Quellen und Beziehungen sind eigene Daten
+
+| Beziehung | Zweck |
+|---|---|
+| `knowledge_sources` | Verknüpft dauerhaftes Wissen mit Events, etwa als ursprüngliche oder unterstützende Quelle. |
+| `session_artifact_sources` | Verbindet ein Artefakt mit den zugrunde liegenden semantischen Segmenten. |
+| `evidence_quotes` | Konkrete Textstelle aus einem Chunk mit Zeichenposition und gegebenenfalls angenähertem Audiozeitbezug. |
+| `artifact_knowledge_links` | Verbindet ein promoviertes Artefakt mit dem dauerhaft gespeicherten Objekt; verhindert erneute reguläre Promotion desselben Artefakts. |
+| `artifact_claim_links`, `claim_evidence` | Ordnen strukturierte Aussagen und unterstützende/widersprechende Belege zu. |
+| `evidence_sources` | Quellenidentität und beschreibende Qualitäts-/Herkunftsmerkmale. |
+| `claim_relations`, `conflict_cases` | Beziehungen zwischen Aussagen und dokumentierte Widersprüche. |
+| `knowledge_topic_links` | Direkte oder geerbte thematische Zuordnung; Herkunft bleibt unterscheidbar. |
+| `knowledge_supersessions` | Erhält die Verbindung von einem konsolidierten Original zum kanonischen Eintrag. |
+| `note_fact_promotions` | Dokumentiert die Überführung einer Note in die Darstellung eines bereits vorhandenen Fact-Claims. |
+
+Eine Quelle, ein Zitat und die daraus extrahierte Aussage sind unterschiedliche Objekte. Ebenso sind ein bestätigtes Artefakt, eine gespeicherte Note und ein belegter Fact nicht austauschbar. Nicht jeder Eingangsweg erzeugt automatisch alle diese Beziehungen.
+
+## 5. Eingangswege: Welcher Input startet welchen Ablauf?
+
+### 5.1 Übersicht
+
+| Eingang / Auslöser | Input | Unmittelbare Verarbeitung | Output / Folge |
+|---|---|---|---|
+| `POST /api/events` und Batch | Eventtext, Herkunft, optionale stabile Client-ID | Speichern / identischen Retry erkennen | Event; weder Extraktion noch Antwort. |
+| `POST /api/capture`, Capture-Batch oder Capture eines vorhandenen Events | Eventdaten / Event-ID | Event → `process_stored_event_capture` → Klassifizierung und Mutation, sofern noch nicht verarbeitet | Event plus persistiertes Capture-Ergebnis. |
+| `POST /api/message` | `text` | Event → Capture → Wissenssuche → Antwort → `events.response` speichern | Antwort, Capture-Ergebnis und Debugdaten im Legacy-Endpunkt. |
+| `POST /api/client/v1/captures` | `client_capture_id`, `mode`, `content`, optional `context_ref` | Idempotenz prüfen; `memo` oder `query` bestimmen | Memo-Auftrag `queued` oder Referenzen auf neu angelegte Conversation/Turn. |
+| Client-Conversation / weiterer Turn | Stabile Nachrichten-/Turn-IDs und Inhalt | Nachrichten und Turn speichern | Turn `queued`; noch keine generierte Antwort. |
+| Client-Audio-Session | Session-ID, `capture_mode`, Audio-Chunks | Audio-/Session-Pipeline | Transkripte, Segmente, Artefakte, später Capture-Ergebnis. |
+| Direkte Ingestion-Text-Session | Session und geordnete Text-Chunks | Chunks speichern | Für die Weiterverarbeitung ist zusätzlich Jobanlage/Repair nötig. |
+
+### 5.2 Heutiger Auto-Modus bei Einzeltext
+
+1. Inhalt trimmen; Hash aus Modus, Inhalt und Kontext bilden.
+2. Existiert die Capture-ID bereits mit identischen Daten, vorhandenes Capture zurückgeben. Abweichende Daten führen zum Konflikt.
+3. Bei `mode != auto` den gewählten Modus übernehmen.
+4. Bei `auto`: endet der Text mit `?` oder beginnt er mit einer hinterlegten Frageform wie „wer“, „was“, „wann“, „wie“, „ist“ oder „kann“, wird er `query`; sonst `memo`.
+5. Bei `memo`: Event mit Herkunft `client_memo` und Capture mit `queued` speichern.
+6. Bei `query`: deterministisch aus der Capture-ID abgeleitete Conversation-/Message-/Turn-IDs verwenden. Das Capture ist bereits `completed`, weil die Weiterleitung abgeschlossen ist; der Chat-Turn ist noch nicht beantwortet.
+
+**Grenze:** Diese Entscheidung versteht weder mehrere Absichten noch allgemeine Änderungsbefehle. „Ich habe Milch gekauft. Was fehlt noch?“ wird insgesamt zur Query. Die Speicherung der Information vor der Antwort ist im Client-Query-Pfad nicht wie bei `/api/message` eingebaut.
+
+`context_ref` wird gespeichert und gehört zur Capture-Identität. Der Capture-Worker führt daraus derzeit keine allgemeine Zuordnung zu einer offenen Clarification oder zu einem zu ändernden Wissensobjekt aus.
+
+### 5.3 Verarbeitung eines einzelnen Memos
+
+**Auslöser:** `run_capture_once`, erreichbar über `POST /api/workers/client-capture/run-once`. Nicht in `worker.py all` enthalten.
+
+| Reihenfolge | Input | Verarbeitung | Output |
+|---|---|---|---|
+| 1 | Ältestes `queued`-Capture | Mit `FOR UPDATE SKIP LOCKED` beanspruchen; auf `processing` setzen | Exklusiv beanspruchtes Capture. |
+| 2 | Inhalt und Eventzeit | LLM-Profil `capture.classify` mit strukturiertem Ausgabeschema | **Eine** Aktion: `save_note`, `save_task`, `save_list_item` oder `none`; dazu Inhalt, Frist und Listentitel. |
+| 3 | Note-/Task-Kandidat | Typspezifische Vektorsuche nach ähnlichen Einträgen; LLM-Deduplizierung bei Treffern | `save_new`, `update_existing` oder `skip`. |
+| 4 | List-Item-Kandidat | Zielliste suchen/auflösen; Eintrag innerhalb der Liste deduplizieren | Bestehende oder neue Liste; neuer, aktualisierter oder bereits vorhandener Eintrag. |
+| 5 | Geprüfte Aktion | Inhalt speichern/ändern, Embedding erstellen/erneuern, Eventquelle verknüpfen | Dauerhaftes Objekt oder begründetes Nicht-Anlegen. |
+| 6 | Verarbeitungsergebnis | Event als capture-verarbeitet markieren, Capture-Ergebnis speichern | `completed`; bei Ausnahme `failed`. |
+
+Der deterministische Testmodus speichert eine Note mit Testembedding und bildet nicht die produktive semantische Entscheidung ab. Einzeltext-Memos durchlaufen nicht automatisch die Segmentierungs-, Themen-, Fragen- und Artefaktpipeline.
+
+## 6. Audio und Session-Verarbeitung
+
+### 6.1 Aufnahme und Transport
+
+**Input:** Client-Session und Audiosegmente mit Sequenz, Client-Chunk-ID, Zeitbereich, Dauer, MIME-Typ und Hash.
+
+1. Client-Identität und unveränderliche Sessionparameter prüfen. Die deklarierte `sequence_base` erlaubt eine Übersetzung zwischen Client-Zählung und interner, bei 1 beginnender Audiosequenz.
+2. Upload-Identität und Hash prüfen. Gleiche Identität mit abweichenden Daten ergibt einen Konflikt.
+3. Unveränderte Bytes in eine temporäre Datei schreiben, `flush` und `fsync` ausführen und atomar an den endgültigen Ort verschieben.
+4. Metadaten und relativen `storage_key` in PostgreSQL speichern. Bei fehlgeschlagenem Metadaten-Insert wird die gerade erzeugte Datei entfernt.
+5. Durable ACK zurückgeben. Es bestätigt Speicherung, nicht Transkription, semantische Verarbeitung oder Wissenspromotion.
+6. Sobald ein geeignetes vollständiges Live-Fenster vorliegt, einen idempotenten STT-Auftrag anlegen.
+
+Dateischreiben und Datenbank-Commit sind keine gemeinsame atomare Transaktion. Der Mechanismus bietet persistente Speicherung und Fehlerbehandlung, keine pauschale Garantie gegen jede Absturzkonstellation.
+
+### 6.2 STT-Fenster und Transkriptstabilisierung
+
+| Schritt | Input | Verarbeitung | Output |
+|---|---|---|---|
+| Fensterbildung | Audio-Chunks 1–3, dann 3–5, dann 5–7 usw. | Bis zu drei Transport-Chunks mit einem überlappenden Chunk | Bei ungefähr 10 Sekunden je Chunk ungefähr 30 Sekunden STT-Kontext. |
+| Normalisierung | Originaldateien eines Fensters | FFmpeg fügt Dateien zusammen und erzeugt temporäres WAV, mono, 16 kHz | Abgeleitete STT-Eingabe; Original-Uploads bleiben unverändert. |
+| Transkription | WAV und Sprach-/Modellparameter | Konfigurierter selbstgehosteter STT-Dienst; produktiv `ocean`-Modus | Text, Segment-/Wortzeitinformationen und STT-Metadaten. |
+| Speicherung | STT-Antwort | Fenster und Segmente zunächst `provisional` speichern | Versionierbare Texthypothesen. |
+| Überlappung | Neue und alte, zeitlich überlappende vorläufige Segmente | Textähnlichkeit prüfen; passende Hypothesen ersetzen; bloße Zeitüberlappung reicht nicht | `superseded`-Beziehungen statt stiller Überschreibung. |
+| Stabilisierung | Zusammenhängend vorliegende Fenster | Normalerweise den letzten instabilen Rand zurückhalten; am geschlossenen Ende final stabilisieren | `confirmed`-Transkriptsegmente. |
+| Fortsetzung | Bestätigter Text und naher vorläufiger Folgesatz | Unter begrenzten Regeln Satzfortsetzung zusammenführen, etwa bei kleingeschriebenem Beginn | Zusammenhängender Text statt abgeschnittener Notiz. |
+| Materialisierung | Noch nicht materialisierte stabile Segmente | `ingestion_chunks` mit eigenen Sequenzen anlegen; Verweise zurückschreiben | Textinput für die semantische Verarbeitung. |
+| Jobanlage | Neue stabile Chunks | `repair_ingestion_session_record` aufrufen | Fehlende Textverarbeitungsschritte und Jobs. |
+
+Kurze Restfenster werden beim Finish eingeplant. Die Fensterlänge folgt der Chunkanzahl; 30 Sekunden sind keine für alle Clientprofile erzwungene Konstante.
+
+**Direkter Text-Ingest unterscheidet sich hier:** `create_ingestion_chunk_record` speichert den Chunk, legt selbst aber keinen Textjob an. Dafür muss Repair oder eine passende explizite Jobanlage ausgelöst werden. Im Audio-Stabilisierungspfad ist dieser Anschluss bereits vorhanden.
+
+### 6.3 Semantische Segmentierung
+
+**Auslöser:** Text-Worker beansprucht einen `text_processing`-Job.
+
+1. Aktuellen Chunk und den vorherigen Chunk laden; bis zu 750 Zeichen vorherigen Kontexts berücksichtigen.
+2. Im produktiven Modus `segmentation.semantic` aufrufen. Der deterministische Modus ist ein Testpfad.
+3. Maximal 50 Segmente je Chunk, begrenzte Segmentlänge und erlaubte Typen prüfen: `statement`, `note_candidate`, `task_candidate`, `list_item_candidate`, `question`, `other`.
+4. Segmente mit Hash, Konfidenz, Herkunft und Status speichern; unvollständige Grenzen können vorläufig bleiben und später ersetzt werden.
+5. Für bestätigte Segmente Themen erkennen.
+6. Textjob abschließen, Verarbeitungsschritt synchronisieren, Artefaktjob für den Chunk anlegen und Watermarks aktualisieren.
+7. Prüfen, ob eine zugehörige Client-Session jetzt technisch abgeschlossen werden kann.
+
+**Output:** Semantische Segmente, Themenbezüge und ein Folgeauftrag. Zu diesem Zeitpunkt entsteht noch nicht automatisch dauerhaftes Wissen.
+
+## 7. Verstehen und Klassifizieren innerhalb einer Session
+
+### 7.1 Themen als Kontext
+
+`detect_topics_for_segments` arbeitet nach der Segmentierung:
+
+1. Explizite Muster wie „Thema ist Projekt …“ erkennen und ein Session-Topic anlegen.
+2. Ansonsten, falls vorhandene Themen mit Embeddings existieren, Segmentembedding mit Session- und dauerhaften Themen vergleichen.
+3. Geeigneten Treffer ab der Linkschwelle zuordnen. Ein dauerhaftes Thema kann dafür einen Session-Kontext erzeugen.
+4. Fehlt ein Treffer, ist eine begrenzte Übernahme des zuletzt aktiven Session-Kontexts mit abgesenkter Konfidenz möglich.
+5. `session_topic_evidence` mit Matchart `explicit`, `embedding` oder `context_inherited` speichern.
+
+Defaults: neues Topic `0.90`, Themenlink `0.82`, Live-Anzeige `0.85`. Eine Wiederholung erhöht gespeicherte Konfidenz höchstens über den jeweils besseren Wert; sie ist kein unabhängiger Wahrheitsnachweis. Session-Themen werden insbesondere bei belegter Artefaktpromotion ins dauerhafte Themenmodell übertragen.
+
+### 7.2 Entscheidungsreihenfolge des Artefakt-Workers
+
+```mermaid
+flowchart TB
+    S["Bestätigte Segmente + bestehende Artefakte + Themen"] --> SH["Embedding-Beispiele als Shadow auswerten"]
+    SH --> M{"Belegter Modifier eines vorherigen Tasks?"}
+    M -->|Ja| UP["Task-Artefakt aktualisieren"]
+    M -->|Nein| RULE["Regelbasiertes Routing"]
+    RULE --> G{"Validiert, Konfidenz mindestens 0.85,<br/>kein Question-Kandidat?"}
+    G -->|Ja| LOCAL["Lokale Artefaktoperation"]
+    G -->|Nein| LLM["LLM schlägt Operationen für verbleibende Segmente vor"]
+    LLM --> V["IDs, Konfidenz, Belegspannen,<br/>fehlende Felder und Enthaltung prüfen"]
+    V -->|abstain| NONE["Keine Operation"]
+    V -->|Operation| APPLY["Anwenden und Klassifizierung speichern"]
+    LOCAL --> APPLY
+    UP --> APPLY
+    APPLY --> A[("Artefakte: active / confirmed / superseded / dismissed")]
+```
+
+**Input:** Bestätigte Segmente des aktuellen Chunks, bis zu 100 aktive/bestätigte Session-Artefakte, aktive Themen und Sessionstartzeit.
+
+Die Reihenfolge im Code:
+
+1. Semantische Beispielnachbarn mutationsfrei für Kalibrierung auswerten.
+2. Sonderfall „diese Aufgabe ist sehr wichtig“ prüfen. Der konservative Bezug zielt auf ein passendes Task-Artefakt der unmittelbar vorherigen Chunk-Sequenz, nicht beliebig auf alle Aufgaben.
+3. Regelrouter aufrufen. Er vergibt Typkandidaten, Alternativtyp, Scores, Belegspannen, Gründe und normalisierte Felder.
+4. Lokaler Direktpfad nur bei erfolgreicher Validierung, Konfidenz mindestens `0.85` und einem Typ ungleich `question`.
+5. Explizite Listenaufzählungen können im Regelpfad in mehrere List-Item-Operationen zerlegt werden.
+6. Nur verbleibende Segmente an das LLM geben, zusammen mit vorhandenen Artefakten und Themen.
+7. Strukturierte LLM-Operationen prüfen und anwenden. Bei `abstain=true` wird die Operation zu `none`.
+8. Job abschließen, Watermarks aktualisieren und technischen Client-Abschluss prüfen.
+
+### 7.3 Was die Regeln tatsächlich erkennen
+
+| Signal | Interpretation / Output |
+|---|---|
+| „auf die …liste“ mit vorangestellten Einträgen | Zielcontainer und einzeln aufzunehmende Items. |
+| „muss“, „soll“, „übernimmt“, „kümmert sich“ | Task-Kandidat, sofern nicht klarer Listen- oder Entscheidungskontext vorliegt. |
+| Benannter Wochentag, optional Uhrzeit | Absolute Frist relativ zum Sessionstart; gleicher Wochentag bedeutet im Parser die nächste Woche, Standarduhrzeit 09:00. |
+| Explizite Dringlichkeit | Urgency und Herkunft `explicit`. |
+| Task-Signal ohne Datum und ohne explizite Dringlichkeit | Policy-Default `urgency=0.4`, Herkunft `policy_default`. Das ist eine Regelentscheidung, kein aus der Aussage belegter Dringlichkeitsgrad. |
+| Offene / beschlossene Entscheidung | `decision_status=open` oder `decided`. |
+| Fragezeichen / bestimmte Frageanfänge | Question-Kandidat; nicht automatisch als Artefakt-Direktoperation verarbeitet. |
+| Allgemeine deklarative Aussage | Schwache Fact-/Note-Kandidaten; typischerweise Enthaltung des Regelrouters und Weitergabe an das LLM. |
+
+Der Router enthält begrenzte reguläre Ausdrücke, keinen universellen Parser für jede Zeit-, Mengen-, Negations- oder Referenzform. Die allgemeinen Formulierungen der Roadmap sind weiter als diese konkrete Implementierung.
+
+### 7.4 Validierung und Artefaktaktionen
+
+Das LLM kann `create`, `update`, `confirm`, `supersede`, `dismiss` oder `none` vorschlagen. Typen sind Note, Task, List, List Item, Fact und Decision. Quell-IDs müssen zu den geladenen Segmenten gehören; Änderungsziele müssen unter den geladenen Artefakten existieren; Konfidenz muss zwischen 0 und 1 liegen. Belegspannen werden gegen den Quelltext geprüft.
+
+`validated` wird aus fehlenden Feldern, Enthaltung und vorhandenen gültigen Belegspannen abgeleitet. Das ist eine lokale Plausibilitätsprüfung und keine umfassende Wahrheitsprüfung.
+
+**Präzisierung:** `_create_llm_artifact` setzt neue validierte Artefakte bereits auf `confirmed`, andere auf `active`. Automatische Bestätigung ist also vorhanden. Automatische dauerhafte Promotion im Standard-Worker ist damit nicht verbunden. Außerdem werden nicht alle nichtvalidierten Operationen pauschal verworfen: die Anwendung und die gespeicherte Validierungskennzeichnung sind zu unterscheiden. Eine universelle Mutationssperre für jede unvalidierte Änderung darf aus dem Zielprinzip nicht abgeleitet werden.
+
+## 8. Abschluss: Technische Session-Freigabe und fachliche Promotion
+
+### 8.1 Technischer Abschluss einer Client-Session
+
+**Auslöser:** Client meldet Finish; später ruft jeder erfolgreiche Audio-/Text-/Artefakt-Worker `settle_client_session_for_ingestion` auf. Die Client-Finalize-API ist ein zusätzlicher Kompatibilitäts-/Reparaturweg.
+
+1. Finish legt `expected_final_sequence` fest und setzt zunächst `draining`.
+2. Reconciliation prüft, ob der Upload-Horizont vollständig ist.
+3. Bei Vollständigkeit Ingestion-Finish ausführen, finale STT-Fenster einplanen und Clientzustand `processing` setzen. Ein wiederholtes Finish während `processing` führt nicht zurück zu `draining`.
+4. Finalisierung verlangt `processing` und vollständige Uploads. Sie prüft explizit `failed`-Jobs sowie `queued`/`running`-Jobs.
+5. Capture-Ergebnis materialisieren, bevor der Abschluss gesetzt wird:
+   - `meeting`: Ergebnis mit `resolved_intent=meeting`;
+   - `memo`: zusammengefügter stabiler Transkripttext;
+   - `query`: aus diesem Text Conversation und Turn anlegen;
+   - `auto`: erst jetzt dieselbe Memo-/Query-Heuristik auf den gesamten Text anwenden.
+6. Client- und Ingestion-Session auf `completed` setzen.
+7. Monotone sessionsweite `local_audio_release_allowed`-Freigabe und Zeitpunkt setzen.
+
+**Input:** Fertiger Upload und vorhandene Job-/Transkriptzustände. **Output:** Abgeschlossene Client-Session mit Capture-Ergebnis und Audiofreigabe.
+
+**Ergänzt 2026-09-08:** `settle_client_session_for_ingestion` schließt jetzt nach Schritt 7 automatisch die fachliche Finalisierung an (8.2) und ruft bei Erfolg `promote_session_artifacts` auf (8.3) — siehe dortige Auslöserzeile. Das schließt genau die in A09/D02 dokumentierte Lücke: bestätigte Artefakte wurden bislang nie automatisch dauerhaftes Wissen. Ein `ValueError` aus der fachlichen Finalisierung (Watermarks noch nicht deckungsgleich) wird dabei still abgefangen; die Funktion wird nach jedem weiteren erfolgreichen Worker-Job erneut aufgerufen, bis sie durchläuft. M8-Gate grün; frische Live-Verifikation gegen eine echte Aufnahme mit diesem automatischen Pfad steht noch aus (siehe 20.3).
+
+**Prüflücke im Code:** Die Abschlussabfrage behandelt `parked` und `attention_required` nicht wie `failed` oder offene Jobs. Deshalb darf die Dokumentation die beabsichtigte „vollständig fehlerfreie Worker-Kette“ nicht als für alle Jobzustände bewiesene Garantie ausgeben.
+
+### 8.2 Fachliche Finalisierung
+
+**Auslöser:** `POST /api/ingestion-sessions/{session_id}/finalize`, gesondert vom Client-Finalize-Endpunkt. **Ergänzt 2026-09-08:** zusätzlich automatisch aus `settle_client_session_for_ingestion` (8.1) nach jedem erfolgreichen Audio-/Text-/Artefakt-Worker-Job, ohne `force` und mit `promotion_mode='llm'` fest (nicht clientkonfigurierbar); ein `ValueError` bei noch nicht deckungsgleichen Watermarks wird dort abgefangen, kein Fehlerpfad.
+
+1. Watermarks aktualisieren.
+2. Prüfen, ob empfangene, textverarbeitete und artefaktverarbeitete Sequenzen übereinstimmen und keine `queued`/`running`-Jobs vorhanden sind; `force` kann die Bereitschaftsprüfung übersteuern.
+3. Aktive Artefakte nur dann bestätigen, wenn ihre Klassifizierung validiert und nicht abstainend ist.
+4. Ingestion-Session abschließen und Evidence-Zitate erzeugen.
+5. Vorhandene Fragen zurückgeben. Dies startet keine Question-Detection.
+6. Falls `promotion_mode != none`, anschließend `promote_session_artifacts` aufrufen.
+
+### 8.3 Promotion in dauerhaftes Wissen
+
+**Input:** Bestätigte Session-Artefakte. **Output:** `promoted`- und `deferred`-Ergebnisse mit Objektbezügen oder Gründen.
+
+| Artefakttyp | Bedingung und Ergebnis |
+|---|---|
+| Note, Fact, Decision | Inhalt und Embedding als **Note** speichern. Ein Fact-Artefakt allein erzeugt keinen Fact-Claim. |
+| Task | Validierte normalisierte Frist/Dringlichkeit verwenden oder zusätzliche Task-Feldprüfung durchführen. Ohne geeignete Frist oder positive Dringlichkeit zurückstellen. |
+| List | Ab Konfidenz `0.85` eine Liste anlegen. |
+| List Item | Ab Konfidenz `0.85` und mit Zielthema die Listenauflösung/Deduplizierung verwenden. |
+| Bereits verknüpftes Artefakt | Vorhandenes Wissensobjekt zurückgeben; Claims-/Themenverknüpfungen ergänzen, kein reguläres erneutes Anlegen. |
+
+Danach werden Artefakt-Wissenslink und alle belegten Themenbezüge gespeichert. Der deterministische Claim-Materializer wird aufgerufen, erzeugt aber aktuell nur bestimmte Task-Frist- und Entscheidungsstatus-Claims.
+
+Promotion besitzt keine allgemeine Note-/Task-Deduplizierung wie der direkte Capture-Pfad. Vorhandene Artefaktlinks sichern Wiederholungen desselben Artefakts, nicht automatisch semantische Gleichheit verschiedener Artefakte. Einzelne Schreibschritte sind getrennte Transaktionen; vollständige Crash-Atomarität über alle Nebenwirkungen ist nicht nachgewiesen.
+
+## 9. Vorhandenes Wissen finden und wiederverwenden
+
+### 9.1 Allgemeine hybride Wissenssuche
+
+**Funktion:** `search_knowledge`. **Input:** Anfrage, Typfilter, Limit und Mindestähnlichkeit. Unterstützte Typen: `note`, `task`, `list`, `list_item`. **Output:** Hydrierte Wissensobjekte mit Suchscores, Suchstufen und Metadaten; keine generierte Antwort.
+
+```mermaid
+flowchart TB
+    Q["Anfrage + Typfilter + Schwellen"] --> C{"Gültiger Cache?"}
+    C -->|Ja| H["Objekte anhand gespeicherter Referenzen frisch laden"]
+    C -->|Nein| L["Exakte Treffer, Volltext und Trigramm abfragen"]
+    L --> D{"Kein exakter Treffer und<br/>zu wenige relevante lexikalische Treffer?"}
+    D -->|Ja| E["Query-Embedding; pgvector-Kandidaten"]
+    D -->|Nein| F["Rangfusion und Relevanzfilter"]
+    E --> F
+    F --> H
+    H --> O["Bis zu 7 vollständige Wissenstreffer"]
+```
+
+Die tatsächliche Reihenfolge:
+
+1. Anfrage und Typfilter normalisieren; leere Anfrage liefert eine leere Trefferliste.
+2. Cache über Anfrage, Filter, Schwellen, Modell-/Retrievalversion und Wissensversion prüfen.
+3. Bei Cache-Hit aktuelle Inhalte anhand der gespeicherten Referenzen laden.
+4. Bei Miss exakte Treffer, PostgreSQL-Volltextsuche und Trigramm-Kandidaten ermitteln. Diese drei Kanäle werden im Code gemeinsam vor der optionalen Vektorstufe abgefragt; die beschriebene Effizienzleiter ist kein strikter Abbruch nach jedem SQL-Kanal.
+5. Nur wenn kein exakter Treffer vorliegt und zu wenige lexikalisch relevante Treffer gefunden wurden, ein Query-Embedding erzeugen und Vektorsuche ergänzen.
+6. Ranglisten über Reciprocal Rank Fusion zusammenführen: Beitrag je Kanal `1 / (60 + Rang)`.
+7. Relevanzschwellen anwenden, sortieren und begrenzen; je Suchkanal standardmäßig bis zu 20 Kandidaten, insgesamt maximal 7 Ergebnisse.
+8. Vollständige Datensätze, Listeninhalte und Quellen-/Themeninformationen laden; Referenzen und Scores cachen, nicht die endgültigen Inhaltstexte.
+
+Defaults: semantische Mindestähnlichkeit `0.30`, Trigramm mindestens `0.35`, Cache-TTL höchstens 24 Stunden. Ein echter Volltext- oder exakter Treffer kann unabhängig vom Vektor relevant sein.
+
+### 9.2 Deduplizierung ist ein anderer Suchpfad
+
+Die Chatdiagramme hatten „Suche“ teilweise zusammengefasst. Im Code nutzen `decide_note_deduplication` und `decide_task_deduplication` **typspezifische Vektorsuchen**, nicht automatisch die allgemeine hybride Leiter. Bis zu drei ähnliche Kandidaten werden dem Deduplizierungs-LLM vorgelegt. Es entscheidet zwischen neu speichern, vorhandenen Inhalt aktualisieren und überspringen. Ein bestehender Eintrag kann dabei eine zusätzliche Eventquelle erhalten.
+
+Listenauflösung und List-Item-Deduplizierung haben eigene Such-/LLM-Schritte. Eine Änderung an Listeneinträgen aktualisiert außerdem die abgeleitete Suchrepräsentation der Liste.
+
+### 9.3 Referenzresolver und Fact-Suche
+
+`resolve_internal` sucht Notes über die allgemeine Suche und ergänzt Kandidaten aus aktiven/umstrittenen Claims über Textähnlichkeit. Die internen Claim-Kandidaten werden hier als `fact`-Referenz bezeichnet, wobei die Abfrage nicht auf `claim_type='fact'` begrenzt ist. Das unterscheidet sich von der Offline-Fact-Projektion.
+
+Ergebnis: kurzlebige serververgebene `source_id`, Kandidaten und `adequacy=sufficient|insufficient|conflicting`. Defaults: starker Treffer `0.82`, unterstützender Treffer `0.72`, Mehrdeutigkeitsabstand `0.08`. Bei unzureichendem oder konflikthaftem Ergebnis kann `escalation_target=external` zurückkommen.
+
+**Das Eskalationsfeld startet keine externe Suche.** Paperless, gezielte externe Recherche und Aktualisierung volatiler Fakten sind Zielmechanismen aus AD-010/M7.
+
+Eine Quelle wird erst durch `attach_candidate_to_claim` zur Claim-Evidence: Source-ID muss existieren und gültig sein; das angegebene Zitat muss im Treffer vorkommen. Bloßes Anzeigen eines Treffers erzeugt noch keinen Beleg.
+
+Der zusätzliche `personal_knowledge_fast_path` ist eine einfache normalisierte SQL-`LIKE`-Suche über Notes, Tasks und Listeneinträge. Er ist weder der hybride Retriever noch ein automatischer Fragenbeantworter.
+
+## 10. Antworten und Gesprächsgedächtnis
+
+### 10.1 Client-Chat
+
+**Auslöser:** `run_chat_turn_once`, erreichbar über `POST /api/workers/client-chat/run-once`; nicht in `worker.py all` eingebunden.
+
+1. Ältesten `queued`-Turn sperrend beanspruchen und auf `running` setzen; `started`-Ereignis speichern.
+2. Nutzernachricht laden und ein Event mit Quelle `client_chat` anlegen.
+3. `ask_llm` aufrufen. Anders als `/api/message` führt dieser Pfad vorher keine Capture-Klassifizierung aus.
+4. `build_messages` lädt Runtime-Kontext, jüngste Event-Konversationen und hybride Wissenstreffer.
+5. Sehr ähnliche Notes im Antwortkontext zusammenfassen, indem nur ein repräsentativer Treffer verbleibt; dies löscht keine Notes. Einzelne List-Item-Treffer unterdrücken, wenn bereits ihre ganze Liste im Kontext steht.
+6. LLM-Profil `conversation.reply` aufrufen.
+7. Markdown bereinigen, Assistant-Nachricht und Turn-Ereignisse speichern. Einen inzwischen abgebrochenen Turn vor dem Speichern berücksichtigen.
+8. Turn auf `completed` oder bei Ausnahme auf `failed` setzen.
+
+**Output:** Antworttext, persistierte Nachrichten, Quellenreferenzen und replaybare Chat-Ereignisse. Im jetzigen Worker wird die ganze fertige Antwort als ein `delta` gespeichert. Ein SSE-Endpunkt allein bedeutet hier kein Token-für-Token-Streaming aus dem Modell.
+
+### 10.2 Grenzen des Antwortkontexts
+
+- Die jüngste Konversation stammt aus `events` mit nichtleerer `response`, maximal 10 Events und höchstens 60 Minuten alt. Sie wird nicht gezielt anhand der aktuellen Client-Conversation-ID aufgebaut.
+- Der Client-Chat speichert Antworten in Conversation-Nachrichten, nicht wie `/api/message` in `events.response`. Folgefragen profitieren deshalb nicht automatisch von einer korrekt rekonstruierten eigenen Client-Unterhaltung.
+- Die allgemeine Suche umfasst keine Fact-Claims. Eine zu einem Fact promovierte und archivierte Note kann deshalb aus dem allgemeinen Chat-Retrieval verschwinden, obwohl der Fact im Offline-Sync und im Referenzresolver verfügbar bleibt.
+- Chat-Citations werden aus den Retrieval-Treffern abgeleitet. Sie sind nicht mit servervalidierten, vom Modell tatsächlich verwendeten Zitatspannen gleichzusetzen.
+- Ein LLM-Prompt fordert quellentreue Antworten; eine vollständig strukturierte Evidenzprüfung jeder Antwort ist daraus nicht abzuleiten.
+
+## 11. Evidence, atomare Claims, Facts und Widersprüche
+
+Die Abschnitte 11.1–11.4 dokumentieren den geprüften Ist-Stand. Die danach folgenden beschlossenen Regeln erweitern diesen Stand fachlich; insbesondere werden Belegstatus und Konfliktklärung nicht als bereits vorhandene vollständige Pipeline behauptet.
+
+### 11.1 Belege erzeugen
+
+`generate_evidence_quotes` ist separat aufrufbar und Bestandteil der fachlichen Session-Finalisierung. Es folgt den Verbindungen Artefakt → Segment → Chunk, sucht den Segmenttext im ursprünglichen Chunk und speichert passende Zitatspannen. Kann der Text nicht gefunden werden, wird für diese Zuordnung kein Zitat angelegt.
+
+Die Audiozeitposition eines solchen Zitats wird aus Zeichenposition und Chunkdauer angenähert. Sie ist nicht automatisch eine wortgenaue Alignment-Messung.
+
+Claim-Evidence kann zusätzlich Herkunft, Quellenqualität, Expertise, Unabhängigkeit, Direktheit, Aktualität, Extraktionskonfidenz und Evidenzstärke speichern. Die Existenz dieser Felder beweist keine überall angeschlossene Gesamtbewertung.
+
+### 11.2 Wie Claims entstehen
+
+Es bestehen drei zu unterscheidende Wege:
+
+1. **Explizite Claim-API:** strukturierte Claims und ihre Evidence anlegen.
+2. **Deterministischer Materializer bei Artefaktpromotion:** aus validierten Task-Fristen `requirement`-Claims und aus validiertem Entscheidungsstatus `decision`-Claims erzeugen; passende Zitate oder das Artefakt als Beleg verknüpfen.
+3. **LLM-Extraktion aus Notes:** `extract_note_claim_candidates` zerlegt eine Note in atomare Vorschläge. Sie prüft Belegtext und Felder und speichert `proposed` oder `rejected` in Kandidatentabellen. Das Ergebnis berichtet ausdrücklich `mutated_claims=0`.
+
+Damit ist **Note → automatisch extrahierter aktiver Fact-Claim** noch keine vollständige Kette. Die reine Klassifizierung eines Artefakts als `fact` schließt diese Lücke ebenfalls nicht.
+
+### 11.3 Note-zu-Fact-Promotion
+
+**Auslöser:** Tageswartung oder gesonderte Funktions-/API-Nutzung. **Input:** Aktive Notes mit bereits zugeordneten aktiven Fact-Claims und Evidence.
+
+Die Promotion verlangt:
+
+- Claim vom Typ `fact`, Status `active`, Quelle verweist auf die Note;
+- Claim-Konfidenz mindestens konfigurierte Schwelle, standardmäßig `0.80`;
+- mindestens einen unterstützenden Beleg mit ausreichender Extraktionskonfidenz;
+- keinen offenen Konfliktfall im Zustand `detected`, `investigating` oder `unresolved`;
+- noch keine Promotion dieser Note bzw. dieses Claims.
+
+**Output:** Promotionprotokoll, archivierte ursprüngliche Note und auf den vorhandenen Claim übertragene Themenbezüge. Es wird nicht erst hier ein neuer Claim erzeugt. Die Anzahl unabhängiger Quellen wird mitgeführt, aber die Abfrage verlangt nicht grundsätzlich mindestens zwei unabhängige Quellen. Der ausgegebene `evidence_score` entspricht hier der Claim-Konfidenz, nicht einer universellen gewichteten Evidence-Berechnung.
+
+### 11.4 Konfliktprüfung
+
+1. Neue/geänderte aktive oder umstrittene Claims anhand von `conflict_checked_at` auswählen.
+2. Kandidaten mit gleichem normalisiertem Subjekt und Prädikat ergänzen.
+3. Fehlende Claim-Embeddings erzeugen; semantische Nachbarn ab standardmäßig `0.88` mit kompatiblem Prädikat und überlappender Gültigkeit ergänzen.
+4. Unterschiede in Polarität, Wert, Zeitpunkt oder Status prüfen.
+5. Konfliktfälle und `contradicts`-Relationen anlegen, betroffene aktive Claims auf `disputed` setzen.
+
+**Output:** Dokumentierter Konflikt, nicht automatisch eine korrigierte Wahrheit. Ein neuerer Satz gewinnt nicht pauschal. Die Konfliktprüfung ist nachts eingebunden und separat verfügbar, aber kein allgemeiner vorgeschalteter Schutz jeder Capture-Mutation.
+
+### 11.5 Beschlossen: Fact-Einstufung nach Aussageart und passenden Belegen
+
+**Status: Beschlossen / Umsetzung offen.** Ursprüngliche Mitteilung, atomare Aussage und Beleg bleiben getrennt. Eine Note kann mehrere Aussagen enthalten. Jede Aussage erhält einen fachlich nachvollziehbaren Belegstatus, beispielsweise **vorläufig**, **gestützt**, **umstritten** oder **abgelöst**. Diese Bezeichnungen beschreiben das Soll; sie sind keine stillschweigend eingeführten Datenbank- oder Wire-Enums.
+
+| Aussageart | Beschlossene Behandlung |
+|---|---|
+| Eigene persönliche Angaben des Nutzers | Eine ausdrückliche Selbstauskunft ist normalerweise der maßgebliche Beleg für Wohnort, Vorlieben oder vergleichbare persönliche Angaben. Dafür ist keine externe Bestätigung erforderlich. Die Herkunft als Selbstauskunft bleibt erhalten. |
+| Allgemeines Wissen | Zunächst als Aussage mit Herkunft speichern. Die Einstufung als gestützter Fact verlangt geeignete Quellenprüfung oder nachvollziehbare Bestätigung. |
+| Meinung, Vermutung, hypothetisches Beispiel oder Vorhersage | Den entsprechenden Aussagecharakter bewahren; häufige Wiederholung macht daraus keinen Fact. |
+| Zitat oder Aussage einer anderen Person | Sprecher und Kontext erhalten; nicht still als eigene Aussage des Nutzers behandeln. |
+| Modellantwort oder Wiederholung derselben Quelle | Nicht als unabhängige Bestätigung zählen. |
+
+Beispiel: Aus „Ich bin vor zwei Wochen nach Hamburg gezogen“ entstehen die ursprüngliche Mitteilung, eine zeitlich eingeordnete Wohnortaussage und ein Beleg durch diese datierte Selbstauskunft. Die ursprüngliche Note bzw. Quelle bleibt nachvollziehbar. Eine Fact-Einstufung darf weder die Quelle ersetzen noch die Auffindbarkeit für neue Eingaben und Antworten verschlechtern.
+
+### 11.6 Beschlossen: Selbstständige Konfliktklärung mit gezielter Eskalation
+
+**Status: Beschlossen / Umsetzung offen.** Das System soll möglichst viel selbst entscheiden, ohne mangelnde Evidence durch eine willkürliche Auswahl zu ersetzen. Die Reihenfolge lautet:
+
+1. Prüfen, ob die Aussagen verschiedene Personen, Situationen oder Gültigkeitszeiträume betreffen und damit vereinbar sind.
+2. Ausdrückliche Korrekturen und belegte Zustandsänderungen erkennen. Historische Aussagen gegebenenfalls zeitlich begrenzen, statt sie als falsch zu verwerfen.
+3. Vorhandene Belege und verfügbare, freigegebene Quellen zur Klärung heranziehen. Damit wird keine noch fehlende externe Rechercheanbindung vorausgesetzt.
+4. Bleibt ein echter Widerspruch mangels ausreichender Belege oder verfügbarer Quellen unlösbar, eine konkrete offene Rückfrage im Dashboard erzeugen. Nur abhängige unsichere Änderungen werden zurückgestellt; sichere Teile dürfen weiterlaufen.
+
+Beispiel: „Bis vor zwei Wochen habe ich in Berlin gewohnt, jetzt in Hamburg“ löst die Unklarheit durch zwei zeitliche Gültigkeiten auf. Berlin bleibt historische Information, Hamburg wird aktueller Wohnort. Bei „meine Wohnung in Hamburg“ ohne ausreichenden Zusammenhang ist ein Umzug dagegen nicht automatisch belegt.
+
+Die Nutzerauskunft wird quellengebunden gespeichert. Sie schließt die Rückfrage erst, wenn die konkrete Unklarheit ausreichend gelöst ist; anschließend können zurückgestellte Aktionen fortgesetzt werden.
+
+## 12. Fragen, implizite Fragen und Rückfragen
+
+| Mechanismus | Input / Auslöser | Verarbeitung / Output | Integrationsstand |
+|---|---|---|---|
+| Explizite Erkennung | Question-Detection-API und Session-ID | Bestätigte Segmente mit Typ `question` oder abschließendem `?` → Session-Fragen | Separat; der Standard-Artefakt-Worker ruft sie nicht auf. |
+| Fragen speichern | Text, Art `explicit`/`implicit`, Konfidenz, Priorität, Topic und Quellen | Normalisierte Identität; Duplikate wieder öffnen und Werte gegebenenfalls erhöhen | Implementiert. |
+| Budget | Session und optionale Topic-Zuordnung | Standardmäßig 12 offene Fragen je Session und 4 je Topic-Bezug | Implementiert; Budgetüberschreitung ergibt einen Fehler. |
+| Antwort / Reopen | Question-ID und Antwortquelle | `answered` mit Text bzw. erneut `open` | Separate API. |
+| Implizite Frage | Zum Beispiel fehlender Verantwortlicher oder unentschiedener Sachverhalt | Gewünscht: aus einer Wissenslücke eine konkrete Frage bilden | Typ vorhanden; automatische Ableitung und Verarbeitung fehlen. |
+| Clarification-Capture | `context_ref` mit Clarification-ID | Gewünscht: neue Erfassung als Antwort auf offene Rückfrage zuordnen | Vertraglich beschrieben; Capture-Verarbeitung nutzt den Bezug nicht durchgängig. |
+| Selbstständige Beantwortung | Offene Frage plus Wissensbestand | Gewünscht: suchen, Evidence prüfen, beantworten oder gezielt nachfragen | Such- und Antwortbausteine vorhanden, kein geschlossener automatischer Kreislauf. |
+
+Die KI-Registry enthält `questions.detect` und `questions.resolve`; diese Einträge belegen keinen produktiven Aufruf. Offene Decisions sind ebenfalls nicht automatisch erzeugte implizite Questions.
+
+### 12.1 Beschlossen: Ruhige Rückmeldungen und nützliche Rückfragen
+
+**Status: Beschlossen / Umsetzung offen.** Erfolgreiche Speicherung oder Änderung erhält eine knappe zusammengefasste Bestätigung, etwa „Wohnort aktualisiert · 2 Listeneinträge ergänzt“. Explizite Fragen werden direkt beantwortet; zusätzlich ausgeführte Änderungen können kurz genannt werden. Eine reine Speicherung erfordert keine zusätzliche Pushmeldung.
+
+Nicht blockierende Unklarheiten werden als offene Dashboard-Fragen gesammelt. Eine unklare Mutation an einem vorhandenen Objekt bleibt zurückgestellt, ohne unabhängige sichere Teilaktionen zu blockieren. Gleichartige Fragen werden zusammengeführt; das Dashboard zeigt wenige priorisierte Rückfragen. Implizite Fragen entstehen nur, wenn eine Antwort eine konkrete Aufgabe, Entscheidung oder Wissenskorrektur verbessern würde, nicht allein wegen theoretisch fehlender Informationen.
+
+### 12.2 Beschlossen: Rückfrage auswählen und direkt in ihrem Kontext antworten
+
+**Status: Beschlossen / Umsetzung offen.** Der bevorzugte Ablauf benötigt keine nachträgliche semantische Suche nach der gemeinten Frage:
+
+| Reihenfolge | Input / Nutzeraktion | Verarbeitung | Output |
+|---|---|---|---|
+| 1 | Rückfrage im Dashboard auswählen | Details mit Frage, Anlass und gegebenenfalls widersprüchlichen Angaben öffnen | Eindeutig ausgewählte Rückfrage. |
+| 2 | „Antwort aufnehmen“ oder „Antwort tippen“ | Audio-/Texterfassung an diese Frage binden; vorgesehenen `context_ref` mit Clarification-Bezug verwenden | Erfassung mit festem Rückfragenkontext. |
+| 3a | Freie Memo oder getippte Antwort absenden | Text bzw. stabilisiertes Transkript mit dem gebundenen Kontext annehmen | Quellgebundene Nutzerauskunft für genau diese Frage. |
+| 3b | Optionalen Antwortvorschlag auswählen und ausdrücklich absenden | Vom Server mitgelieferten Vorschlag als bestätigte Auswahl verarbeiten | Bestätigte Nutzerauskunft, kein bloßes Modellsignal. |
+| 4 | Antwort und fest gebundene Frage | Betroffene Aussagen, Belege und gegebenenfalls Gültigkeitszeiten neu bewerten | Aktualisiertes Wissen oder präzisierter verbleibender Klärungsbedarf. |
+| 5 | Unklarheit ausreichend gelöst | Frage schließen, zurückgestellte abhängige Aktion fortsetzen und Ergebnis bestätigen | Nachvollziehbarer Abschluss. |
+
+Die Detailansicht darf ein **auswählbares Antwortvorschlagsfeld** enthalten. Vorschläge sind optional; eine freie Antwort bleibt immer möglich. Weder das Anzeigen noch eine unbestätigte Auswahl erzeugt eine Antwort oder Evidence. Erst die abgesendete Nutzerauswahl bzw. Memo zählt als Nutzerauskunft. Die neue Interaktion muss im geschlossenen Client-Komponenten-/Aktionsvertrag beschrieben und implementiert werden; dieses Dokument legt dafür keine erfundenen DTO-Felder oder Endpoints fest.
+
+Bei einer frei gestarteten Memo ohne Fragekontext darf der Server eine Zuordnung versuchen. Bei Mehrdeutigkeit fragt er nach. Dieser Fallback ist nicht Voraussetzung für den expliziten Dashboard-Ablauf.
+
+## 13. Wie bewertet wird: Fünf getrennte Dimensionen
+
+| Begriff | Leitfrage | Tatsächliche Rolle |
+|---|---|---|
+| Konfidenz | Wie sicher ist diese Extraktion/Klassifizierung? | Regeln oder Modell liefern einen Wert; lokale Validatoren prüfen zusätzliche Bedingungen. Keine garantierte statistische Kalibrierung. |
+| Evidence | Wodurch ist die Aussage belegt? | Quellen, Zitate, Stütz-/Widerspruchsrelationen und Qualitätsmerkmale. |
+| Retrieval-Relevanz | Passt der Inhalt zu dieser Anfrage? | Exakt-/FTS-/Trigramm-/Vektorscores und Rangfusion. |
+| Importance / Trend | Wie bedeutsam oder aktuell genutzt ist das Objekt? | Aus gespeicherter Activity und begrenzten Evidence-Zählungen abgeleitet. |
+| Urgency / Priority / Fragenpriorität | Was sollte wann Aufmerksamkeit erhalten? | Urgency einer Aufgabe, CalDAV-Priority 0–9 und Question-Priorität sind verschiedene Felder. |
+
+### 13.1 Importance konkret
+
+`calculate_signals` kombiniert logarithmisch gedämpfte Werte:
+
+- Evidence-Anzahl mit Gewicht `0.25`;
+- unabhängige Session-Anzahl mit `0.20`;
+- Aktivierungen mit `0.20`;
+- Zugriffe mit `0.20`;
+- exponentielle Aktualität mit `0.15`, Zeitmaßstab 30 Tage;
+- Gesamtwert maximal 1.
+
+Trend vergleicht Activity der letzten sieben Tage mit den sieben Tagen davor, normiert auf −1 bis +1. Berechnung ist separat aufrufbar und wird auch nach akzeptierten Offline-Usage-Batches ausgelöst.
+
+**Implementierungsgrenzen:** Bei Notes/Tasks/Listen/Items stammen Evidence-Zahlen aus `knowledge_sources`; die unabhängige Sessionzahl wird dort als 0 geliefert. Bei Session-Artefakten zählen Evidence-Zitate und deren Sessions. Für Facts gibt `_evidence_counts` derzeit ebenfalls `(0,0)` zurück. Die nominale Formel darf deshalb nicht als vollständige Quellenunabhängigkeitsbewertung aller Typen gelesen werden. Usage-Batches speichern aggregierte Nutzerzahlen als Metadaten; die Importance-Berechnung zählt Activity-Zeilen, nicht automatisch deren `view_count_delta`.
+
+Importance ist nicht allgemein in das hybride Suchranking eingerechnet und nicht global vor jede Mutation geschaltet.
+
+### 13.2 Evidence-Darstellung im Client
+
+Note-Projektionen leiten einen Anzeigescore aus bis zu fünf Eventquellen ab (`0.35 + 0.15 × Anzahl`, begrenzt auf 1). Fact-Projektionen verwenden Claim-Konfidenz und zeigen Konflikte sowie Belege. `low`, `medium`, `high` sind Darstellungskategorien, kein Wahrheitsboolean und nicht identisch mit Importance.
+
+## 14. Aktion und Reaktion: Ändern, abhaken, archivieren
+
+### 14.1 Vorhandene Aktionen
+
+| Aktion | Vorhandener Weg | Grenze der automatischen Spracheingabe |
+|---|---|---|
+| Note anlegen / ergänzen | Capture, direkte Note-API, Promotion, Eventkonsolidierung | Auto-Capture hat noch keinen allgemeinen Mehrfachaktionsplan. |
+| Task anlegen / ändern | Capture, Task-API, Promotion | Allgemeines „ändere die Aufgabe von gestern“ wird nicht zuverlässig objektübergreifend aufgelöst. |
+| Listen / Einträge anlegen | Listen-API, Capture/Listenzielauflösung, Promotion | Ziellistenauflösung vorhanden, aber kein universeller Befehlsrouter. |
+| Task erledigen | Task-Status-API; zusätzlich Client-v1-`complete_task`; CalDAV | Gezielte Objektaktion, keine allgemeine natürliche-Sprach-Zuordnung. |
+| Listeneintrag erledigen / wieder öffnen | List-Item-Status-API / CalDAV | Kein durchgängiger Auto-Sprachpfad. |
+| Archivieren / reaktivieren | Entitätsspezifische APIs, Wartung und CalDAV | Archivierung ist nicht physische Löschung aller Quellen. |
+| Session-Kandidat korrigieren / ersetzen / verwerfen | Artefaktoperationen und spezielle Task-Modifier-Regel | Bestehende dauerhafte Wissensobjekte werden dadurch nicht automatisch rückwirkend synchron korrigiert. |
+| Fragen beantworten / wieder öffnen | Question-API | Capture-Kontext noch nicht vollständig angeschlossen. |
+
+Im aktuellen Code ist `POST /api/client/v1/entities/task/{entity_id}/complete` vorhanden. Die öffentliche UUID wird auf den internen Task aufgelöst und der Status idempotent auf `done` gesetzt. Das ist eine gegenüber früheren Aussagen dieses Chats zu berücksichtigende Ergänzung. Es hebt nicht automatisch alle dokumentierten Android-Produktgrenzen auf.
+
+Eine allgemeine „vergiss/lösche das“-Sprachaktion mit eindeutigem Ziel und definierter Aufbewahrungswirkung fehlt. Semantisches Ersetzen, Archivieren, Sync-Tombstones und physisches Löschen sind getrennte Vorgänge.
+
+Die fachliche Aufbewahrungswirkung für Textwissen ist inzwischen in Abschnitt 14.3 beschlossen; offen bleibt ihre Umsetzung einschließlich eindeutiger Zielauflösung.
+
+### 14.2 CalDAV als externer Aktionskanal
+
+**Auslöser:** CalDAV-Worker standardmäßig alle 300 Sekunden, expliziter Sync oder gezielter API-Aufruf. **Input:** Lokale Tasks/Listen/Einträge und markierte VTODOs im konfigurierten Kalender.
+
+1. Kalenderkonfiguration und Zuordnungen prüfen.
+2. Nur Objekte mit Smart-Notebook-Markierungen verarbeiten; unmarkierte manuelle Nextcloud-Aufgaben bleiben außerhalb des Imports.
+3. Lokale/entfernte Fingerprints, ETags und Synczustände vergleichen.
+4. Tasks als VTODO, Listen als Parent-VTODO und Einträge als über `RELATED-TO` verbundene Subtasks abbilden.
+5. Statusänderungen übernehmen. Remote-Abschluss und Remote-Löschung archivieren intern mit unterschiedlichem Grund; nach bestätigtem Abschluss kann das VTODO entfernt werden. Reopen exportiert erneut.
+6. Gleichzeitige Inhaltsänderungen als CalDAV-Konflikt dokumentieren. Remote-Status und semantische Inhaltsautorität werden getrennt behandelt; Auflösung über `keep_local`/`keep_remote`.
+
+**Output:** Aktualisierte Status-/Inhaltszustände, Mappings, Audit und gegebenenfalls Konflikte. Diese Konflikte sind nicht dieselben Datensätze wie logische Claim-Widersprüche. Nach standardmäßig drei aufeinanderfolgenden Syncfehlern wird eine technische ntfy-Meldung versucht.
+
+### 14.3 Beschlossen: Archivierung statt automatischer physischer Textlöschung
+
+**Status: Beschlossen / Umsetzung offen.** Für Textwissen ist zunächst Archivierung der Standard, sowohl bei Selbstbereinigung als auch bei einem Nutzerauftrag „vergiss/lösche das“. Archivierte Inhalte verlassen die normale aktive Suche und den normalen Antwortkontext, bleiben aber nachvollziehbar erhalten. Ein solcher Auftrag darf nicht als bereits ausgeführte physische Löschung aller Daten dargestellt werden.
+
+| Archivierungsgrund | Beschlossene Folge |
+|---|---|
+| Automatisch als wenig nützlich bewertet | Aus aktiver Auswahl entfernen; neue Nutzung oder Belege dürfen eine spätere erneute Relevanz begründen. |
+| Durch neue Information abgelöst | Historischen Zusammenhang und Ablösung erhalten; alte Aussage nicht als aktuelle Wahrheit verwenden. |
+| Vom Nutzer ausdrücklich verworfen | Nicht still reaktivieren. Auch erneute Extraktion aus alten Quellen und nächtliche Konsolidierung dürfen die verworfene Aussage nicht wieder als aktives Wissen einführen. |
+
+Die Wiederaufnahmesperre muss auch Ableitungen aus erhaltenen Quellen berücksichtigen; ein bloßes Archivflag ohne diesen Zusammenhang reicht für „vergessen“ nicht. Die Entscheidung betrifft Textwissen. Bestehende oder noch abzugleichende Audio-Retention- und clientseitige Audiofreigaberegeln werden dadurch nicht geändert.
+
+## 15. Nächtliche Konsolidierung: Wann, womit und in welcher Reihenfolge?
+
+`scheduler.py` wartet standardmäßig auf **03:00 in `TIMEZONE=Europe/Berlin`**. Stunde und Minute sind per Argument konfigurierbar. Es ruft `run_daily_maintenance` auf. Die Schritte sind nacheinander ausgeführt, nicht unabhängige parallel garantierte Jobs.
+
+| Nr. | Schritt / Input | Verarbeitung | Output |
+|---|---|---|---|
+| 1 | Unarchivierte Events des aktuellen Kalendertags | LLM extrahiert Note-/Task-/List-Item-Kandidaten; Quellen prüfen/zuordnen; typspezifisch deduplizieren | Gespeichertes/ergänztes Wissen und archivierte verarbeitete Events. |
+| 2a | Aktive Notes, Tasks, List Items | Exakt normalisierten Inhalt und strukturelle Kompatibilität gruppieren; kanonische Ziele bestimmen | Zunächst ein Plan der exakten Gruppen. |
+| 2b | Dauerhafte Themen ohne Normalisierungsalias | Normalisierte Aliasse speichern | Aliasdatensätze; keine freie semantische Themenzusammenführung. |
+| 2c | Exakte Gruppen aus 2a | Quellen übertragen, Supersession-Verweise anlegen und Duplikate archivieren | Kanonischer Wissensbestand mit nachvollziehbaren Originalbezügen. |
+| 2d | Semantisch ähnliche Wissens- und Themenpaare | Neue Fingerprints vom lokalen LLM prüfen | `merge`, `synthesize`, `alias`, `hierarchy`, `keep_separate` als **Shadow**, `semantic_mutations=0`. |
+| 3 | Neue/geänderte Claims | Strukturierte und semantisch unterstützte Konfliktprüfung | Konfliktfälle, Relationen, `disputed`-Status und Prüfmarken. |
+| 4 | Geeignete Notes mit vorhandenen Fact-Claims | Evidence- und Konfliktbedingungen prüfen | Note-Fact-Promotions, archivierte Notes, übertragene Themen. |
+| 5 | Geparkte Jobs ohne bisherigen Nachtversuch | Einmalig erneut auf `queued` setzen | Höchstens ein Nacht-Reparaturversuch pro geeignetem Job; standardmäßig bis zu 100 Jobs je Aufruf. |
+| 6 | Abgelaufene Shadow-Details | Retention anwenden | Bereinigte Detaildaten. |
+| 7 | Audio mit abgelaufener Retention, nicht dauerhaft markiert | Blob entfernen; Metadatensatz behalten | `deleted`-Status und Retention-Audit. |
+| 8 | Abgelaufene technische Logs | Löschen nach konfigurierter Grenze, höchstens 48 Stunden | Bereinigte Logtabellen. |
+| 9 | Abgelaufener Retrieval-Cache | Referenzcache löschen | Bereinigter Cache. |
+| 10 | Abgelaufene Referenzkandidaten | Kurzlebige Resolverdaten bereinigen | Keine automatische Löschung verwendeter Claim-Zitate. |
+| 11 | Abgelaufene Client-Conversations | Conversation-Retention ausführen; Conversations mit als Wissen behaltenen Nachrichten ausnehmen | Bereinigte Chats. Ein zusätzlicher Ausschluss laufender Turns steht in dieser Löschabfrage nicht. |
+| 12 | Überfällige offene Tasks | Task-Lifecycle ausführen | Abgelaufene Tasks. |
+| 13 | Geschlossene Tasks | Archivieren | Archivierte Taskzustände. |
+
+### 15.1 Die Kalendergrenze ist eine relevante Lücke
+
+`consolidate_today` wählt **den Tag des Aufrufs ab 00:00**, nicht den vorherigen Tag und nicht alle unverarbeiteten Events. Beim regulären Lauf um 03:00 erfasst es also Events zwischen 00:00 und 03:00 des neuen Tages. Events des vorangegangenen Nachmittags liegen außerhalb dieses Fensters. Ohne zusätzliche Aufrufe gibt es keinen allgemeinen Nachholmechanismus dafür. „Nächtliche Tageskonsolidierung“ ist deshalb als Produktbegriff weiter als die tatsächliche Auswahl.
+
+### 15.2 Was automatisch verändert wird und was Shadow bleibt
+
+Exakte Konsolidierung arbeitet innerhalb desselben Typs. Tasks werden zusätzlich nach Frist, Status, Urgency und Priority unterschieden; List Items nach ihrer Liste. Ganze Listen gehören nicht zu den automatisch exakt zusammengeführten Gruppen. Der kanonische Eintrag wird nach Evidence, Inhaltslänge, Quellenzahl und stabiler ID gewählt. Originale bleiben über Supersession nachvollziehbar.
+
+Semantische Kandidaten ab standardmäßig `0.82` für Wissen und `0.80` für Themen werden mit Inhalts-/Versionsfingerprint gespeichert. Die LLM-Reviews führen keine semantische Mutation aus, auch wenn der Wartungslauf `dry_run=False` verwendet.
+
+**Wichtige Ausnahme zur Kurzform „semantisch nur Shadow“:** Schritt 1, die Eventkonsolidierung, nutzt die produktive LLM-Deduplizierung und kann dabei bestehende Notes/Tasks aktualisieren. Der Shadow-Schutz gilt für die semantischen Paarreviews in `nightly_consolidation.py`, nicht pauschal für sämtliche nächtlichen LLM-Aufrufe.
+
+`run_note_cleanup` ist eine weitere separat aufrufbare LLM-gestützte Bereinigung, die außerhalb eines Dry-Runs Notes zusammenführen und Duplikate archivieren kann. Sie wird von `run_daily_maintenance` derzeit nicht aufgerufen.
+
+### 15.3 Fehlerverhalten des Nachtlaufs
+
+Ein Fehler in einem frühen Schritt bricht den verbleibenden Lauf ab. Bereits ausgeführte Mutationen bleiben bestehen; die Wartung ist keine Gesamttransaktion. Der Scheduler protokolliert den Fehler und wartet auf den nächsten Termin. Es gibt in diesem Einstieg weder einen allgemeinen sofortigen Teilretry noch eine garantierte Nachholung ausgefallener Kalendertage.
+
+### 15.4 Beschlossen: Langfristige Selbstbereinigung ergänzen
+
+**Status: Beschlossen / Umsetzung offen.** Zusätzlich zu den beschriebenen vorhandenen Wartungsschritten soll der Nachtlauf die langfristige Wissensverdichtung aus Abschnitt 2.1 ausführen: Importance, Evidence und Dauer seit letzter Nutzung gemeinsam prüfen, geschützte Inhalte ausnehmen und geeignete Inhalte zunächst aus der aktiven Auswahl zurücknehmen bzw. archivieren.
+
+Die Verarbeitung muss den Archivierungsgrund aus Abschnitt 14.3 beachten. Automatisch zurückgestelltes Wissen kann später wieder relevant werden; ausdrücklich verworfenes Wissen darf durch Konsolidierung nicht still zurückkehren. Diese Funktion ist noch nicht Bestandteil der oben dokumentierten Ist-Reihenfolge. Die Entscheidung erlaubt keine pauschale Freigabe der bisher als Shadow geführten semantischen Zusammenführungen.
+
+## 16. Ausführung, Reihenfolge und Wiederaufnahme
+
+### 16.1 Welche Prozesse tatsächlich Arbeit ausführen
+
+| Prozess | Aufgabe | Nicht automatisch enthalten |
+|---|---|---|
+| FastAPI / `main.py` | API, Middleware, Serviceaufrufe; Schemainitialisierung beim App-Import | Kein allgemeiner Hintergrundloop für alle Tabellen mit `queued`. |
+| `worker.py audio` | Audio-Transkriptionsjobs | Client-Text-Capture und Chat. |
+| `worker.py text` | Textsegmentierung, Topics, Artefakt-Folgejob | Allgemeine Frageauflösung und dauerhafte Promotion. |
+| `worker.py artifacts` | Regeln/LLM für Session-Artefakte | Automatische vollständige Auto-Orchestrierung. |
+| `worker.py all` | Audio, Text, Artefakte pro Schleifenrunde nacheinander; seit 2026-09-08 schließt jeder erfolgreiche Job automatisch die fachliche Session-Finalisierung und Promotion an (8.1/8.3) | Capture-/Chat-Worker, allgemeiner permanenter Reconciler. |
+| `scheduler.py` | Täglicher Wartungslauf | Automatische externe Recherche. |
+| `caldav_worker.py` | Periodische CalDAV-Synchronisation | Verarbeitung unmarkierter Fremdobjekte. |
+| `background.py` | Startet Queue-Worker, CalDAV und Scheduler als Unterprozesse | Kein eigenständiger fachlicher Entscheidungsmechanismus. |
+
+Stoppt ein Unterprozess unerwartet, beendet der Supervisor die anderen und schlägt fehl. Ein automatischer Neustart hängt von der äußeren Prozess-/Containerverwaltung ab. Nicht konfiguriertes CalDAV kann deshalb den kombinierten Einstieg beeinträchtigen; separate Prozesse sind logisch weiterhin getrennt.
+
+### 16.2 Jobzustände und Fehlerpfade
+
+```mermaid
+flowchart LR
+    Q["queued"] -->|Claim| R["running"]
+    R -->|Erfolg| D["done"]
+    R -->|Fehler vor Versuch 3| F["failed"]
+    F -->|Retry / passende Repair| Q
+    R -->|Fehler ab Versuch 3| P["parked"]
+    P -->|ein Nachtversuch| Q
+    R -->|Fehler nach Nachtversuch| A["attention_required"]
+```
+
+Jobs werden mit `FOR UPDATE SKIP LOCKED` beansprucht, Versuch und Besitzer gespeichert. Priorität, Bonus für aktive Sessions und Aging beeinflussen die Auswahl. Erfolgreiche Jobs sind `done`, nicht `completed`.
+
+**Die Schleife beansprucht nur `queued`.** Ein `failed`-Job wird nicht allein durch erneutes Polling wieder ausgeführt. Dafür braucht es `retry_processing_job_record` oder den passenden Repair-Pfad. Der vorhandene Session-Repair konzentriert sich auf Textverarbeitungsschritte: fehlende Steps/Jobs ergänzen, fehlgeschlagene Textjobs erneut einplanen, veraltete Textjob-Locks zurückstellen und Stepzustände synchronisieren. Er ist kein automatisch ständig laufender Reconciler aller Warteschlangen.
+
+Watermarks beschreiben den **lückenlos zusammenhängenden** Stand empfangener, eingeplanter, textverarbeiteter und artefaktverarbeiteter Chunk-Sequenzen. Sie erkennen Lücken, erzwingen aber allein keine universelle Serialisierung aller Worker pro Session. Das Claim-SQL sperrt einzelne Jobs; mehrere Worker können unterschiedliche Jobs derselben Session erhalten. Eine streng geordnete fachliche Verarbeitung bei beliebiger Parallelisierung darf nicht vorausgesetzt werden.
+
+### 16.3 Grenzen der Idempotenz
+
+Vorhanden sind stabile Capture-/Chat-IDs, Chunk-ID/Sequenz/Hash-Prüfungen, Job-Idempotenzschlüssel, Artefakt-Origin-Keys und Promotionslinks. Diese sichern viele reguläre Wiederholungen.
+
+Sie bilden aber noch kein gemeinsames Transaktionsprotokoll für „eine Eingabe → mehrere voneinander abhängige Wissensänderungen“. Unterbrechungen zwischen getrennten Commits, bereits erledigte Teilaktionen und nachträgliche Antworten benötigen für den allgemeinen Auto-Modus eine ausdrücklich geprüfte Wiederaufnahmestrategie.
+
+## 17. Wie Ergebnisse zugänglich werden und welche Betriebsgrenzen gelten
+
+### 17.1 Dashboard und proaktiver Kontext
+
+- Der interne Live-Feed liefert Transkriptstatus, Session-Artefakte, Themen, offene Fragen und thematisch verknüpftes Wissen.
+- Die Auswahl relevanten Wissens im Live-Feed erfolgt über passende Themen und Konfidenzschwellen. Sie ist nicht gleichbedeutend mit automatischer Fragenbeantwortung oder beliebiger Suche zu jedem gesprochenen Satz.
+- Client-Dashboards projizieren gespeicherte Zustände in einen geschlossenen Komponenten-/Aktionskatalog. Surface-spezifische Darstellung und stabile öffentliche IDs gehören zur Projektion, nicht zur Wissensextraktion.
+- SSE signalisiert Zustandsänderungen; Snapshots bleiben für den Clientabgleich relevant.
+
+### 17.2 Offline-Wissen
+
+`knowledge_sync.py` projiziert Notes, Fact-Claims und Topics in Bibliotheken mit stabilen UUIDs, Revisionen, normalisierten Suchtexten, Keywords und begrenzten Evidence-Ausschnitten. Snapshot und Delta liefern `upsert`, `delete` und `redirect`. Der Syncindex wird bei passenden Leseoperationen aktualisiert; er ist kein eigenständiger semantischer Verarbeiter.
+
+Archivierte Notes können aus der Projektion entfernt oder bei dokumentierter Supersession/Fact-Promotion auf ein anderes Objekt umgeleitet werden. Lokale Stichwortsuche ist eine Clientfunktion; sie hat keine garantierte Rankinggleichheit mit PostgreSQL-Retrieval. Raw Audio, vollständige Transkripte und gesamte Raw Evidence sind nicht Teil der Wissensprojektion.
+
+### 17.3 Push und technische Beobachtbarkeit
+
+UnifiedPush unterstützt Registrierung, Challenge und verschlüsselte inhaltsarme Signale. Ein Push transportiert nicht den vollständigen Wissensbestand und ersetzt keinen autoritativen Sync. Die Existenz von Pushfunktionen beweist keine Benachrichtigung nach jeder Wissensmutation.
+
+Technische Logs und Worker-Heartbeats dienen der Diagnose. Normativ sollen sie keine Fachinhalte, Prompts oder Secrets enthalten. Historische Debugantworten und separat gespeicherte Fehlertexte sind davon zu unterscheiden; dieses Dokument ist kein vollständiger Datenschutzreview.
+
+### 17.4 Konfiguration und Speicherung
+
+- Endpoints und Datenbankverbindung werden aus lokaler Laufzeitkonfiguration geladen. Das Dokument enthält keine Zugangsdaten und setzt die aktuelle `.env` nicht als geprüften Livezustand voraus.
+- KI-Taskprofile trennen logische Aufgaben von Provider/Modell. Die Profile verweisen standardmäßig auf ein konfiguriertes lokales OpenAI-kompatibles LLM. Ein Taskname bedeutet nicht, dass ein eigenes Modell oder automatischer Fallback vorhanden ist.
+- Embeddings verwenden im Code Qwen3-Embedding-0.6B mit 1024 Dimensionen; STT-Metadaten nennen `large-v3`. Tatsächlich laufende Dienste müssen separat geprüft werden.
+- Geräteauthentifizierung für `/api/client/*` ist konfigurierbar; Health/Capabilities/Contract/Enrollment und gesonderte Rotationslogik besitzen Ausnahmen. „Single User“ bedeutet daher nicht „keine Authentifizierung im Code“.
+- Server-Audio-Retention beträgt standardmäßig sieben Tage. Ablauf kann Blobs löschen, unabhängig davon, ob sämtliche fachlichen Wünsche bereits umgesetzt wurden; der Purger filtert nicht generell auf fehlerfrei abgeschlossene Verarbeitung. Metadaten und Audit bleiben.
+- Die vorhandene `smart_notebook.db` ist kein Beleg für SQLite als aktuellen Hauptspeicher: `database.py` verbindet sich über psycopg mit PostgreSQL.
+
+## 18. Was zum gewünschten allgemeinen Auto-Modus noch fehlt
+
+Die folgende Liste konsolidiert das Gespräch und den tatsächlichen Integrationsstand. Die Produktentscheidungen zu Aufnahme, Fact-Einstufung, autonomer Konfliktklärung, Rückfrageninteraktion und Archivierung sind in den Abschnitten 2.1, 11.5–11.6, 12.1–12.2, 14.3 und 15.4 beschlossen. „Fehlt“ bedeutet dafür **Umsetzung offen**, nicht erneute Nutzerentscheidung erforderlich. Zahlenwerte und technische Details werden anhand dieser Regeln implementiert und geprüft; neue APIs werden hier nicht als bereits vorhanden behauptet.
+
+### 18.1 Erste Ausbaustufe: Verlässliche Aufnahme und Aktionen
+
+| ID | Fehlende Verbindung | Erwarteter Input → Output |
+|---|---|---|
+| A01 | Gemeinsamer fachlicher Pfad für Text und Audio | Text oder stabilisiertes Transkript → dieselbe Interpretation und Aktionslogik. |
+| A02 | Inhaltliche Intent-Erkennung statt Frageheuristik | Beliebiger Inhalt → Mitteilung, Merkauftrag, Änderungsauftrag, Erledigung, Frage oder Kombination. |
+| A03 | Mehrere Absichten pro Eingabe | Gemischter Absatz → geordnete, quellengebundene Teilinformationen und Aktionen. |
+| A04 | Einheitliche Typdefinitionen und Validierung | Kandidat → konsistente Note-/Task-/List-/Claim-/Question-Einordnung in allen Pfaden. |
+| A05 | Wissen und Ziele vor Mutationen abgleichen | Neuer Inhalt + passende Suche → neu, identisch, ergänzend, widersprechend oder auf ein Objekt bezogen. |
+| A06 | Referenzen aus Sprache und Gespräch auflösen | „Das ist erledigt“, „dort noch Brot“ → eindeutige Objekt-ID oder offene Rückfrage. |
+| A07 | Gemeinsamer Aktionsplan und Executor | Validierte Interpretation → anlegen, ergänzen, ändern, abhaken, wieder öffnen oder archivieren. |
+| A08 | Teilweise Unsicherheit behandeln | Gemischte sichere/unsichere Aktionen → sichere Teile ausführen, restliche mit Kontext zur Klärung speichern. |
+| A09 | Dauerhafte Übernahme und Claim-Kandidaten anschließen — **Übernahme seit 2026-09-08 automatisch verdrahtet** (`settle_client_session_for_ingestion` → `finalize_session` → `promote_session_artifacts`, 8.1/8.3), live verifiziert. Claim-Kandidaten-Aktivierung (Abschnitt 11.2) bleibt offen. | Geeignete bestätigte Inhalte → dauerhaftes Wissen; geprüfte Claim-Kandidaten → kontrolliert aktivierte Claims. |
+| A10 | Capture-/Chat-Verarbeitung automatisch betreiben | Persistierte Aufträge → ohne manuelle run-once-Aufrufe abgearbeitete Ergebnisse. |
+| A11 | Idempotente Mehrfachaktionen und Recovery | Retry / Absturz → Fortsetzung ab offenem Teilschritt ohne doppelte Mutation. |
+| A12 | Verständliches Gesamtresultat | Ausgeführte Aktionen und offene Fragen → nachvollziehbare Rückmeldung, bei Bedarf Antwort. |
+| A13 | Aufnahmefilter mit niedriger Nutzenschwelle | Beliebige Eingabe → Smalltalk/Füllsätze ausfiltern, möglicherweise nützliche Inhalte als gekennzeichnete Kandidaten aufnehmen; siehe 2.1. |
+
+### 18.2 Notwendige Wissens- und Kontextgrundlagen
+
+| ID | Fehlende Verbindung | Erwarteter Input → Output |
+|---|---|---|
+| W01 | Vollständige Quellen-/Änderungskette | Jede Mutation → Eingangsquelle, Ziel, alter/neuer Stand und Entscheidungsgrund. |
+| W02 | Gemeinsamer Suchzugriff auf Notes und Fact-Claims | Frage oder neue Information → relevante Inhalte auch nach Note-Fact-Promotion. |
+| W03 | Korrektes Client-Gesprächsgedächtnis | Conversation-ID und Folgeeingabe → eigene vorherige Turns und referenzierte Entitäten im Kontext. |
+| W04 | Konflikte vor bzw. bei Antworten und Änderungen berücksichtigen | Widerspruch → belegte Korrektur, zeitliche Ablösung oder ungelöster Konflikt statt stiller Wahrheitsersetzung. |
+| W05 | Question-/Clarification-Kreislauf | Ausgewählte Dashboard-Frage → gebundene Text-/Audiomemo oder ausdrücklich abgesendeter Antwortvorschlag → Wissen aktualisieren und abhängige Aktion fortsetzen; siehe 12.2. Freie Memos behalten einen separaten Zuordnungsfallback. |
+| W06 | Offene Vorgänge nachts nachholen | Zurückgestellte Kandidaten und Fehler → erneute Prüfung mit gespeichertem Kontext. |
+| W07 | Kalendergrenze und Fehlerisolation der Wartung korrigieren | Seit letztem Erfolg offene Events → vollständige Nachholung; Ausfall eines Schritts blockiert nicht dauerhaft Retention/Reparatur. |
+| W08 | Jobzustände und Abschlussbarriere vereinheitlichen | failed/parked/attention_required und offene Steps → konsistenter Sessionzustand ohne vorzeitige Freigabe. |
+| W09 | Langfristige Selbstbereinigung | Niedrige Importance + schwache Evidence + lange Nichtnutzung → unter Beachtung geschützter Inhalte zurücknehmen/archivieren; siehe 2.1 und 15.4. |
+| W10 | Archivierungsgrund und Wiederaufnahmesperre | Automatische Archivierung, historische Ablösung oder Nutzerverwerfen → unterschiedliche Wiederaufnahmebehandlung, einschließlich alter Quellen und Ableitungen; siehe 14.3. |
+
+### 18.3 Späterer Ausbau
+
+Importance gezielt für Kontextauswahl und Darstellung verwenden; automatische implizite Fragen über die Minimalrückfrage hinaus ausbauen; externe Referenzquellen und volatile Fakten kontrolliert anschließen; semantische Nachtvorschläge nach belastbarer Prüfung aktivieren. Diese Schritte sind keine Voraussetzung dafür, dass ein erster Auto-Modus Texte zuverlässig in Notes, Tasks und Listen überführt.
+
+### 18.4 Abnahmeszenarien für die spätere Implementierung
+
+**Gemischte Eingabe:** „Ich vertrage keine Erdnüsse. Setz Hafermilch auf die Einkaufsliste. Den Anruf bei Paul habe ich erledigt. Was wollte ich sonst noch besorgen?“
+
+Erwarteter Ablauf: Eingabe sichern → vier Absichten trennen → bestehende Aussage/Liste/Paul-Aufgabe suchen → persönliche Angabe quellengebunden speichern → Listeneintrag idempotent ergänzen → eindeutige Aufgabe abhaken oder gezielt nachfragen → Frage aus dem aktualisierten Listenbestand beantworten. Dieses Szenario ist ein Zieltest, kein als bestanden behaupteter aktueller Test.
+
+Weitere notwendige Fälle:
+
+1. Identische Eingabe erneut senden: kein doppelter Task und kein doppelter Listeneintrag.
+2. „Der Termin ist doch Freitag“ bei zwei passenden Tasks: Klärung statt beliebiger Änderung.
+3. Reines Wissen ohne Imperativ: passende Note/Claim-Kandidaten, keine erfundene Aufgabe.
+4. Audio und derselbe getippte Inhalt: fachlich vergleichbares Ergebnis bei unterschiedlichen technischen Quellen.
+5. Absturz nach zwei von drei Mutationen: nur die offene Mutation nachholen.
+6. Eine Note wird zum Fact: spätere Onlinefragen finden die Aussage weiterhin.
+7. Capture mit Clarification-Bezug: Antwort wird der offenen Frage zugeordnet und die abhängige Aktion fortgesetzt.
+8. Nachtlauf nach einem ausgelassenen Tag: alle relevanten offenen Events werden berücksichtigt.
+9. Geparkter letzter Sessionjob: keine irreführende erfolgreiche Abschluss-/Freigabemeldung.
+10. Smalltalk neben einer nützlichen Information: nur den nützlichen Teil als Wissenskandidat aufnehmen; hypothetische oder zitierte Aussagen korrekt kennzeichnen.
+11. Persönliche Selbstauskunft: als solchen Beleg behandeln; allgemeine Behauptung ohne geeignete Stützung bleibt vorläufig. Wiederholte Modellantworten erzeugen keine unabhängige Evidence.
+12. Berlin/Hamburg-Konflikt: ausgewählte Dashboard-Frage mit „bis vor zwei Wochen Berlin, seitdem Hamburg“ beantworten → historische und aktuelle Gültigkeit trennen, Frage schließen.
+13. Zwei gleichzeitig offene Rückfragen: über die Details einer Frage gestartete Memo bleibt exakt an diese Frage gebunden.
+14. Antwortvorschlag nur anzeigen oder auswählen, aber nicht absenden: keine Antwort, keine Evidence und kein Abschluss der Frage. Freie Antwort bleibt verfügbar.
+15. Niedrig bewertetes, lange ungenutztes Wissen archivieren; selten aufgerufene geschützte Allergieangabe und offene Verpflichtung dabei aktiv erhalten.
+16. „Vergiss diese Angabe“: aktiv ausblenden und als nutzerverworfen markieren; Nachtkonsolidierung aus alter Quelle darf sie nicht reaktivieren.
+
+## 19. Gefundene Widersprüche und Präzisierungen
+
+Diese Übersicht dokumentiert die Abweichungen, ohne ältere normative Dateien still umzuschreiben. „Codebefund“ beschreibt den lokalen Stand; „Entscheidungsbedarf“ markiert eine noch zu klärende Produkt-/Vertragsfrage.
+
+| ID | Quelle / frühere Aussage | Codebefund oder Gegenquelle | Einordnung in diesem Dokument |
+|---|---|---|---|
+| D01 | Handoff vom 24.08.: A2/Queue/Streaming vielfach geplant | Heutige Services enthalten Audio, Jobs, Segmente, Artefakte und Client-v1 | Handoff ist historische Baseline, kein aktueller Funktionsstatus. |
+| D02 | Roadmap M1: vollständige Artefakte automatisch bestätigen **und promoten** | War: neue validierte Artefakte werden bestätigt, Worker ruft Promotion nicht auf. **Seit 2026-09-08 behoben**, siehe 8.1/A09. | Automatische Bestätigung war schon vorhanden; automatische Promotion jetzt ergänzt. Widerspruch aufgelöst. |
+| D03 | Chatdiagramme: Text-Chunk → Textjob | Direkte Chunk-Erzeugung speichert nur; Audio-Stabilisierung ruft Repair auf | Direkter Text-Ingest braucht explizite Jobanlage/Repair. |
+| D04 | Effizienzleiter als allgemeiner Weg sämtlicher Suchen | Capture-Deduplizierung nutzt separate Vektorsuchen; allgemeiner Retriever fragt mehrere SQL-Kanäle vor Vektor ab | Unterschiedliche Suchpfade ausdrücklich getrennt. |
+| D05 | „Alle Inhalte → Wissen/Fragen/Antwort“ | Einzelmemo, Query und Session besitzen unterschiedliche Aufrufketten | Keine bereits einheitliche Auto-Orchestrierung. |
+| D06 | Questions/implicit Questions als eingebauter Gesamtmechanismus | Explizite Detection separat; impliziter Typ vorhanden; kein automatischer Ableitungs-/Antwortkreislauf | Datenmodell und Integration getrennt. |
+| D07 | Fact-Promotion suggeriert vollständige Faktengewinnung aus Notes | Note-Claim-Extraktion produziert Kandidaten, keine aktiven Claims; Promotion verlangt vorhandenen Fact-Claim | Fehlende Aktivierungsverbindung dokumentiert. |
+| D08 | Allgemeiner „Wissensspeicher“ vollständig für Antworten zugänglich | `search_knowledge` unterstützt keine Fact-Claims; Sync/Resolver schon | Potenzieller Verlust der Chat-Auffindbarkeit nach Note-Archivierung. |
+| D09 | Client-Chat als vollständig eigener Gesprächskontext | Promptkontext liest Legacy-Events mit `response`, nicht die Client-Conversation | Folgekontext-Lücke; getrennte Speicherung benannt. |
+| D10 | „Quellen in der Antwort“ als verwendete Evidence | Client-Citations stammen aus Retrieval-Liste; Resolver validiert echte Zitatspannen separat | Trefferreferenz ist kein Nachweis tatsächlich verwendeter Evidence. |
+| D11 | Roadmap M2: Retries/Stale-Recovery als vollständiger Dauerbetrieb | Standardworker verarbeitet nur queued; Repair primär Text; Capture/Chat fehlen in all | Vorhandene Mechanismen ohne pauschale autonome Wiederanlaufgarantie. |
+| D12 | Streng geordnete Session-Verarbeitung als Architekturziel | SKIP-LOCKED-Claim sperrt Jobs, kein allgemeines Session-Gate | Watermarks sind Fortschrittskontrolle, keine universelle Reihenfolgesperre. |
+| D13 | „Nächtliche Tageskonsolidierung“ | 03:00-Lauf selektiert aktuellen Kalendertag ab 00:00 | Vorheriger Tag wird durch diesen Selektor nicht nachgeholt. |
+| D14 | „Semantische Änderungen nachts nur Shadow“ | Paarreview ist Shadow; Eventkonsolidierung kann LLM-basiert bestehendes Wissen aktualisieren | Geltungsbereich des Shadow-Modus präzisiert. |
+| D15 | AD-010 enthält externe Recherche, Paperless und monatliche Faktenupdates | M7 kennzeichnet große Teile offen; Resolver gibt nur Eskalationsbedarf aus | Architekturabsicht, keine implementierte Rechercheautomatik. |
+| D16 | Roadmap: Single User ohne eigene App-Authentifizierung | `app.py` und Device-Auth-Service unterstützen konfigurierbare Bearer-Geräteauth | Single User und Authentifizierung nicht gleichsetzen. |
+| D17 | Roadmap M3 / Teile des Clientvertrags: lokal nach durable ACK löschen | AD-011 fordert sessionsweite Freigabe; Matrix unterscheidet Android und ESP | Backendfreigabe erklären; widersprüchliche Client-Löschregel nicht still vereinheitlichen. Entscheidungsbedarf je Clientvertrag. |
+| D18 | AD-011: Freigabe nach fehlerfreier Kette | Client-Finalizer prüft failed, queued, running, nicht alle übrigen Problemzustände | Konkrete Abschluss-Prüflücke vermerkt. |
+| D19 | Android-Grenze: keine Task-/Listenverwaltung; früherer Chat entsprechend knapp | Aktuelle Client-API enthält `complete_task` und Task-Detailprojektion; Idle-Tasks/Listen sind auf `esp32_epaper` begrenzt | Backendfähigkeit und Surface unterscheiden; Android-Scope bleibt gesonderter Vertragsabgleich. |
+| D20 | Audio-Aufbewahrung im alten Audio-Vorschlag noch offen | Config/Purger implementieren sieben Tage Default und Blob-Löschung | Implementierter Default; keine Garantie unbegrenzter Raw-Quellenaufbewahrung. |
+| D21 | Importance als allgemeine Wissensbewertung | Typabhängige unvollständige Zähler; keine generelle Retrieval-Verwendung | Aufmerksamkeitssignal, nicht universeller Wahrheits-/Prioritätswert. |
+| D22 | „Alles wird vor einer Mutation validiert“ als Prinzip | Pfade besitzen unterschiedlich starke Prüfungen; unvalidierte Artefaktoperationen nicht generell verworfen | Prinzip und tatsächliche lokale Guards getrennt. |
+
+## 20. Quellenregister, Prüfung und Pflege
+
+### 20.1 Bestehende Dokumentation
+
+| Quelle | Übernommener Inhalt / Rolle |
+|---|---|
+| [ARCHITECTURE_DECISIONS.md](ARCHITECTURE_DECISIONS.md) | Evidence-/Privacyprinzipien, Shadow-Grenzen, Topics, Retrieval, CalDAV, Resolver, Client- und Audiofreigabeentscheidungen. |
+| [ROADMAP.md](ROADMAP.md) | Featureinventar, Alpha-/Zielumfang und offene externe Quellen; Erledigt-Markierungen wurden gegen Aufrufketten geprüft. |
+| [AUDIO_ARCHITECTURE.md](AUDIO_ARCHITECTURE.md) | Trennung von Aufnahme, Transport, Speicherung und STT; ältere Vorschlagsstände kenntlich gemacht. |
+| [CLIENT_BACKEND_CONTRACT.md](CLIENT_BACKEND_CONTRACT.md) | Client-Modi, Session-/Audiovertrag, Dashboard, Offline-Wissen und Chat. |
+| [CLIENT_CONTRACT_MATRIX.md](CLIENT_CONTRACT_MATRIX.md) | Wire-Semantik, Clarification-Kontext, Wissensprojektionen und clientabhängige Retentionregeln. |
+| [CALDAV.md](CALDAV.md) | Markierter Zwei-Wege-Sync, Kalendergrenzen, Status und Konflikte. |
+| [TESTING.md](TESTING.md) | Bestehende Prüfpfade und Abnahmekontext; kein Ersatz für in diesem Dokument nicht ausgeführte Tests. |
+| [CLAUDE.md](CLAUDE.md) und [task.md](task.md) | Arbeits-/Normgrenzen und aktueller Arbeitskontext. |
+| [Handoff – Architektur](smart-notebook-codex-handoff-v1.0/02_ARCHITECTURE_AND_APPROACH.md) | Historische Herkunft von Event/Capture/Message, Retrieval und Session-Architektur. |
+| [Handoff – Einstieg](smart-notebook-codex-handoff-v1.0/00_START_HERE.md), [damaliger Status](smart-notebook-codex-handoff-v1.0/03_CURRENT_STATUS.md) | Datierung und Einordnung der alten Baseline. |
+
+### 20.2 Quellcode nach fachlicher Zuständigkeit
+
+| Bereich | Maßgebliche Dateien / Funktionen |
+|---|---|
+| App und Speicherung | [app.py](smart_notebook/app.py), [database.py](smart_notebook/database.py), [migrations.py](smart_notebook/migrations.py), [config.py](smart_notebook/config.py) |
+| Eingang / Capture | [routers/events.py](smart_notebook/routers/events.py), [services/events.py](smart_notebook/services/events.py), [client_capture.py](smart_notebook/services/client_capture.py), [capture.py](smart_notebook/services/capture.py) |
+| Session / Audio | [client_sessions.py](smart_notebook/services/client_sessions.py), [ingestion.py](smart_notebook/services/ingestion.py), [audio.py](smart_notebook/services/audio.py) |
+| Interpretation | [segmentation.py](smart_notebook/services/segmentation.py), [semantic_router.py](smart_notebook/services/semantic_router.py), [artifacts.py](smart_notebook/services/artifacts.py) |
+| Themen / Beispiele | [topic_detection.py](smart_notebook/services/topic_detection.py), [topics.py](smart_notebook/services/topics.py), [semantic_examples.py](smart_notebook/services/semantic_examples.py) |
+| Suche / Deduplizierung | [retrieval.py](smart_notebook/services/retrieval.py), [dedupe.py](smart_notebook/services/dedupe.py), [lists.py](smart_notebook/services/lists.py), [embeddings.py](smart_notebook/services/embeddings.py) |
+| Wissen / Quellen | [promotion.py](smart_notebook/services/promotion.py), [provenance.py](smart_notebook/services/provenance.py), [claims.py](smart_notebook/services/claims.py), [note_fact.py](smart_notebook/services/note_fact.py) |
+| Fragen / Referenzen | [intelligence.py](smart_notebook/services/intelligence.py), [reference_resolver.py](smart_notebook/services/reference_resolver.py), [routers/intelligence.py](smart_notebook/routers/intelligence.py) |
+| Chat | [client_chat.py](smart_notebook/services/client_chat.py), [chat.py](smart_notebook/services/chat.py) |
+| Bewertung | [activity.py](smart_notebook/services/activity.py), [knowledge_sync.py](smart_notebook/services/knowledge_sync.py) |
+| Nachtlauf | [scheduler.py](scheduler.py), [maintenance.py](smart_notebook/services/maintenance.py), [consolidation.py](smart_notebook/services/consolidation.py), [nightly_consolidation.py](smart_notebook/services/nightly_consolidation.py) |
+| Ausführung / Recovery | [worker.py](worker.py), [background.py](background.py), [jobs.py](smart_notebook/services/jobs.py), [recovery.py](smart_notebook/services/recovery.py) |
+| Ausgabe / Clients | [routers/client.py](smart_notebook/routers/client.py), [client_dashboard.py](smart_notebook/services/client_dashboard.py), [routers/live.py](smart_notebook/routers/live.py), [unified_push.py](smart_notebook/services/unified_push.py) |
+| Externe Taskverwaltung | [caldav_sync.py](smart_notebook/services/caldav_sync.py), [caldav_worker.py](caldav_worker.py) |
+| KI-Aufgaben | [ai_tasks.py](smart_notebook/services/ai_tasks.py), [prompts.py](smart_notebook/prompts.py) |
+
+### 20.3 Verifikation und Pflege
+
+**Entscheidungsnachtrag 2026-09-08:** Vom Nutzer bestätigte Regeln in den jeweiligen Fachabschnitten ergänzt, Umsetzungsliste und Abnahmeszenarien angepasst. Die zusätzliche Dashboard-Interaktion bindet Schnellmemos explizit an die ausgewählte Rückfrage und erlaubt optionale, ausdrücklich abzusendende Antwortvorschläge. Der zuvor geprüfte Code-Ist-Stand wurde durch diese reine Dokumentationsänderung nicht geändert. Die Bereinigung anderer Dokumentationsdateien und die formale Neuordnung ihres Normrangs bleiben ein eigener Arbeitsschritt.
+
+Bei der Erstellung wurden Funktionsdefinitionen, direkte Aufrufstellen, SQL-Auswahlbedingungen und relevante Dokumentationspassagen abgeglichen. Backendimporte, die Datenbankinitialisierung oder Migrationen auslösen, sowie mutierende API-/Worker-/Wartungstests wurden dafür nicht gestartet. Die Datei und ihre lokalen Quellenlinks werden statisch geprüft; die Mermaid-Blöcke sind editierbare Ablaufbeschreibungen.
+
+Bei Änderungen an einer Verarbeitungskette sind in dieser Datei mindestens Auslöser, Input, Reihenfolge, Output, Fehlerpfad und Integrationsstatus anzupassen. Geschlossene Lücken aus Abschnitt 18 benötigen einen konkreten Nachweis; Widersprüche aus Abschnitt 19 sollen erst nach Code-/Vertragsabgleich als aufgelöst gelten. Ein neuer Workeraufruf oder ein geändertes Promotions-/Retentionverhalten ist dabei ebenso relevant wie ein neuer Endpoint.
+
+**Codeänderung 2026-09-08 (A09/D02, Übernahme-Hälfte):** `services/client_sessions.py::settle_client_session_for_ingestion` ist jetzt `async` und ruft nach dem technischen Abschluss zusätzlich `intelligence.py::finalize_session` und bei Erfolg `promotion.py::promote_session_artifacts` auf; alle vier Aufrufstellen (`audio.py` ×2, `segmentation.py`, `artifacts.py`) auf `await` umgestellt. Konkreter Nachweis bisher: volles M8-Gate grün (ein vorbekannter, unabhängiger Datenverschmutzungs-Ausreißer in `m8_chat_push_contract_test.py` ausgenommen), inklusive `m8_audio_recovery_e2e_test.py`, das den Finalize-Pfad zweimal idempotent durchläuft. **Noch offen:** eine frische Live-Aufnahme gegen den automatischen Pfad (bisherige Live-Verifikation lief vor dieser Änderung noch über den manuellen `promote_session_artifacts`-Aufruf). Die Claim-Kandidaten-Aktivierung aus Abschnitt 11.2 bleibt ebenfalls offen.

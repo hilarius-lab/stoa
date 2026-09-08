@@ -462,5 +462,5 @@ async def run_text_processing_once(worker_id: str, mode: str = "llm", ingestion_
     )
     refresh_session_watermarks(job["ingestion_session_id"])
     from .client_sessions import settle_client_session_for_ingestion
-    settle_client_session_for_ingestion(job["ingestion_session_id"])
+    await settle_client_session_for_ingestion(job["ingestion_session_id"])
     return {"outcome": "completed", "job": completed, "segments": stored,"topic_matches":topic_matches}

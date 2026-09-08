@@ -245,12 +245,12 @@ async def run_stt_once(worker_id,mode='ocean',session_id=None,deterministic_text
         if window is None:
             done=complete_processing_job_record(job['id'],worker_id,{"mode":mode,"skipped":"transport chunk does not start an STT window"})
             from .client_sessions import settle_client_session_for_ingestion
-            settle_client_session_for_ingestion(job['ingestion_session_id'])
+            await settle_client_session_for_ingestion(job['ingestion_session_id'])
             return {"outcome":"completed","job":done,"skipped":True}
         response=await _transcribe(window,mode,deterministic_text);wid=_persist_transcript(window,job,response,mode)
         done=complete_processing_job_record(job['id'],worker_id,{"transcript_window_id":wid,"mode":mode})
         from .client_sessions import settle_client_session_for_ingestion
-        settle_client_session_for_ingestion(job['ingestion_session_id'])
+        await settle_client_session_for_ingestion(job['ingestion_session_id'])
         return {"outcome":"completed","job":done,"transcript_window_id":wid,"response":response}
     except Exception as exc:
         failed=fail_processing_job_record(job['id'],worker_id,str(exc));return {"outcome":"failed","job":failed,"error":str(exc)}

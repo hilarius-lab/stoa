@@ -373,7 +373,7 @@ async def run_session_artifact_worker_once(worker_id,mode="llm",ingestion_sessio
         synchronize_processing_step_for_job(job["id"])
         refresh_session_watermarks(job["ingestion_session_id"])
         from .client_sessions import settle_client_session_for_ingestion
-        settle_client_session_for_ingestion(job["ingestion_session_id"])
+        await settle_client_session_for_ingestion(job["ingestion_session_id"])
         return {
             "outcome": "completed", "job": completed,
             "artifacts": [get_session_artifact_record(i) for i in artifact_ids]
