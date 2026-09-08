@@ -114,6 +114,20 @@ alle Segmente genau einmal logisch zustellen und serverseitig vollständig verar
 - klare Zustände `lokal`, `wartet`, `übertragen`, `verarbeitet`, `Antwort vorhanden`
 - serverseitige Rückfrage als Dashboardkarte; Antwort wieder als Audio-Memo
 - lokale Diagnoseansicht ohne Inhalte und Geheimnisse
+- **Einstellungs-/Debug-Ansicht mit WLAN-Hotspot-Modus.** Per QR-Code
+  aktivierbarer Hotspot, der einen lokalen Webserver öffnet, über den weitere
+  WLAN-Netze hinzugefügt werden können. Später, ausdrücklich nachgelagert:
+  Umgang mit komplexen zertifikatsbasierten Netzen wie eduroam.
+- **Einstellungsansicht mit Log-Abruf von der SD-Karte.** Scrollbare Ansicht,
+  um die lokal auf der SD-Karte gespeicherten Logs direkt am Gerät
+  durchzusehen.
+- **Klären, was der Verlauf tatsächlich zeigt.** Stand 8. September: Die
+  Detailansicht einer Verlaufssession zeigt nur dann etwas an, wenn die
+  zugehörige Aufnahme bereits fachlich verarbeitet wurde — der reine
+  technische Aufnahme-/Uploadstatus (aufgenommen, hochgeladen, in
+  Verarbeitung) fehlt als eigene Information für noch nicht abgeschlossene
+  Sessions. Zu entscheiden: Soll der Verlauf auch unverarbeitete Aufnahmen
+  mit ihrem technischen Stand zeigen, statt nur das fachliche Ergebnis?
 - **Akkuanzeige mit echter Messung.** Das Symbol, die massive Füllung und die
   Prozentanzeige sind gezeichnet und warten nur auf einen Wert; `battery_known`
   ist dauerhaft falsch. Zu tun ist die verifizierte Auswertung des TG28 —
