@@ -12,13 +12,20 @@ from .tasks import save_task
 from .claims import materialize_validated_artifact_claims
 from .topics import normalize_topic_key
 
-async def _task_fields(content,mode):
+async def _task_fields(content,mode,started_at=None):
     if mode=='deterministic':
         urgency=0.9 if re.search(r'\b(dringend|sofort|unverzüglich|urgent)\b',content,re.I) else None
         return {"can_promote":urgency is not None,"content":content,"due_at":"","urgency":urgency or 0}
     profile=get_ai_task_profile('artifacts.task_promotion')
     schema={"type":"object","properties":{"can_promote":{"type":"boolean"},"content":{"type":"string"},"due_at":{"type":"string"},"urgency":{"type":"number"}},"required":["can_promote","content","due_at","urgency"],"additionalProperties":False}
-    prompt="""Prüfe ein bestätigtes Task-Artifact. Extrahiere eine ausschließlich im Text belegte Frist als ISO-8601 oder lasse due_at leer. Wenn keine Frist existiert, bewerte urgency von 0 bis 1 nur wenn Dringlichkeit aus Wortlaut/Kontext begründbar ist. can_promote ist nur wahr, wenn due_at gesetzt oder urgency begründet ist. Erfinde nichts."""
+    # Without today's date a relative reference like "heute"/"morgen" cannot
+    # become an ISO due_at at all -- the model silently fell back to urgency
+    # instead, and the task never carried a due date the dashboard could use.
+    # Anchored to session start, matching how the rule router in
+    # semantic_router.py already resolves weekday references (BACKEND_LOGIK.md
+    # 7.3), not wall-clock "now" at promotion time.
+    reference=(started_at or datetime.now(TIMEZONE)).astimezone(TIMEZONE)
+    prompt=f"""Heutiges Datum/Sessionstart: {reference.isoformat()}. Prüfe ein bestätigtes Task-Artifact. Extrahiere eine ausschließlich im Text belegte Frist als ISO-8601 oder lasse due_at leer, relativ zu diesem Datum ("heute"/"morgen"/Wochentage entsprechend auflösen). Wenn keine Frist existiert, bewerte urgency von 0 bis 1 nur wenn Dringlichkeit aus Wortlaut/Kontext begründbar ist. can_promote ist nur wahr, wenn due_at gesetzt oder urgency begründet ist. Erfinde nichts."""
     payload={"model":profile['model'],"messages":[{"role":"system","content":prompt},{"role":"user","content":content}],"temperature":profile['temperature'],"response_format":{"type":"json_schema","json_schema":{"name":"task_promotion","strict":True,"schema":schema}}}
     async with httpx.AsyncClient(timeout=profile['timeout_seconds'], trust_env=False) as client:r=await client.post(profile['endpoint'],json=payload)
     r.raise_for_status();return json.loads(r.json()['choices'][0]['message']['content'])
@@ -51,7 +58,9 @@ def _transfer_all_topics(artifact_id,knowledge_type,knowledge_id):
 
 async def promote_session_artifacts(session_id,mode='llm'):
     with get_db_connection() as c:
-        if c.execute("SELECT 1 FROM ingestion_sessions WHERE id=%s",(session_id,)).fetchone() is None:return {"session_id":session_id,"outcome":"not_found","promoted":[],"deferred":[]}
+        session_row=c.execute("SELECT started_at FROM ingestion_sessions WHERE id=%s",(session_id,)).fetchone()
+        if session_row is None:return {"session_id":session_id,"outcome":"not_found","promoted":[],"deferred":[]}
+        started_at=session_row[0]
         rows=c.execute("""SELECT a.id,a.artifact_type,a.content,a.confidence,
         (SELECT t.title FROM session_artifact_topics x JOIN session_topics t ON t.id=x.topic_id WHERE x.artifact_id=a.id ORDER BY x.relation='primary_topic' DESC LIMIT 1),
         c.normalized_data,c.validated
@@ -73,7 +82,7 @@ async def promote_session_artifacts(session_id,mode='llm'):
             elif kind=='task':
                 data=normalized_data or {}
                 fields=({"can_promote":True,"content":content,"due_at":data.get('due_at',''),"urgency":data.get('urgency') or 0}
-                        if classification_validated and (data.get('due_at') or data.get('urgency') is not None) else await _task_fields(content,mode))
+                        if classification_validated and (data.get('due_at') or data.get('urgency') is not None) else await _task_fields(content,mode,started_at))
                 if not fields['can_promote'] or (not fields['due_at'] and fields['urgency']<=0):deferred.append({"artifact_id":artifact_id,"reason":"task_requires_due_or_urgency"});continue
                 due=None
                 if fields['due_at']:
