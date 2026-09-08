@@ -356,6 +356,155 @@ Verlorene ACKs sind daher am wahrscheinlichsten eine Identitätsfrage — eine n
 DB-Reset — und kein Datenverlust im Normalbetrieb. Nachvollziehbar in
 `client_session_audit`. Solange das nicht belegt ist, bleibt es eine Hypothese.
 
+### 8. Verarbeitungs-Job hängt dauerhaft fest — Backend-Infrastruktur, nicht ESP-spezifisch, offen, 7. September, vierte Runde
+
+Gefunden beim ersten echten Ende-zu-Ende-Test einer Memo-Aufnahme (Ziel dieses
+Chats: die Schleife Aufnahme → Upload → Verarbeitung → Dashboard). Betrifft
+`worker.py`/`background.py`/`processing_jobs`, nicht den ESP32-Client — hier
+dokumentiert, weil dies aktuell das einzige laufende Übergabedokument für
+Backend-Befunde in diesem Chat ist (siehe Kontext oben: dieser Chat arbeitet
+ausdrücklich an beidem).
+
+**Befund 1 — zwei Wege starten `worker.py`, beide ohne `--worker-id`.**
+`python worker.py all` startet den Queue-Worker direkt. `python background.py`
+startet zusätzlich `caldav_worker.py` und `scheduler.py` und ruft dabei
+intern ebenfalls `worker.py all` auf (`background.py:6`). Beide Wege lassen
+`--worker-id` weg, wodurch `worker_id` in `worker.py:20` aus
+`{hostname}-{kind}` berechnet wird — bei zwei gleichzeitig laufenden
+Prozessen entsteht so zweimal derselbe Name (`Ocelot-all`). Live beobachtet:
+zwei Prozesse mit identischer `worker_id` überschreiben sich gegenseitig die
+eine Zeile in `worker_heartbeats` (`ON CONFLICT(worker_id) DO UPDATE`,
+`services/jobs.py::record_worker_heartbeat`) — der Heartbeat zeigte `idle`,
+während der andere Prozess unter demselben Namen tatsächlich noch mitten in
+einem Job hing. Macht das Debuggen ohne Prozessliste (`Get-CimInstance
+Win32_Process`) praktisch unmöglich. **Nicht behoben** — Empfehlung: nur
+einen der beiden Startwege gleichzeitig verwenden, oder beide künftig mit
+verschiedenen `--worker-id` starten.
+
+**Befund 2 — kein Recovery für einen bei `status='running'` verwaisten Job.**
+Ein `session_artifacts`-Job (Materialisierung von `note_candidate`-Segmenten
+zu tatsächlichen Notizen, `services/artifacts.py::run_session_artifact_worker_once`)
+blieb nach einem `ValueError` im Worker (Event `worker.loop_error`,
+`worker.py:35-39`) dauerhaft auf `status='running'`/`locked_by='Ocelot-all'`
+stehen — über 8 Minuten unverändert, auch nach Neustart des Workers (der
+alte Lock-Eintrag wird von niemandem aufgelöst). `queue_parked_jobs_for_night_repair()`
+(`services/jobs.py:393`) existiert zwar, greift aber nur bei
+`status='parked' AND night_repair_attempts=0` — **nicht** bei `running`. Es
+gibt aktuell keinen Mechanismus, der einen Job mit totem/hängendem Worker
+erkennt und zurücksetzt. Einmalig manuell behoben (`UPDATE processing_jobs
+SET status='queued', locked_by=NULL, locked_at=NULL, started_at=NULL WHERE
+id=…`, mit Zustimmung des Nutzers, eigene Testdaten) — das ist eine
+Einzelfall-Reparatur, kein struktureller Fix. **Offener Befund:** ein
+Watchdog/Timeout, der einen `running`-Job nach angemessener Zeit ohne
+Fortschritt automatisch zurücksetzt, fehlt.
+
+Beim Nachvollziehen ein zweiter, verschachtelter Bug gefunden und **behoben**:
+`services/jobs.py::_normalize_required_text()` lehnt eine leere Fehlermeldung
+selbst mit `ValueError` ab. Mehrere Exception-Typen liefern aber ein leeres
+`str(exc)`, wenn sie ohne Argumente geworfen werden — dann warf schon der
+Versuch, den *eigentlichen* Fehler über `fail_processing_job_record()` zu
+protokollieren, eine *neue* `ValueError`, die den umgebenden `except`-Block
+in `run_session_artifact_worker_once()`/`run_text_processing_once()`/
+`run_stt_once()` verließ, bevor der Job als fehlgeschlagen markiert werden
+konnte — der Lock blieb für immer bestehen, und der ursprüngliche Fehler
+ging komplett verloren (im Log stand nur `error_type: ValueError`, ohne
+Bezug zur echten Ursache). Fix: `fail_processing_job_record()` normalisiert
+jetzt selbst mit Fallback (`error.strip() or "(no error message)"`) statt
+hart zu validieren; die drei Aufrufer übergeben zusätzlich `str(exc) or
+type(exc).__name__`, damit wenigstens der Exception-Typ erhalten bleibt,
+wenn die Nachricht leer ist. `services/jobs.py`, `services/audio.py`,
+`services/artifacts.py`, `services/segmentation.py`. Live bestätigt: Ein
+später ausgelöster `audio_transcription`-Fehler (echter, unabhängiger
+CUDA-Fehler auf dem STT-Server, siehe unten) kam mit vollständiger,
+lesbarer Fehlermeldung im Job-Datensatz an statt den Prozess erneut in
+einem `running`-Lock zu stranden — genau das Verhalten, das dieser Fix
+herstellen sollte.
+
+**Befund 3 — Ursache des Hängens gefunden: `llama.cpp` hängt bei diesem
+JSON-Schema, nicht am Netzwerk.** DNS und TCP-Connect zu beiden Endpunkten
+(`capybara.nb.internal:8080` über Tailscale/`100.103.162.19`,
+`192.168.124.5:8181`) waren durchgehend sofort erreichbar; GPU-Auslastung
+auf dem LLM-Server war bei 0 %, `llama.cpp` verarbeitete nichts. Direkt
+reproduziert: eine triviale Chat-Anfrage ohne `response_format` beantwortet
+`capybara.nb.internal:8080` in 1,16 s; **dieselbe Anfrage mit dem exakten
+JSON-Schema aus `_propose_artifact_operations`** (`response_format:
+json_schema, strict: true`, Schema in `services/artifacts.py:295`) hängt
+zuverlässig und liefert nach 30 s `ReadTimeout`. Das Schema selbst (mehrere
+verschachtelte `enum`/`required`/`additionalProperties:false`-Kombinationen)
+bringt `llama.cpp`s grammatikgebundene Dekodierung offenbar in einen
+Zustand ohne gültigen nächsten Token — ein bekanntes Problemfeld bei
+JSON-Schema-Constrained-Decoding in manchen `llama.cpp`-Versionen, **keine
+Ursache im Smart-Notebook-Code**. Der `httpx`-Timeout (180s,
+`services/artifacts.py:300`) selbst funktioniert korrekt (im isolierten
+Test bei 30s sauber ausgelöst) — der Job hätte mit dem Fix aus Befund 2
+also irgendwann sauber fehlschlagen sollen; warum das reale Timing des
+kompletten Jobs (Embedding-Aufrufe + LLM-Aufruf) deutlich über den
+rechnerischen ~7 Minuten Worst-Case lag, ist im Detail nicht restlos
+geklärt, ändert aber nichts an der gefundenen Grundursache.
+
+**Update: mit Workaround behoben, 7. September, vierte Runde.**
+`llama.cpp`-Image auf `capybara.nb.internal` wurde vom Nutzer aktualisiert —
+hat das Hängen **nicht** behoben (erneut reproduziert, gleiches Schema,
+gleiches Ergebnis). Weiter eingegrenzt: **jede** Form von `response_format`
+hängt, nicht nur `json_schema` — auch das schlankere `json_object` hängt
+identisch (30s `ReadTimeout`, GPU bei 0%). Eine Anfrage ganz **ohne**
+`response_format`, mit dem gewünschten JSON-Format stattdessen im
+Prompt-Text beschrieben, läuft dagegen zuverlässig durch (22,8s,
+korrektes valides JSON). Auf Wunsch des Nutzers ausdrücklich als
+**bewusst begrenzter Workaround nur für `artifacts.py`** umgesetzt — die
+übrigen sieben Stellen mit demselben `response_format`-Muster
+(`segmentation.py`, `chat.py`, `claims.py`, `dedupe.py`, `consolidation.py`,
+`maintenance.py`, `nightly_consolidation.py`, `promotion.py`) bleiben
+unverändert, da ihre Schemas dort nachweislich funktionieren.
+
+`_propose_artifact_operations()` in `services/artifacts.py` sendet jetzt
+keinen `response_format` mehr; das JSON-Format steht stattdessen als Text im
+System-Prompt. Die Antwort wird über die erste/letzte `{`/`}`-Klammer aus dem
+Text extrahiert (robust gegen Markdown-Fences), und da `strict` nicht mehr
+garantiert, dass alle Felder vorhanden und Listen tatsächlich Listen sind,
+normalisiert der Code die Listenfelder jetzt defensiv (`_as_list()`) — ohne
+dabei Werte zu erfinden, die das Modell nicht geliefert hat (fehlende
+Pflichtfelder wie `title`/`content` werfen weiterhin bewusst einen klaren
+Fehler statt eines erfundenen Platzhalters).
+
+Live zweimal end-to-end verifiziert (echte Aufnahme, echtes
+`capybara.nb.internal`): Transkription → Segmentierung → Artefakt-Extraktion
+lief beide Male fehlerfrei durch; eine gesprochene Aufgabe wurde korrekt als
+`task`-Artefakt mit Status `confirmed` gespeichert (`session_artifacts.id=271`,
+Inhalt exakt wie gesprochen). Ein zweites, bewusst beiläufig formuliertes
+Segment wurde korrekt als `statement` (nicht `note_candidate`) eingestuft und
+absichtlich nicht abgelegt — inhaltliche Modellentscheidung, kein Fehler.
+
+**Architekturentscheidung dazu, festgehalten:** Der Nutzer erwog testweise,
+Schema-Komplexität projektweit zugunsten kleinerer LLM-Schritte zu
+reduzieren (Vorteil: robuster gegenüber genau dieser Fehlerklasse, tauglich
+auch für schwächere/effizientere Modelle; Nachteil: mehr Roundtrips/Latenz,
+mehr Orchestrierungscode, Risiko widersprüchlicher Entscheidungen über
+getrennte Aufrufe hinweg). Eingeordnet als eigenständige, nicht triviale
+Architekturfrage — der oben beschriebene Workaround ist bewusst der
+kleinere, lokal begrenzte erste Schritt statt eines Vorgriffs auf diese
+Entscheidung; ein Wechsel bei den anderen sieben Stellen bräuchte ein
+eigenes ADR.
+
+**Nebenbefund während der Verifikation, kein Code-Fix:** Ein Testlauf schlug
+mit `cudaErrorInvalidDevice: invalid device ordinal` auf dem STT-Server fehl
+— laut Nutzer eigene VRAM-Knappheit auf einem anderen Server, direkt behoben,
+kein Smart-Notebook-Bug. Erwähnenswert nur, weil genau dieser Fehler dank
+Befund 2 als klare Meldung im Job-Datensatz ankam statt den Job erneut
+hängen zu lassen.
+
+**Nebenbefund, unabhängig:** `m8_release_gate_test.py` schlug einmal bei
+`m8_chat_push_contract_test.py` fehl (`AttributeError` auf
+`card.get("entity_ref",{}).get("id")` — ein Dashboard-Card-Eintrag hatte
+`entity_ref: None` statt fehlendem Key). Reproduzierbar in Isolation, aber
+lief vor den vielen Live-Testsessions dieser Runde noch grün — die M8-Gates
+laufen gegen dieselbe geteilte Live-Datenbank, kein eigenes Test-DB, und die
+umfangreichen Chat-/Memo-Testaufrufe dieser Runde haben vermutlich
+Altdaten hinterlassen, die diese eine Prüfung stören. Nicht weiter verfolgt
+— vermutlich Datenverschmutzung, kein Codefehler; bei Gelegenheit erneut
+prüfen, ob es nach einiger Zeit von selbst verschwindet oder ob es sich um
+einen echten Randfall in `client_dashboard.py`s Chat-Sektion handelt.
+
 ## Fallen, die in dieser Runde Zeit gekostet haben
 
 **Bearbeitung auf veralteter Grundlage.** Eine Änderung an `main.c` hat still
@@ -456,3 +605,8 @@ Dokuments (`memo-why` statt Zählerraten) nicht für mehr.
 6. DNS-Hypothese bleibt offen, ist aber kein Blocker mehr für weitere
    Live-Tests, da die meisten Läufe erfolgreich waren. Bei Gelegenheit mit
    mehr dokumentierten BSSID/RSSI-Paaren erhärten oder verwerfen.
+7. Neu, vierte Runde: Watchdog/Timeout für bei `status='running'` verwaiste
+   `processing_jobs` bauen (Punkt 8 oben) — bisher nur einmalig manuell
+   repariert, kein struktureller Fix. Klären, ob `worker.py`/`background.py`
+   künftig grundsätzlich mit explizitem `--worker-id` gestartet werden
+   sollen, um die Heartbeat-Kollision zu vermeiden.

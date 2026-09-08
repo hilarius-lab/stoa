@@ -324,7 +324,14 @@ def complete_processing_job_record(job_id: int, worker_id: str, result: dict | N
 
 def fail_processing_job_record(job_id: int, worker_id: str, error: str):
     worker_id = _normalize_required_text(worker_id, "worker_id")
-    error = _normalize_required_text(error, "error")
+    # Unlike worker_id, an empty error is a real, recurring case: several
+    # exception types stringify to "" when raised without arguments (seen
+    # live from a job stuck at status='running' forever -- the ValueError
+    # this used to raise here escaped the caller's except block before the
+    # job could be marked failed, so the lock was never released and the
+    # original exception was lost). Recording that emptiness is still more
+    # useful than crashing the failure path over it.
+    error = error.strip() or "(no error message)"
     now = datetime.now(TIMEZONE)
     with get_db_connection() as connection:
         current = connection.execute(

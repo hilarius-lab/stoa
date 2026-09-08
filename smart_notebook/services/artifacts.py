@@ -292,16 +292,44 @@ async def _propose_artifact_operations(session_id,chunk_id):
     overrides,handled,router_topics=_router_overrides(session_id,segments,topics,started_at)
     unresolved=[r for r in segments if r[0] not in handled]
     if not unresolved:return {"topics":router_topics,"operations":overrides}
-    schema={"type":"object","properties":{"topics":{"type":"array","items":{"type":"object","properties":{"title":{"type":"string"},"description":{"type":"string"},"confidence":{"type":"number"}},"required":["title","description","confidence"],"additionalProperties":False}},"operations":{"type":"array","items":{"type":"object","properties":{"action":{"type":"string","enum":["create","update","confirm","supersede","dismiss","none"]},"target_artifact_id":{"type":"integer"},"artifact_type":{"type":"string","enum":["note","task","list","list_item","fact","decision"]},"content":{"type":"string"},"confidence":{"type":"number"},"source_segment_ids":{"type":"array","items":{"type":"integer"}},"topic_titles":{"type":"array","items":{"type":"string"}},"evidence_spans":{"type":"array","items":{"type":"string"}},"reason_codes":{"type":"array","items":{"type":"string"}},"missing_fields":{"type":"array","items":{"type":"string"}},"abstain":{"type":"boolean"}},"required":["action","target_artifact_id","artifact_type","content","confidence","source_segment_ids","topic_titles","evidence_spans","reason_codes","missing_fields","abstain"],"additionalProperties":False}}},"required":["topics","operations"],"additionalProperties":False}
+    # Provisional workaround, deliberately scoped to this one call: this
+    # server's llama.cpp hangs on `response_format` (json_schema *and*
+    # json_object) for a request this shape -- reproduced live, GPU idle at
+    # 0% the whole time, so it never even started generating. A plain,
+    # unconstrained request with the shape spelled out in the prompt answers
+    # normally. Every other AI-task call site keeps response_format as-is;
+    # this is not a project-wide interface change, and the validation below
+    # (already present before this change) is what stands in for the
+    # guarantee strict mode used to provide.
+    schema_description=(
+        '{"topics":[{"title":string,"description":string,"confidence":0..1}],'
+        '"operations":[{"action":"create|update|confirm|supersede|dismiss|none",'
+        '"target_artifact_id":integer,"artifact_type":"note|task|list|list_item|fact|decision",'
+        '"content":string,"confidence":0..1,"source_segment_ids":[integer],'
+        '"topic_titles":[string],"evidence_spans":[string],"reason_codes":[string],'
+        '"missing_fields":[string],"abstain":boolean}]}'
+    )
     routing=[route_artifact(r[1],started_at,[t[1] for t in topics]) for r in unresolved]
     context=json.dumps({"new_segments":[{"id":r[0],"text":r[1],"type":r[2],"confidence":r[3],"router":routing[i]} for i,r in enumerate(unresolved)],"active_artifacts":[{"id":r[0],"type":r[1],"content":r[2],"status":r[3],"confidence":r[4]} for r in artifacts],"active_topics":[{"id":r[0],"title":r[1],"description":r[2]} for r in topics]},ensure_ascii=False)
-    system=SESSION_ARTIFACT_SYSTEM_PROMPT+"\nNutze nur die verbleibenden Kandidaten und exakte Evidence-Spans. Bei Unsicherheit setze abstain=true und action=none. Erfinde keine Felder."
-    payload={"model":profile['model'],"messages":[{"role":"system","content":system},{"role":"user","content":context}],"temperature":profile['temperature'],"response_format":{"type":"json_schema","json_schema":{"name":"smart_notebook_session_artifacts","strict":True,"schema":schema}}}
+    system=(SESSION_ARTIFACT_SYSTEM_PROMPT+"\nNutze nur die verbleibenden Kandidaten und exakte Evidence-Spans. "
+        "Bei Unsicherheit setze abstain=true und action=none. Erfinde keine Felder.\n"
+        "Antworte ausschließlich mit einem einzigen JSON-Objekt exakt in dieser Form, "
+        "kein Markdown, kein weiterer Text davor oder danach:\n"+schema_description)
+    payload={"model":profile['model'],"messages":[{"role":"system","content":system},{"role":"user","content":context}],"temperature":profile['temperature']}
     async with httpx.AsyncClient(timeout=profile['timeout_seconds'], trust_env=False) as client: response=await client.post(profile['endpoint'],json=payload)
     if response.is_error: raise RuntimeError(f"LLM request failed with HTTP {response.status_code}: {response.text[:1000]}")
-    proposal=json.loads(response.json()['choices'][0]['message']['content'])
+    content=response.json()['choices'][0]['message']['content'].strip()
+    first,last=content.find('{'),content.rfind('}')
+    if first<0 or last<first:raise ValueError(f"LLM response contained no JSON object: {content[:500]!r}")
+    proposal=json.loads(content[first:last+1])
+    def _as_list(value):
+        if isinstance(value,list):return value
+        return [] if not value else [value]
     valid_segments={r[0] for r in segments};valid_artifacts={r[0] for r in artifacts}
     for op in proposal.get('operations',[]):
+        for key in ('source_segment_ids','topic_titles','evidence_spans','reason_codes','missing_fields'):
+            op[key]=_as_list(op.get(key))
+        op.setdefault('abstain',False);op.setdefault('target_artifact_id',0)
         if not set(op['source_segment_ids']).issubset(valid_segments):raise ValueError('LLM proposed unknown source segment')
         if op['action'] in {'update','confirm','supersede','dismiss'} and op['target_artifact_id'] not in valid_artifacts:raise ValueError('LLM proposed unknown target artifact')
         if op['action'] in {'create','none'} and op['target_artifact_id']!=0:raise ValueError('create/none target_artifact_id must be 0')
@@ -379,10 +407,11 @@ async def run_session_artifact_worker_once(worker_id,mode="llm",ingestion_sessio
             "artifacts": [get_session_artifact_record(i) for i in artifact_ids]
         }
     except Exception as exc:
-        failed = fail_processing_job_record(job["id"], worker_id, str(exc))
+        message = str(exc) or type(exc).__name__
+        failed = fail_processing_job_record(job["id"], worker_id, message)
         synchronize_processing_step_for_job(job["id"])
         refresh_session_watermarks(job["ingestion_session_id"])
-        return {"outcome": "failed", "job": failed, "artifacts": [], "error": str(exc)}
+        return {"outcome": "failed", "job": failed, "artifacts": [], "error": message}
 
 
 def update_session_artifact_record(artifact_id, content=None, confidence=None):
