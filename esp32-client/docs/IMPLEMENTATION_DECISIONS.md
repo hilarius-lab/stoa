@@ -128,7 +128,7 @@ werden, ohne die Architektur neu zu entscheiden.
   Diagnoselog. Der SD-Viewer setzt einen eigenen begrenzten, rotierten und
   bereinigten Logsink voraus; er wird nicht durch das Anzeigen der
   Journalrecords abgekürzt.
-- Stand 8. September: Die Ansicht und der Diagnoselogsink sind noch nicht
+- Stand 9. September: Die Ansicht und der Diagnoselogsink sind noch nicht
   implementiert. BOOT drei Sekunden öffnet nur den bestehenden Setupmodus.
 
 ## Abschluss einer Session

@@ -79,8 +79,8 @@ Aktivierung, `cd` und `idf.py` deshalb in **einem** PowerShell-Aufruf
 verkettet werden:
 
 ```powershell
-C:\Espressif\tools\Microsoft.v5.5.2.PowerShell_profile.ps1
-cd C:\Users\<Nutzer>\Documents\smart-notebook\esp32-client
+. C:\Espressif\tools\Microsoft.v5.5.2.PowerShell_profile.ps1
+Set-Location .\esp32-client
 idf.py -p COM9 build
 ```
 

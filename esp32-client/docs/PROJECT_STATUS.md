@@ -1,6 +1,6 @@
 # Projektstand
 
-Stand: 2026-09-08, `main` nach `f7785b1`
+Stand: 2026-09-09, `main` nach `f7785b1`
 
 ## Nachgewiesen am realen Gerät
 

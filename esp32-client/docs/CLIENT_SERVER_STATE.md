@@ -1,4 +1,4 @@
-# Stand der Installation, 7. September 2026
+# Stand der Installation, 9. September 2026
 
 Übergabedokument. Es beschreibt, wo Gerät und Backend stehen, was nachweislich
 funktioniert, welche Entscheidungen gefallen sind und was offen ist. Es ersetzt
@@ -18,8 +18,8 @@ unter `C:\Espressif\python_env\` sucht, die EIM-Installation es aber unter
 `IDF_TOOLS_PATH` ablegt. Stattdessen in einem frischen PowerShell-Fenster:
 
 ```powershell
-C:\Espressif\tools\Microsoft.v5.5.2.PowerShell_profile.ps1
-cd C:\Users\Ocelot\Documents\smart-notebook\esp32-client
+. C:\Espressif\tools\Microsoft.v5.5.2.PowerShell_profile.ps1
+Set-Location .\esp32-client
 idf.py build flash monitor
 ```
 
@@ -732,7 +732,7 @@ Scrollen, Toggle/Zurücktoggeln, Verlassen und das Verschwinden von „Hafermilc
 nach erneutem Öffnen. Das vor „Zurück“ gesetzte Zeichen `‹` fehlte im Font und
 erschien als Ersatzbox; es wurde anschließend ersatzlos entfernt.
 
-## Übergabe-Audit und Reihenfolge für den nächsten Chat — 8. September
+## Übergabe-Audit und Reihenfolge für den nächsten Chat — 9. September
 
 Die physische Listenprobe benutzte den normalen Produktweg und keinen
 Test-Shortcut: Mikrofon/SD-Journal → Client-Session-Create → Chunkupload →

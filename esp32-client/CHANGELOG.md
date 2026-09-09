@@ -1,6 +1,6 @@
 # Änderungen
 
-## 2026-09-08 – Übergabe-Audit nach Dashboard-/Listenabnahme
+## 2026-09-09 – Übergabe-Audit nach Dashboard-/Listenabnahme
 
 Die reale Listenprobe ist gegen `BACKEND_LOGIK.md` und die tatsächlichen
 Aufrufstellen geprüft: Sie lief vom physischen Mikrofon über SD-Journal,
@@ -16,7 +16,9 @@ Host-`gcc` nicht möglich. HTTPS und die dreifach abgesicherte lokale
 Audiofreigabe sind nicht mehr als offen aufgeführt. Projektstatus, Roadmap,
 Backendlogik, Arbeitsqueue und Client-/Server-Status nennen nun denselben Stand.
 Der portable Übergabecheck erwartet nach den neuen Task-/Listenaktionen nun die
-tatsächlichen 24 statt der früheren 22 Gerätepfade.
+tatsächlichen 24 statt der früheren 22 Gerätepfade. Sein eigenes Arbeitsbeispiel
+verwendet keinen benutzergebundenen absoluten Pfad mehr und besteht damit auch
+aus einem frischen Git-Archiv.
 
 Als bewusst offene Produktarbeit sind festgehalten: Die Home-Ansicht ist nach
 der Trennung von Aufgaben, Listen und Verlauf ohne Rückfragen normalerweise

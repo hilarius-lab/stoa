@@ -20,7 +20,7 @@ Abnahme: Nach Reset an jeder Write-Grenze ist jedes Segment eindeutig `ready`,
 Stand: Format, Recovery und Adoption sind implementiert. Der Hosttest
 `tools/run_journal_test.sh` ist vorhanden und umfasst 6341 Prüfungen, darunter
 Trennung an jeder Record-Bytegrenze, Recovery, Adoption und 32 Segmente. In der
-Übergabesitzung vom 8. September konnte er auf diesem Windows-Host nicht erneut
+Übergabesitzung vom 9. September konnte er auf diesem Windows-Host nicht erneut
 gestartet werden, weil kein Host-`gcc` installiert ist; der letzte dokumentierte
 grüne Lauf steht im `CHANGELOG.md`. Das ist eine Werkzeuggrenze, keine fehlende
 Testdatei. Reale Stromausfälle an allen physischen Schreib-/Rename-Grenzen

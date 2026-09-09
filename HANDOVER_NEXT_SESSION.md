@@ -1,9 +1,10 @@
 # Übergabe-Prompt für den nächsten Chat
 
 Diese Datei ist zum Kopieren gedacht: Inhalt als erste Nachricht in eine neue
-Claude-Code-/Codex-Sitzung einfügen. Stand: 8. September 2026. Der vollständig
+Claude-Code-/Codex-Sitzung einfügen. Stand: 9. September 2026. Der vollständig
 verifizierte Code-/Firmwarestand ist `f7785b1`; danach wurden ausschließlich
-Audit-, Status- und Übergabedokumente berichtigt. Am Ende der Sitzung war
+Audit-, Status- und Übergabedokumente sowie das Übergabeprüfwerkzeug berichtigt.
+Am Ende der Sitzung war
 `main` mit `origin/main` synchron.
 
 ---
