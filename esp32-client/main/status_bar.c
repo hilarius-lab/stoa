@@ -27,6 +27,15 @@ static int place_text(unsigned char *canvas, const char *utf8, int right) {
     return width;
 }
 
+bool status_bar_format_date(char *out, size_t capacity,
+                            unsigned day, unsigned month, unsigned year) {
+    if (!out || !capacity) return false;
+    out[0] = 0;
+    if (day < 1 || day > 31 || month < 1 || month > 12) return false;
+    int written = snprintf(out, capacity, "%u.%u.%02u", day, month, year % 100);
+    return written > 0 && (size_t)written < capacity;
+}
+
 void status_bar_draw(unsigned char *canvas, const status_state *state) {
     char buffer[16];
 
@@ -36,11 +45,19 @@ void status_bar_draw(unsigned char *canvas, const status_state *state) {
     else
         snprintf(buffer, sizeof(buffer), "--:--");
     text_draw(canvas, &text_font_body, MARGIN, TEXT_TOP, buffer, strlen(buffer));
+    int clock_right = MARGIN + text_measure(&text_font_body, buffer, strlen(buffer));
+    if (state->time_valid && status_bar_format_date(
+            buffer, sizeof(buffer), state->day, state->month, state->year)) {
+        int date_left = clock_right + GAP;
+        text_draw(canvas, &text_font_body, date_left, TEXT_TOP,
+                  buffer, strlen(buffer));
+        clock_right = date_left + text_measure(&text_font_body, buffer, strlen(buffer));
+    }
 
     /* Recording is the one state that earns a mark next to the clock, because
      * it is the only one the user can change by holding a button. */
     if (state->recording) {
-        int left = MARGIN + text_measure(&text_font_body, "00:00", 5) + GAP + 4;
+        int left = clock_right + GAP + 4;
         icon_draw(canvas, ICON_RECORDING, left, ICON_TOP + 2, false);
     }
 

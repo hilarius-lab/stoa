@@ -10,6 +10,7 @@
 #include "card.h"
 #include "header.h"
 #include "history.h"
+#include "settings.h"
 #include "status_bar.h"
 #include "text.h"
 #include "dashboard_map.h"
@@ -268,6 +269,35 @@ static void paging(void) {
     check(dashboard_scroll_for(&tall, 0, 0, viewport) >= 0, "an oversized row terminates");
 }
 
+static void focus_identity(void) {
+    dashboard_focus_identity old = {0};
+    snprintf(old.component_id, sizeof old.component_id, "home:task:two");
+    snprintf(old.entity_type, sizeof old.entity_type, "task");
+    snprintf(old.entity_id, sizeof old.entity_id, "two");
+    dashboard_focus_identity candidate = {0};
+    snprintf(candidate.component_id, sizeof candidate.component_id,
+             "home:task:two");
+    snprintf(candidate.entity_type, sizeof candidate.entity_type, "task");
+    snprintf(candidate.entity_id, sizeof candidate.entity_id, "two");
+    check(dashboard_focus_identity_match(&old, &candidate) == 2,
+          "component id is the primary focus identity");
+    snprintf(candidate.component_id, sizeof candidate.component_id,
+             "new-component-id");
+    check(dashboard_focus_identity_match(&old, &candidate) == 1,
+          "entity reference is the focus identity fallback");
+    candidate.entity_id[0] = 0;
+    check(dashboard_focus_identity_match(&old, &candidate) == 0,
+          "a different target does not retain focus");
+    check(dashboard_focus_fallback(1, 3) == 1,
+          "removed focus chooses the next ordinal");
+    check(dashboard_focus_fallback(3, 2) == 1,
+          "removed last focus chooses the previous card");
+    check(dashboard_focus_fallback(1, 0) == -1,
+          "empty snapshot returns to the menu");
+    check(dashboard_focus_fallback(-1, 3) == -1,
+          "menu focus stays on the menu");
+}
+
 static void history(void) {
     char out[HISTORY_TIME_CHARS];
 
@@ -303,8 +333,30 @@ static void history(void) {
     check(!strcmp(out, "25.10. 02:30"), "before the autumn switch it is still summer time");
 
     check(!strcmp(history_state_label("completed"), "fertig"), "known state translated");
-    check(!strcmp(history_state_label("attention_required"), "braucht Aufmerksamkeit"),
+    check(!strcmp(history_state_label("draining"), "Upload läuft"),
+          "upload state is explicit");
+    check(!strcmp(history_state_label("uploads_pending"), "Upload ausstehend"),
+          "pending upload state is explicit");
+    check(!strcmp(history_state_label("processing"), "in Verarbeitung"),
+          "processing is not phrased as already processed");
+    check(!strcmp(history_state_label("attention_required"), "Aufmerksamkeit"),
           "multi-word state translated");
+    check(history_state_icon("created", false) == ICON_SESSION,
+          "created recording has a session mark");
+    check(history_state_icon("recording", false) == ICON_RECORDING,
+          "live recording has a recording mark");
+    check(history_state_icon("draining", false) == ICON_QUEUE,
+          "upload has a queue mark");
+    check(history_state_icon("processing", false) == ICON_SEV_INFO,
+          "processing has an information mark");
+    check(history_state_icon("completed", false) == ICON_SEV_SUCCESS,
+          "completed has a success mark");
+    check(history_state_icon("attention_required", false) == ICON_SEV_WARNING,
+          "attention has a warning mark");
+    check(history_state_icon("aborted", false) == ICON_SEV_ERROR,
+          "aborted has an error mark");
+    check(history_state_icon("processing", true) == ICON_SEV_ERROR,
+          "last_error overrides a lagging state mark");
     /* An unknown state is shown as it came: not guessed at, not hidden. */
     check(!strcmp(history_state_label("quarantined"), "quarantined"), "unknown state kept");
     check(!strcmp(history_state_label(""), "unbekannt"), "empty state named");
@@ -319,6 +371,70 @@ static void ages(void) {
     header_age_text(out, sizeof out, 60);  check(!strcmp(out, "vor 1 h"), "age one hour");
     header_age_text(out, sizeof out, 190); check(!strcmp(out, "vor 3 h"), "age rounds to hours");
     header_age_text(out, sizeof out, 60 * 30); check(!strcmp(out, "vor 1 d"), "age in days");
+}
+
+static void active_views(void) {
+    check(header_active_view(false, false, false, false) == 0, "home marker");
+    check(header_active_view(true, false, false, false) == 1, "task marker");
+    check(header_active_view(false, true, false, false) == 2, "list marker");
+    check(header_active_view(false, false, true, false) == 3, "history marker");
+    check(header_active_view(false, true, true, false) == 3,
+          "history marker wins over a stale list flag");
+    check(header_active_view(false, false, true, true) == 4,
+          "settings marker wins over a stale history flag");
+}
+
+static void settings_view(void) {
+    settings_diagnostics state = {
+        .firmware = "h4-settings-net",
+        .network_connected = true,
+        .api_configured = true,
+        .api_authenticated = true,
+        .api_compatible = true,
+        .gate_ok = 3,
+        .queue_ready = 2,
+        .queue_acked = 8,
+        .queue_attention = 1,
+        .bytes_free = 30455ull * 1024 * 1024,
+        .bytes_total = 30456ull * 1024 * 1024,
+    };
+    char text[64];
+    check(!strcmp(settings_contract_text(&state), "kompatibel"),
+          "settings shows a compatible contract");
+    state.api_compatible = false;
+    check(!strcmp(settings_contract_text(&state), "noch nicht geprüft"),
+          "settings does not invent a gate result");
+    state.gate_failed = 1;
+    check(!strcmp(settings_contract_text(&state), "Gate fehlgeschlagen"),
+          "settings surfaces a failed gate");
+    state.api_authenticated = false;
+    check(!strcmp(settings_contract_text(&state), "nicht angemeldet"),
+          "settings surfaces missing authentication");
+    settings_queue_text(text, sizeof text, &state);
+    check(!strcmp(text, "bereit 2 · ACK 8 · Achtung 1"),
+          "settings queue summary contains all classes");
+    settings_storage_text(text, sizeof text, &state);
+    check(!strcmp(text, "30455 MiB frei"), "settings storage is content-free");
+    check(settings_scroll_for(100, 260, SETTINGS_ITEM_COUNT, 0) > 0,
+          "settings rows scroll to the final item in a short viewport");
+
+    clear();
+    check(settings_log_line_count("one\ntwo\n") == 2,
+          "settings log counts complete lines");
+    check(settings_log_line_count("one\ntwo") == 2,
+          "settings log counts a final unterminated line");
+    check(settings_log_visible_capacity(100, 792) > 0,
+          "settings log has a visible viewport");
+    settings_draw(canvas, 100, 792, 0, 0, true, true);
+    settings_diagnostics_draw(canvas, 100, 792, &state);
+    settings_logs_draw(canvas, 100, 792,
+                       "+0s I BOOT\n+2s I STORAGE ok=1 free=100MiB total=200MiB\n",
+                       0);
+    int outside = 0;
+    for (int y = 0; y < 800; y++)
+        for (int x = 0; x < 480; x++)
+            if (ink_at(x, y) && (y < 100 || y >= 792)) outside++;
+    check(outside == 0, "settings renderer stays inside its body");
 }
 
 static void staleness(void) {
@@ -355,6 +471,7 @@ static void staleness(void) {
 static void bar_stays_in_its_row(void) {
     clear();
     status_state state = {.time_valid = true, .hour = 23, .minute = 59,
+                          .day = 12, .month = 10, .year = 1989,
                           .queue_ready = 199, .queue_attention = 9,
                           .storage_low = true, .storage_block = true};
     status_bar_draw(canvas, &state);
@@ -363,6 +480,18 @@ static void bar_stays_in_its_row(void) {
         for (int px = 0; px < 480; px++)
             if (ink_at(px, py)) below++;
     check(below == 0, "a busy status bar stays within its 48 px");
+}
+
+static void compact_dates(void) {
+    char text[16];
+    check(status_bar_format_date(text, sizeof text, 2, 4, 2003) &&
+          !strcmp(text, "2.4.03"), "single digit day and month stay compact");
+    check(status_bar_format_date(text, sizeof text, 23, 5, 2024) &&
+          !strcmp(text, "23.5.24"), "two digit day keeps compact month");
+    check(status_bar_format_date(text, sizeof text, 12, 10, 1989) &&
+          !strcmp(text, "12.10.89"), "two digit date is formatted exactly");
+    check(!status_bar_format_date(text, sizeof text, 0, 10, 2026) && !text[0],
+          "an invalid date is not displayed");
 }
 
 int main(void) {
@@ -374,11 +503,15 @@ int main(void) {
     section_heading();
     mapping();
     paging();
+    focus_identity();
     focus_keeps_urgency();
+    active_views();
+    settings_view();
     ages();
     staleness();
     history();
     bar_stays_in_its_row();
+    compact_dates();
     if (failures) { printf("%d check(s) failed\n", failures); return 1; }
     printf("ui: all checks passed\n");
     return 0;

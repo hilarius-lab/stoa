@@ -20,6 +20,14 @@ void dashboard_walk(unsigned char *canvas, const char *json,
                     int top, int bottom, int scroll, int focus_index,
                     dashboard_plan *plan, dashboard_surface surface);
 
+/* Carry a dashboard-family focus across an atomic snapshot replacement.
+ * Stable component id wins, entity type/id is the compatibility fallback. If
+ * the target disappeared, the card now at its former ordinal wins, then the
+ * previous card, then the header (-1). */
+int dashboard_remap_focus(const char *old_json, const char *new_json,
+                          dashboard_surface surface, int old_focus,
+                          int old_scroll, int viewport, int *new_scroll);
+
 /* Draw an entity response as the detail view. Returns the number of body text
  * lines, and reports through `page` how many of them fit at once. Both come
  * from the same layout the drawing uses. `action_focused` only matters when

@@ -65,6 +65,24 @@ bool dashboard_focusable(const char *action_type, bool has_entity_ref) {
     return same(action_type, "open_entity") || has_entity_ref;
 }
 
+static bool same_nonempty(const char *left, const char *right) {
+    return left[0] && right[0] && strcmp(left, right) == 0;
+}
+
+int dashboard_focus_identity_match(const dashboard_focus_identity *wanted,
+                                   const dashboard_focus_identity *candidate) {
+    if (!wanted || !candidate) return 0;
+    if (same_nonempty(wanted->component_id, candidate->component_id)) return 2;
+    if (same_nonempty(wanted->entity_type, candidate->entity_type) &&
+        same_nonempty(wanted->entity_id, candidate->entity_id)) return 1;
+    return 0;
+}
+
+int dashboard_focus_fallback(int old_focus, int new_count) {
+    if (old_focus < 0 || new_count <= 0) return -1;
+    return old_focus < new_count ? old_focus : new_count - 1;
+}
+
 /* --- layout plan and paging ----------------------------------------------- */
 
 int dashboard_row_of(const dashboard_plan *plan, int focus_index) {

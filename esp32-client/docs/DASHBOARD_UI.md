@@ -68,20 +68,23 @@ bewusst reversible Werte.
 
 ## Statusleiste
 
-Uhrzeit, Akku, WLAN, Aufnahmezustand, Queue und Speicherwarnung sind lokal
-berechnet. Kein Dashboardupdate überschreibt sie. Der Server erfährt von ihrer
-Darstellung nichts.
+Uhrzeit, Datum, Akku, WLAN, Aufnahmezustand, Queue und Speicherwarnung sind
+lokal berechnet. Kein Dashboardupdate überschreibt sie. Der Server erfährt von
+ihrer Darstellung nichts.
 
-Links steht die Uhrzeit im Fließtextschnitt, bei laufender Aufnahme gefolgt vom
-Aufnahmekreis. Rechts werden von außen nach innen gesetzt: Akku, WLAN,
-Speicher, Segmente mit Aufmerksamkeitsbedarf, wartende Segmente. Elemente ohne
-Aussage belegen keinen Platz, damit die Leiste im ruhigen Betrieb ruhig bleibt.
-Eine Haarlinie an der Unterkante trennt sie vom Körper.
+Links stehen Uhrzeit und lokales Kalenderdatum im Format `D.M.YY`, ohne
+führende Nullen für Tag und Monat, im selben Fließtextschnitt und auf derselben
+Grundlinie. Bei laufender Aufnahme folgt der Aufnahmekreis auf diese gemeinsame
+Zeitgruppe. Rechts werden von
+außen nach innen gesetzt: Akku, WLAN, Speicher, Segmente mit
+Aufmerksamkeitsbedarf, wartende Segmente. Elemente ohne Aussage belegen keinen
+Platz, damit die Leiste im ruhigen Betrieb ruhig bleibt. Eine Haarlinie an der
+Unterkante trennt sie vom Körper.
 
 Es wird nichts gezeigt, was nicht gemessen ist:
 
 - Vor einer vertrauenswürdigen Zeitsynchronisation steht `--:--`, keine
-  plausible Uhrzeit.
+  plausible Uhrzeit und kein geratenes Datum.
 - Der Akkustand ist bis zur verifizierten TG28-Auswertung unbekannt. Die Zelle
   wird dann **gerastert** dargestellt, nicht leer: ein leerer Umriss wäre die
   Behauptung eines leeren Akkus und damit eine andere Aussage als „nicht
@@ -94,8 +97,8 @@ Es wird nichts gezeigt, was nicht gemessen ist:
 
 Links der Menüknopf als Dreipunktsymbol: fokussierbar und beim Betreten einer
 Ansicht vorausgewählt. Ein Kurzdruck öffnet den horizontalen Ansichtsselector.
-Der aktuelle Build enthält Dashboard, Aufgaben, Listen und Verlauf; als fünfte
-lokale Ansicht kommt „Einstellungen“ hinzu. Rechts, rechtsbündig und nicht
+Der aktuelle Build enthält Dashboard, Aufgaben, Listen, Verlauf und als fünfte
+lokale Ansicht „Einstellungen“. Rechts, rechtsbündig und nicht
 fokussierbar, steht die Zustandsanzeige des Snapshots:
 
 - `gerade eben`, `vor 3 min`, `vor 2 h`, `vor 1 d` bei aktuellem Snapshot
@@ -126,21 +129,28 @@ zusammengefasst. Ihre Reihenfolge bestimmt der Server über `rank`, ersatzweise
 `priority`, ersatzweise die Arrayposition.
 
 Die E-Paper-Projektion liefert nur Sektionen, die mindestens eine vom aktuellen
-Renderer gezeichnete `entity_card` enthalten. Andere erlaubte Komponenten wie
-`alert`, `status_banner`, `text_block` oder `input_prompt` werden auf dieser
-Surface nicht als leere Überschrift angedeutet. Sie bleiben im Default-Vertrag
-für andere Clients unverändert erhalten. Technische offene Sessions erscheinen
-nicht zusätzlich auf dem ESP-Hauptdashboard: Aufnahmezustände gehören in den
-paginierten Verlauf, und die lokale Statusleiste zeigt Aufnahme und Queue.
+Renderer gezeichnete `entity_card` oder `alert`-Komponente enthalten. Andere
+erlaubte Komponenten wie `status_banner`, `text_block` oder `input_prompt`
+werden auf dieser Surface nicht als leere Überschrift angedeutet. Sie bleiben
+im Default-Vertrag für andere Clients unverändert erhalten. Technische offene
+Sessions erscheinen nicht zusätzlich auf dem ESP-Hauptdashboard:
+Aufnahmezustände gehören in den paginierten Verlauf, und die lokale Statusleiste
+zeigt Aufnahme und Queue.
 
-Die aktuelle Filterung ist eine ehrliche Zwischenstufe, nicht das Zielbild des
-Home-Dashboards. Aufgaben und Listen werden in ihren eigenen Ansichten
-ausgeblendet, `alert`/`input_prompt` mangels Renderer entfernt und technische
-Sessions in den Verlauf verschoben. Ohne offene Rückfragen bleibt die
-Hauptansicht daher leer. Das Ziel ist eine kleine, serverseitig priorisierte
-Übersicht aus offenen Rückfragen, handlungsrelevanten Systemhinweisen und
-wenigen nächsten Entitäten. Sie darf keine lokalen Dringlichkeitsregeln
-erfinden und keine bedeutungslosen Processingkarten zurückbringen.
+Home besteht bewusst nur aus offenen Rückfragen, handlungsrelevanten
+Processing-Hinweisen und „Als Nächstes“. Letzteres enthält höchstens drei vom
+Backend ausgewählte Entitäten: zuerst höchstens zwei Tasks aus der bereits
+fachlich gefilterten und sortierten Taskmenge und eine aktive Liste; freie
+Plätze werden mit der verbleibenden Art gefüllt. Die vollständigen Task- und
+Listenbereiche bleiben in ihren eigenen Ansichten. Kopierte Home-Karten haben
+eine eigene stabile Komponenten-ID, behalten aber dieselbe `entity_ref`.
+Firmwareseitige Dringlichkeits- oder Wissensauswahl findet nicht statt.
+
+Ein `alert` wird als vollbreite, nicht fokussierbare Hinweisfläche mit Titel,
+Text, Symbol, Severity, Farb- und Rahmenrolle gezeichnet. Er ist keine
+verkleidete Entität und öffnet keine Detailaktion. Unbekannte optionale
+Komponenten bleiben übersprungen; unbekannte erforderliche Komponenten folgen
+weiter dem Contract-Gate.
 
 ## Karten
 
@@ -307,10 +317,13 @@ Identität. Nach einem Refresh sucht der ESP dieselbe Fokusidentität. Ist sie
 entfallen, wählt er die nächste fokussierbare Karte an der bisherigen Position,
 andernfalls die vorherige und zuletzt den Menüknopf.
 
-Implementierungsstand 8. September: Das Backend liefert die stabilen IDs, die
-Firmware hält den Fokus aber noch nicht über einen Snapshotwechsel. In
-`screen.c` setzt `snapshot_focus_reset` Dashboard-, Task- und Listenfokus auf
-den Menüknopf zurück. Die obige ID-Fallbackregel bleibt offene H4-Arbeit.
+Implementierungsstand 9. September: Das Backend liefert stabile IDs. Die
+Firmware übernimmt einen neuen Snapshot zunächst in einen Pending-Puffer, damit
+der Displaytask alten und neuen Stand gleichzeitig vergleichen kann. Für jede
+der drei Dashboard-Surfaces wird die obige ID-Fallbackregel angewendet und der
+Scrollstand nur so weit angepasst, dass das Ziel vollständig sichtbar bleibt.
+Die gezielten Hostregeln und der ESP-IDF-Build sind grün. Die physische Probe
+vom 9. September bestätigte den Fokus-Erhalt über einen erzwungenen Sync.
 
 ### Blättern
 
@@ -374,26 +387,28 @@ immer ein Fenster an, nie die ganze Liste. Ein Eintrag wiegt rund 520 Byte; eine
 unbegrenzte Antwort sprengt den Empfangspuffer des Geräts nach etwa einem Dutzend
 Aufnahmen und wächst danach lebenslang weiter. Eine Listenroute ohne Paginierung
 ist keine kleine Auslassung, sondern eine, die mit zunehmender Nutzung aufhört zu
-funktionieren. Wie viele Einträge sichtbar sind, entscheidet der Client. Jeder Eintrag zeigt
-Zeitpunkt, `state` und bei Bedarf einen Fehlerhinweis aus `last_error`.
+funktionieren. Wie viele Einträge sichtbar sind, entscheidet der Client. Jede
+Zeile ist die vollständige Geräteansicht dieser Aufnahme: links ein zum Zustand
+passendes Symbol, danach Zeitpunkt und rechts der verständliche Status.
 
 - obere und untere Taste: Auswahl, die Liste scrollt genau so weit mit, dass die
   ausgewählte Zeile vollständig sichtbar bleibt. Der Auswahlring beginnt beim
   Verlaufsknopf in der Kopfzeile und läuft von dort durch die Zeilen; er endet
   an beiden Enden, statt umzulaufen — auf einem Panel mit einer halben Sekunde
   Aufbauzeit sähe ein Umlauf wie ein Sprung der Liste aus.
-- kurze mittlere Betätigung auf einer Zeile: öffnet das Dashboard dieser
-  Aufnahme aus `GET /api/client/v1/sessions/{client_session_id}/dashboard`,
-  gerendert vom selben Renderer wie das Hauptdashboard
+- kurze mittlere Betätigung auf einer Zeile: lädt das paginierte Verlaufsfenster
+  neu und aktualisiert damit den direkt sichtbaren Status; sie öffnet keine
+  Session-Detailansicht
 - kurze mittlere Betätigung auf dem Verlaufsknopf: zurück zum Dashboard. Das
   Verlassen ist ein eigenes Ziel im selben Auswahlring, keine Nebenwirkung eines
   Drucks an beliebiger Stelle.
-- in der geöffneten Aufnahme ist nichts fokussierbar; die mittlere Taste führt
-  zurück zur Liste
-
-Jede Zeile zeigt Zeitpunkt und `state`; ein `last_error` erscheint als Marke am
-linken Rand, niemals als Text. Die Serverformulierung hat unbekannte Länge und
-unbekannten Inhalt und wird nicht auf das Panel gerendert.
+Die Zustände heißen auf dem Gerät `angelegt`, `Aufnahme läuft`, `pausiert`,
+`Upload läuft`, `Upload ausstehend`, `in Verarbeitung`, `fertig`,
+`fehlgeschlagen`, `Aufmerksamkeit` und `abgebrochen`. Ein unbekannter Zustand
+bleibt sichtbar und unübersetzt. Die Symbole unterscheiden laufende Aufnahme,
+Session, Upload, Verarbeitung, Erfolg, Warnung und Fehler. Ein vorhandenes
+`last_error` erzwingt das Fehlerzeichen, der Servertext selbst wird niemals
+gezeichnet: Seine Länge und sein Inhalt sind nicht Teil der Geräteoberfläche.
 
 Zeiten werden in die Anzeigezeitzone umgerechnet, sobald die Uhr synchronisiert
 ist; bis dahin stehen sie unverändert so, wie der Server sie liefert, und die
@@ -407,9 +422,10 @@ kaputtes Feld darf nie als plausibler Zeitpunkt erscheinen. Ein unbekannter
 `state` wird unübersetzt angezeigt: raten wäre falsch, verbergen würde eine
 existierende Aufnahme unterschlagen.
 
-Die geöffnete Aufnahme benutzt dieselbe Hüllstruktur wie das Hauptdashboard und
-denselben Renderer. Ein zweiter Renderer für dasselbe Schema wäre eine zweite
-Stelle, an der das Layout auseinanderlaufen kann.
+Eine manuelle Abbruchaktion für fehlgeschlagene oder aufmerksamkeitsbedürftige
+Aufnahmen ist eine mögliche spätere Erweiterung. Sie braucht eine ausdrückliche
+Bestätigung und eine eng typisierte Serveraktion; sie ist nicht Bestandteil
+dieses Verlaufsschritts.
 
 Der Endpunkt muss im echten Backend existieren. Der Mock liefert ausschließlich,
 was er über eine Session tatsächlich weiß — Zeitpunkt, Zustand, Segmentzahl.
@@ -428,30 +444,45 @@ Contract-Task, kein Firmwarethema.
 Dashboardsnapshot und ohne erreichbaren Server bedienbar. Der Fokus beginnt auf
 „Zurück“; darunter stehen scrollbare Zeilen für:
 
-1. Netzwerk und Server
+1. WLAN hinzufügen
 2. Gerätestatus/Diagnose
 3. SD-Logs
 4. Zeitzone, sobald mehr als die fest eingebaute Berlin-Regel unterstützt wird
 
-„Netzwerk und Server“ aktiviert ausdrücklich einen temporären
-`Notebook-Setup`-Hotspot und zeigt die bereits vorhandenen WLAN-/Portal-QR-Codes.
-Das lokale Portal darf WLAN-Netze, Serveradresse und einen einmaligen
-Enrollment-Code übernehmen; dauerhafte Geräte-Credentials werden weder
-angezeigt noch geloggt. Die bestehende Erstinstallation ersetzt derzeit genau
-eine WLAN-Konfiguration und startet nach dem Speichern neu. Für die
-Einstellungsansicht fehlen Mehrnetzspeicherung sowie ein sichtbarer
-„Abbrechen/zurück zum bisherigen Profil“-Weg, damit ein versehentlicher Einstieg
-nicht zum Speichern zwingt.
+„WLAN hinzufügen“ aktiviert einen temporären `Notebook-Setup`-Hotspot und zeigt
+die WLAN-/Portal-QR-Codes. Dieser Bildschirm bleibt bis zum ausdrücklichen
+Abbruch oder erfolgreichen Speichern stehen; Hintergrund-Sync, Uhr und Queue
+dürfen ihn nicht verlassen oder mit einem anderen QR-Payload neu zeichnen.
+Mitteldruck und die Portal-Schaltfläche „Abbrechen“ kehren zur Settings-Liste
+zurück, ohne die bisherige Konfiguration zu verändern.
+
+Das Settings-Portal enthält ausschließlich WLAN-Name und WLAN-Passwort. Es
+ändert weder Serveradresse noch Enrollment. Ein neues Profil wird zusätzlich
+gespeichert; bis zu fünf eindeutige SSIDs bleiben erhalten. Das zuletzt
+hinzugefügte Profil wird zuerst versucht, bei Nichterreichbarkeit wechselt das
+Gerät automatisch zyklisch zu den übrigen. Die separate Erstinstallation darf
+weiterhin Serveradresse und einmaligen Enrollment-Code übernehmen.
 
 „Gerätestatus/Diagnose“ zeigt nur technische, inhaltsarme Werte: Vertrag/Gate,
 Netz, Queueklassen, Speicher und Softwareversion. Keine Memo-Texte, WLAN-
 Passwörter, Tokens oder Response-Bodies.
 
+Die Settings-Ansicht zeigt alle vier Zeilen und startet den
+Fokus auf „Zurück“. „Diagnose“ öffnet eine lokale Unteransicht mit
+Softwareversion, Contract-/Gate-Zustand, Netzwerk, `ready`-/`acked`-/
+`attention`-Queueklassen und freiem SD-Speicher. Zurück führt zunächst in die
+Settings-Liste und von dort in die zuvor geöffnete Ansicht. „WLAN hinzufügen“
+zeigt `WLAN verbunden|WLAN offline`; Zeitzone zeigt die fest eingebaute
+`Europe/Berlin`-Regel und löst noch keine verdeckte Aktion aus.
+
 „SD-Logs“ ist nicht der Memo-Journalbrowser. `MEMOS/*/JOURNAL.LOG` enthält den
 verlustfreien Zustandsautomaten der Aufnahme und bleibt intern. Vor dem Viewer
 muss ein eigener begrenzter, rotierter und bereinigter Diagnoselog-Sink auf SD
-existieren. Danach kann die Ansicht Dateien und Zeilen scrollen; sie darf keine
-Nutzerinhalte oder Geheimnisse persistieren.
+existieren. Dieser Sink ist umgesetzt: Er akzeptiert nur fest definierte
+Ereignistypen und Zahlenwerte, rotiert drei Generationen zu je höchstens 16 KiB
+und zeigt im Viewer den jüngsten Ausschnitt. Der Viewer startet am neuesten
+Ende, Hoch/Runter scrollt zeilenweise und Mitteldruck führt zurück. Er darf
+keine Nutzerinhalte oder Geheimnisse persistieren.
 
 ## Leerer Zustand und Cache
 

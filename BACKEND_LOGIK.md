@@ -747,7 +747,7 @@ Sie bilden aber noch kein gemeinsames Transaktionsprotokoll für „eine Eingabe
 - Der interne Live-Feed liefert Transkriptstatus, Session-Artefakte, Themen, offene Fragen und thematisch verknüpftes Wissen.
 - Die Auswahl relevanten Wissens im Live-Feed erfolgt über passende Themen und Konfidenzschwellen. Sie ist nicht gleichbedeutend mit automatischer Fragenbeantwortung oder beliebiger Suche zu jedem gesprochenen Satz.
 - Client-Dashboards projizieren gespeicherte Zustände in einen geschlossenen Komponenten-/Aktionskatalog. Surface-spezifische Darstellung und stabile öffentliche IDs gehören zur Projektion, nicht zur Wissensextraktion.
-- Die Projektion `esp32_epaper` entfernt Komponenten, die der aktuelle E-Paper-Renderer nicht zeichnet, anschließend auch deren leere Sektionen. Technische offene Sessions bleiben dort dem paginierten Verlauf vorbehalten. Listen tragen in Übersicht und Detail die Anzahl offener Einträge; die Detailantwort enthält nur aktive Items mit stabiler öffentlicher UUID sowie eine lesbare `content`-Fassung. `PUT /api/client/v1/entities/list-item/{id}/status` setzt `active|done` idempotent; erledigte Items fehlen in späteren Details. Die Default-Surface bleibt davon unberührt.
+- Die Projektion `esp32_epaper` komponiert Home aus offenen Rückfragen, handlungsrelevanten Processing-Hinweisen und höchstens drei nächsten Entitäten. Aus der bereits fachlich gefilterten und sortierten Taskmenge kommen zunächst höchstens zwei Tasks, dazu eine aktive Liste; freie Plätze füllt die verbleibende Art. Vollständige Task-/Listenbereiche bleiben eigene Geräteansichten. `alert` wird auf dem ESP als nicht fokussierbarer Hinweis gerendert; weiterhin nicht gezeichnete Komponenten und danach leere Sektionen werden entfernt. Technische offene Sessions bleiben dem paginierten Verlauf vorbehalten. Kopierte Home-Karten besitzen eigene stabile Komponenten-IDs und dieselbe `entity_ref`; die Firmware hält Fokus über neue Snapshots zuerst per Komponenten-ID, dann per Entity-Referenz und Positionsfallback. Listen tragen in Übersicht und Detail die Anzahl offener Einträge; die Detailantwort enthält nur aktive Items mit stabiler öffentlicher UUID sowie eine lesbare `content`-Fassung. `PUT /api/client/v1/entities/list-item/{id}/status` setzt `active|done` idempotent; erledigte Items fehlen in späteren Details. Die Default-Surface bleibt davon unberührt.
 - SSE signalisiert Zustandsänderungen; Snapshots bleiben für den Clientabgleich relevant.
 
 ### 17.2 Offline-Wissen
@@ -982,3 +982,28 @@ Listen in eigene Ansichten ausgelagert sind, ist die Hauptansicht ohne offene
 Rückfragen leer. Handlungsrelevante `alert`-Komponenten verschwinden korrekt
 statt als leere Überschrift, besitzen aber noch keine gleichwertige Darstellung
 auf dem ESP. Das betrifft nur den Ausgabeweg in Abschnitt 17, nicht A01–A13.
+
+**Codeänderung 2026-09-09 (kleines ESP-Home, Alerts und Fokus-Erhalt):**
+Auslöser war die oben beschriebene leere Home-Zwischenstufe. Input sind die
+bereits backendseitig gefilterten offenen Fragen, problematische Processing-
+Jobzustände (`failed`, `parked`, `attention_required`), die bestehende
+Taskreihenfolge und aktive Listen. `_idle_content('esp32_epaper')` erzeugt
+daraus zusätzlich die auf drei Karten begrenzte Sektion „Als Nächstes“; die
+vollständigen Task-/Listen-Sektionen bleiben für ihre eigenen Ansichten im
+selben Snapshot. Der ESP rendert `alert` als vollbreite, nicht fokussierbare
+Hinweisfläche und filtert andere nicht unterstützte Komponenten weiterhin vor
+der Übertragung. Ein neuer Snapshot wird zunächst in einen Pending-Puffer
+geschrieben. Der Displaytask vergleicht alten und neuen Stand und erhält den
+Fokus je Surface über `component.id`, ersatzweise `entity_ref`; bei Wegfall gilt
+Karte an gleicher Position, sonst vorherige Karte, sonst Menü. Dadurch bleiben
+JSON-Pufferübergabe und Fokusmutation in ihren bisherigen Taskgrenzen. Output
+ist ein weiterhin vertragliches Dashboard ohne neue Endpoint-/DTO-Felder.
+Fehlerpfad: ungültige/entfallene Identität fällt deterministisch zurück;
+fehlende Home-Entitäten oder Systemhinweise lassen ihre Sektion weg. Geprüft
+sind Python-Syntax, gezielte Projektion samt Default-Surface-Isolation und
+Wire-Budget (6605/8192 Byte) sowie ESP-IDF-Build und Flash auf COM9. Danach
+meldete das Gerät ein grünes Contract-Gate und eine leere Fehlerqueue. Der UI-Hosttest bleibt auf
+diesem Windows-Host mangels Host-`cc` nicht wiederholbar. Die physische Probe
+zeigte zwei Aufgaben und die Einkaufsliste unter „Als Nächstes“; der Fokus blieb
+beim erzwungenen Snapshotabruf erhalten. Der Nutzer nahm das Home-Zielbild ab.
+Verarbeitung, Promotion und A01–A13/W01–W10 werden dadurch nicht verändert.

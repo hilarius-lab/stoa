@@ -1,8 +1,13 @@
 # Projektstand
 
-Stand: 2026-09-09, `main` nach `f7785b1`
+Stand: 2026-09-09, abgeschlossener Arbeitsstand vor der TG28-Akkuprüfung
 
 ## Nachgewiesen am realen Gerät
+
+- Das lokale Datum neben der Uhrzeit ist im Format `D.M.YY` implementiert;
+  ESP-IDF-Build und Flash auf COM9 sind grün. Die reale Sichtprobe bestätigte
+  nach Angleichung von Font und Grundlinie eine homogene, gut lesbare
+  Darstellung.
 
 - Hochformat auf logischem 480 × 800-Canvas, UTF-8-Schriften, Icons,
   Statusleiste, Fokusnavigation, Detailseiten und E-Paper-Partial-Wellenform
@@ -40,9 +45,9 @@ Stand: 2026-09-09, `main` nach `f7785b1`
   und erst nach passender `200`-Antwort entfernt. Toggle, Zurücktoggeln,
   Verlassen und das serverseitige Verschwinden von „Hafermilch“ sind physisch
   abgenommen.
-- Der letzte Firmwarebuild und Flash auf COM9 waren grün. Das vollständige
-  Backend-M8-Release-Gate einschließlich logischem Vier-Stunden-Soak lief vor
-  Commit `f7785b1` grün.
+- Der letzte Firmwarebuild (`h4-settings-log`) und Flash auf COM9 waren grün.
+  Das vollständige Backend-M8-Release-Gate einschließlich logischem Vier-
+  Stunden-Soak lief für die aktuellen Dashboard-Backendänderungen grün.
 
 ## Systemgrenze
 
@@ -66,44 +71,74 @@ neue Wissenseingaben. Das allgemeine Vorher/Nachher-Mutationsaudit aus
 
 Umgesetzt sind atomarer Snapshotcache, Alter/Offlinekennzeichnung, lokale
 Statusleiste, vier Ansichten (Dashboard, Aufgaben, Listen, Verlauf), Karten,
-Details, Taskabschluss und interaktive Listenitems. Nicht renderbare
-Komponenten und dadurch leere Überschriften werden auf der E-Paper-Surface
-entfernt; technische Sessions stehen nur im Verlauf.
+Details, Taskabschluss und interaktive Listenitems. Home enthält jetzt offene
+Rückfragen, handlungsrelevante Processing-Hinweise und unter „Als Nächstes“
+höchstens drei serverseitig ausgewählte Entitäten: zuerst höchstens zwei nach
+der bestehenden Backendreihenfolge ausgewählte Tasks und eine aktive Liste;
+freie Plätze füllt die jeweils verbleibende Art. Die vollständigen Task-/
+Listenbereiche bleiben in ihren eigenen Ansichten.
 
-Damit ist die Hauptansicht derzeit ehrlich, aber meist leer: Aufgaben und
-Listen sind eigene Ansichten, technische Sessions sind im Verlauf,
-`alert`/`input_prompt` werden nicht gezeichnet. Nur offene Rückfragen bleiben
-als `entity_card` auf Home. Für ein produktives Home-Dashboard fehlen:
+`alert` wird als nicht fokussierbare vollbreite Hinweisfläche gezeichnet;
+andere nicht renderbare Komponenten und leere Überschriften werden weiter
+entfernt. Technische Sessions stehen nur im Verlauf. Dashboard-, Task- und
+Listenfokus werden bei einem neuen Snapshot zuerst über `component.id`, dann
+über `entity_ref` gehalten. Fällt die Karte weg, folgt die Karte an derselben
+Position, sonst die vorherige und zuletzt der Menüknopf. Backendprojektion,
+Wire-Budget, ESP-IDF-Build und Flash auf COM9 sind grün. Die physische Probe
+zeigte zwei Aufgaben und die Einkaufsliste unter „Als Nächstes“; der Fokus blieb
+beim verzögert einsetzenden erzwungenen Sync erhalten. Für das weitere
+Dashboard fehlen:
 
-1. eine kleine, serverseitig priorisierte Übersicht aus offenen Rückfragen,
-   handlungsrelevanten Systemhinweisen und wenigen nächsten Entitäten;
-2. eine echte Darstellung für Systemhinweise (`alert`-Renderer oder explizit
-   vereinbarte ESP-Kartenprojektion);
-3. der Antwortkreislauf für ausgewählte Rückfragen;
-4. Fokus-Erhalt über Snapshotrevisionen anhand stabiler Komponenten-IDs —
-   `screen.c::snapshot_focus_reset` setzt ihn aktuell auf den Menüknopf;
-5. Klärung/Anzeige des technischen Stands noch nicht fachlich verarbeiteter
-   Aufnahmen im Verlauf;
-6. echtes Controllerfenster im regulären Zeichenpfad sowie später SSE.
+1. der Antwortkreislauf für ausgewählte Rückfragen;
+2. echtes Controllerfenster im regulären Zeichenpfad sowie später SSE.
+
+Der Verlauf zeigt den technischen Sessionzustand nun vollständig in jeder
+Zeile: zustandsabhängiges Symbol, lokale Zeit und deutscher Kurzstatus. Ein
+Mitteldruck aktualisiert das Verlaufsfenster, statt eine leere Session-
+Detailansicht zu öffnen. Der fehlerhafte Listenmarker beim Wechsel in den
+Verlauf ist im Arbeitsstand korrigiert. ESP-IDF-Build und Flash auf COM9 sind
+grün; danach waren Contract-Gate und API kompatibel. Die reale Probe bestätigte
+den korrekten Verlaufsmarker, passende Zustandssymbole und das Aktualisieren
+ohne Session-Detailansicht.
 
 ## Einstellungen: Ziel und Ist-Stand
 
 Die vorhandene Erstinstallation startet per BOOT-Halten einen
 `Notebook-Setup`-Hotspot, zeigt WLAN-/Portal-QR-Codes und speichert genau ein
 WLAN, optionale Serveradresse und Enrollment-Code. Sie startet nach dem
-Speichern neu. Das ist noch keine Einstellungsansicht.
+Speichern neu. Dieser alte Pfad ist noch nicht mit der neuen Einstellungsansicht
+verbunden.
 
-Geplant ist eine lokale fünfte Ansicht mit Fokus auf „Zurück“ und den Zeilen
-Netzwerk/Server, Diagnose, SD-Logs und später Zeitzone. Netzwerk/Server darf das
-vorhandene Portal wiederverwenden, braucht aber Mehrnetzspeicherung und einen
-sicheren Abbruch zurück zum bestehenden Profil. Diagnose bleibt inhaltsarm.
-Vor einem SD-Logbrowser muss ein begrenzter, rotierter und bereinigter Logsink
-entstehen; `MEMOS/*/JOURNAL.LOG` ist ein Aufnahmezustandsjournal, kein
-Diagnoselog.
+Die lokale fünfte Ansicht mit Fokus auf „Zurück“ und den Zeilen WLAN
+hinzufügen, Diagnose, SD-Logs und Zeitzone ist umgesetzt.
+Die Diagnose zeigt ausschließlich Softwareversion, Contract/Gate, Netzwerk,
+Queueklassen und Speicher. WLAN hinzufügen startet jetzt den temporären
+`Notebook-Setup`-Hotspot mit eigenem WLAN-only-Portal. Mitteldruck oder
+Portal-Abbruch kehren ohne Änderung zurück. Bis zu fünf Profile werden
+gespeichert und bei Nichterreichbarkeit automatisch durchprobiert; Server und
+Enrollment bleiben ausschließlich Teil der separaten Erstinstallation.
+Der SD-Logbrowser nutzt jetzt einen eigenen, begrenzten und rotierten Sink mit
+festem Ereignisvokabular. Drei Generationen zu je höchstens 16 KiB sind von den
+Aufnahmejournalen getrennt; der lokale Viewer liest nur den jüngsten
+bereinigten Ausschnitt und scrollt zeilenweise.
+
+Symbolatlas, Firmwarebuild und Flash auf COM9 sind grün. Nach dem automatischen
+Verbindungsretry meldete das Gerät `compatible=1`; die Queue war mit
+`ready=0`, `acked=8` und `attention=0` sauber. Die reale Navigation-/
+Lesbarkeitsprobe bestätigte den fünften Marker, Fokusstart auf „Zurück“, alle
+vier Zeilen, die Diagnose und die Rückkehrpfade; der Nutzer hat die erste Stufe
+abgenommen. Hotspot, stabiler QR-Code und unverändertes Altprofil nach Abbruch
+sind ebenfalls real bestätigt. Speichern, wiederholte Auswahl und Rückfall mit
+einem zweiten realen Netz funktionieren; der Live-Wechsel erhält das bereits
+geladene Dashboard. Der Logsink ist gebaut, geflasht und auf der realen
+SD-Karte beschrieben; die reale Sichtprobe bestätigte Inhalt, Scrollen und
+Rückkehr. Der
+Firmwarebezeichner ist `h4-settings-log`, weil diese Arbeit
+weiterhin die H4-Oberfläche erweitert und nicht den H5-Meetingmodus behauptet.
 
 ## Noch offen bis zum produktiven Betrieb
 
-- Home-Dashboard, Einstellungen/Diagnose/SD-Logs und Verlaufstatus wie oben
+- Rückfragen-Antwortkreislauf
 - automatische Credentialrotation und vollständige persistierte Retry-/Backoff-
   Klassen
 - verschlüsseltes NVS und verschlüsselte Audiodateien
@@ -113,6 +148,12 @@ Diagnoselog.
   Langzeit-/Kältetests
 - Backend: Watchdog für verwaiste `running`-Jobs und die Auto-Modus-Lücken aus
   `BACKEND_LOGIK.md` Abschnitt 18
+
+Die auswählbare IANA-Zeitzone ist ein späteres Komfortfeature. Bis dahin bleibt
+die verifizierte `Europe/Berlin`-Regel bewusst fest eingebaut. Als nächster
+abgegrenzter Hardwarepunkt folgt die ausschließlich lesende Identifikation und
+verifizierte Auswertung des TG28 für eine echte Akkuanzeige; erst nach dieser
+Gerätearbeit wird der Backend-Auto-Modus ab A01 fortgesetzt.
 
 Historische Messwerte und Fehleranalysen stehen im `CHANGELOG.md` und in
 `CLIENT_SERVER_STATE.md`; diese Datei beschreibt nur den aktuellen Übergabestand.

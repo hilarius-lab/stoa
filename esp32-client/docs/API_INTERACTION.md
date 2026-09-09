@@ -156,9 +156,18 @@ gebündelt, Aufnahmezustand und wichtige Alerts sofort dargestellt, sonst wird
 ein vollständiger Render geplant. SSE-Ausfall degradiert zu capability-gesteuertem
 Polling und beeinflusst Aufnahme/Upload nicht.
 
+Der ESP-Verlauf lädt ein begrenztes Fenster über
+`GET /api/client/v1/sessions?limit=12`. Zustand, Symbol und Zeitpunkt werden
+vollständig in der Zeile dargestellt. Ein Mitteldruck auf eine Zeile lädt
+dieses Fenster neu; er öffnet nicht mehr das häufig leere Session-Dashboard.
+Der Session-Dashboard-Endpunkt bleibt für ausdrücklich servergetriebene
+`open_session`-Karten und andere Clients bestehen.
+
 `entity_card.id` und `entity_ref` derselben logischen Entität sind innerhalb
-einer Surface über Revisionen und Umordnungen stabil. Der Fokus folgt der ID,
-nicht der Arrayposition.
+einer Surface über Revisionen und Umordnungen stabil. Der Fokus folgt zuerst
+der Komponenten-ID, ersatzweise der Entity-Referenz. Entfällt beides, wird die
+Karte am bisherigen Fokusindex gewählt, sonst die vorherige und zuletzt der
+Menüknopf.
 
 Eine bereits geöffnete Detailansicht hält eine lokale Kopie ihrer validierten
 Daten. Ein neuer Snapshot darf die zugrunde liegende Karte entfernen, schließt
@@ -195,6 +204,12 @@ weder Tasktabellen noch Listenfachlogik. Details lädt er bei Bedarf über den
 generischen Entity-Link. Für Tasks und Listen gibt es außerdem eigene Ansichten
 (Ansichtswähler über das Menü in der Kopfzeile, neben Dashboard und Verlauf),
 die dieselben `today`-/`lists`-Sektionen gefiltert zeigen.
+
+Die Hauptansicht zeigt zusätzlich die getrennte Sektion `home-next` mit
+höchstens drei serverseitig ausgewählten Task-/Listenkarten. Diese Kopien
+verwenden eine Home-spezifische stabile Komponenten-ID, verweisen aber über
+dieselbe `entity_ref` auf das fachliche Objekt. `alert` wird vollbreit und ohne
+Fokus/Aktion dargestellt; seine Severity darf die Dringlichkeit anheben.
 
 **Korrigiert 7. September 2026, vierte Runde:** Dieser Abschnitt behauptete
 hier, das Gerät biete keine Abhakaktion und ein Kurzdruck in der Detailansicht

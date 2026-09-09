@@ -113,7 +113,7 @@ alle Segmente genau einmal logisch zustellen und serverseitig vollständig verar
 
 - bevorzugtes Hochformat mit logischem 480 × 800-Canvas
 - Tasche-sicheres Tastenmodell und optionales Locking über IMU/Long-Press
-- Android-artige obere Statusleiste mit Uhrzeit sowie Akku-, Speicher-, WLAN-
+- Android-artige obere Statusleiste mit Uhrzeit, lokalem Datum `D.M.YY` sowie Akku-, Speicher-, WLAN-
   und Queueindikatoren; Akkuanzeige bleibt auch bei USB-C-Versorgung Teil des
   langfristigen Produktlayouts
 - klare Zustände `lokal`, `wartet`, `übertragen`, `verarbeitet`, `Antwort vorhanden`
@@ -126,13 +126,12 @@ alle Segmente genau einmal logisch zustellen und serverseitig vollständig verar
 - **Einstellungsansicht mit Log-Abruf von der SD-Karte.** Scrollbare Ansicht,
   um die lokal auf der SD-Karte gespeicherten Logs direkt am Gerät
   durchzusehen.
-- **Klären, was der Verlauf tatsächlich zeigt.** Stand 8. September: Die
-  Detailansicht einer Verlaufssession zeigt nur dann etwas an, wenn die
-  zugehörige Aufnahme bereits fachlich verarbeitet wurde — der reine
-  technische Aufnahme-/Uploadstatus (aufgenommen, hochgeladen, in
-  Verarbeitung) fehlt als eigene Information für noch nicht abgeschlossene
-  Sessions. Zu entscheiden: Soll der Verlauf auch unverarbeitete Aufnahmen
-  mit ihrem technischen Stand zeigen, statt nur das fachliche Ergebnis?
+- **Verlauf zeigt den technischen Stand direkt.** Arbeitsstand 9. September:
+  Jede Aufnahmezeile trägt ein zustandsabhängiges Symbol, lokale Zeit und einen
+  verständlichen Status von Aufnahme/Upload über Verarbeitung bis
+  fertig/fehlgeschlagen/abgebrochen. Ein Mitteldruck aktualisiert die Liste,
+  statt eine leere Session-Detailansicht zu öffnen. Firmwarebuild und Flash auf
+  COM9 sowie die reale Sicht-/Navigationsprobe sind grün.
 - **Akkuanzeige mit echter Messung.** Das Symbol, die massive Füllung und die
   Prozentanzeige sind gezeichnet und warten nur auf einen Wert; `battery_known`
   ist dauerhaft falsch. Zu tun ist die verifizierte Auswertung des TG28 —
@@ -169,16 +168,20 @@ alle Segmente genau einmal logisch zustellen und serverseitig vollständig verar
   aufnehmen. Das neue `work_start_at`/CalDAV-`DTSTART` ist ein eigener
   Backend-/Clientvertragsschritt, keine lokal erfundene Firmwaresemantik.
 
-Stand 8. September: Tasks, Listen, Verlauf und interaktive Details sind real
-abgenommen. Die Hauptansicht ist nach der Entfernung redundanter Sessions und
-nicht renderbarer Komponenten im Normalfall leer und zeigt höchstens offene
-Rückfragen. Für das eigentliche Home-Dashboard fehlen deshalb eine bewusst
-serverseitig priorisierte Übersicht und eine sichtbare Darstellung
-handlungsrelevanter Systemhinweise. Ebenfalls offen: Fokus über
-Snapshotrevisionen anhand stabiler IDs halten; die Firmware setzt ihn derzeit
-auf den Menüknopf zurück. Die produktive Einstellungsansicht gehört als lokale
-fünfte Ansicht neben Dashboard, Aufgaben, Listen und Verlauf; Details stehen in
-`docs/DASHBOARD_UI.md`.
+Stand 9. September: Tasks, Listen, Verlauf und interaktive Details sind real
+abgenommen. Das kleine Home-Dashboard, der nicht fokussierbare `alert`-Renderer
+und der Fokus-Erhalt über Snapshotrevisionen sind implementiert; gezielter
+Backend-/Wire-Test, vollständiges M8-Gate, ESP-IDF-Build, Flash und physische
+Sicht-/Fokusprobe sind grün. Home zeigt offene Rückfragen, handlungsrelevante
+Processing-Hinweise und höchstens drei serverseitig ausgewählte nächste
+Task-/Listenentitäten, ohne die vollständigen Ansichten zu duplizieren. Der
+Rückfragen-Antwortkreislauf bleibt eigene spätere Arbeit. Die Settings-Shell ist
+als lokale fünfte Ansicht samt inhaltsarmer Diagnose implementiert; Build,
+Flash und reale Navigation-/Lesbarkeitsprobe sind grün. Hotspoteinstieg,
+Mehrnetzprofile und Rückfall sind mit zwei realen Netzen bestätigt. Der
+bereinigte, rotierte SD-Logsink samt Viewer ist implementiert, gebaut und
+geflasht; SD-Schreibung, Darstellung, Scrollen und Rückkehr sind real bestätigt.
+Details stehen in `docs/DASHBOARD_UI.md`.
 
 ## H5 – Meetingmodus
 

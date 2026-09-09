@@ -53,12 +53,18 @@ static void on_sync(struct timeval *received) {
 static void clock_task(void *unused) {
     (void)unused;
     while (true) {
-        screen_status_time(clock_minutes());
-        /* Aligned to the next full minute rather than a free-running 60 s
-         * delay, so the shown minute changes when the minute actually does. */
         time_t now = time(NULL);
         struct tm local;
         localtime_r(&now, &local);
+        if (atomic_load(&synced))
+            screen_status_time((unsigned)(local.tm_hour * 60 + local.tm_min),
+                               (unsigned)local.tm_mday,
+                               (unsigned)(local.tm_mon + 1),
+                               (unsigned)(local.tm_year + 1900));
+        else
+            screen_status_time(CLOCK_TIME_UNKNOWN, 0, 0, 0);
+        /* Aligned to the next full minute rather than a free-running 60 s
+         * delay, so the shown minute changes when the minute actually does. */
         int wait = 60 - local.tm_sec;
         /* A notification from a completed sync cuts the wait short; otherwise
          * this is the same aligned minute delay as before. */
@@ -95,11 +101,3 @@ void clock_network_up(void) {
 }
 
 bool clock_ready(void) { return atomic_load(&synced); }
-
-unsigned clock_minutes(void) {
-    if (!atomic_load(&synced)) return CLOCK_TIME_UNKNOWN;
-    time_t now = time(NULL);
-    struct tm local;
-    localtime_r(&now, &local);
-    return (unsigned)(local.tm_hour * 60 + local.tm_min);
-}

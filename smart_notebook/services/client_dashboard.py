@@ -45,11 +45,10 @@ ESP_DROP_KEYS=("entity_type","spacing_role","preferred_span","priority","layout"
 #    This is the one product judgement in this file and the easiest thing to
 #    revert: put an id back and it reappears.
 ESP_DROP_SECTIONS=("recent-knowledge","topic-trends","open-chats","active-sessions")
-# dashboard.c currently lays out entity cards only. Sending alerts, status
-# banners, text blocks or input prompts produces an empty section heading, not
-# a degraded rendering. Filter those components server-side and remove their
-# now-empty section so the panel never claims there is content it cannot show.
-ESP_RENDERED_COMPONENTS=("entity_card",)
+# dashboard.c lays out entity cards and a compact, non-focusable alert surface.
+# Status banners, text blocks and input prompts still produce no useful output
+# on this client and are removed together with any section they leave empty.
+ESP_RENDERED_COMPONENTS=("entity_card","alert")
 # 3. Counts and lengths. General sections stay at a handful of cards with a
 #    two-line preview. The dedicated Tasks view scrolls and must not silently
 #    drop an actionable task merely because three others sort ahead of it, so
@@ -57,6 +56,7 @@ ESP_RENDERED_COMPONENTS=("entity_card",)
 #    Sending less than `limits` announces is allowed — they are maxima.
 ESP_ITEMS_PER_SECTION=3
 ESP_TASK_ITEMS_PER_SECTION=10
+ESP_HOME_ITEMS=3
 ESP_TITLE_MAX=80
 ESP_PREVIEW_MAX=120
 ESP_SESSIONS_MAX=6
@@ -114,9 +114,9 @@ def _project_for_epaper(content):
         if projected.get("items"):sections.append(projected)
     return {**content,"sections":sections,"sessions":content["sessions"][:ESP_SESSIONS_MAX]}
 
-def _card(kind,entity_id,title,preview,status="active",priority=.5,icon=None,action=None,ref_type=None):
+def _card(kind,entity_id,title,preview,status="active",priority=.5,icon=None,action=None,ref_type=None,component_id=None):
     reference_type=ref_type or kind
-    return {"component":"entity_card","required":False,"id":f"{reference_type}:{entity_id}","entity_ref":{"type":reference_type,"id":str(entity_id)},
+    return {"component":"entity_card","required":False,"id":component_id or f"{reference_type}:{entity_id}","entity_ref":{"type":reference_type,"id":str(entity_id)},
             "entity_type":kind,"status":status,"title":_clip(title,TITLE_MAX),"preview":_clip(preview,PREVIEW_MAX),"icon":icon or kind,
             "color_role":"neutral","border_role":"subtle","spacing_role":"normal","preferred_span":"auto",
             "priority":priority,"action":action or {"type":"open_entity","params":{"entity_type":reference_type,"entity_id":str(entity_id)}}}
@@ -125,6 +125,36 @@ def _card(kind,entity_id,title,preview,status="active",priority=.5,icon=None,act
 def _section(section_id,title,reason,cards,rank):
     return {"component":"section","required":False,"id":section_id,"title":title,"reason_code":reason,
             "reason_text":title,"rank":rank,"layout":{"preferred_span":"full"},"items":cards[:10]}
+
+
+def _home_next_cards(tasks,lists,now):
+    """A quiet, balanced ESP home selection; full collections stay in views.
+
+    The task and list queries have already applied the domain filters and their
+    authoritative order. Home takes at most two tasks and one list first, then
+    fills unused slots from whichever kind remains. Duplicate cards get a
+    surface-local component id while keeping the same entity reference.
+    """
+    def task_card(row):
+        return _card("task",row[0],row[1][:100],
+                     _task_window_preview(row[2],row[3],row[4],now),
+                     "open",row[4],"task",ref_type="task",
+                     component_id=f"home:task:{row[0]}")
+
+    def list_card(row):
+        return _card("list",row[0],row[1],(row[4] or row[2] or "")[:240],
+                     f"{row[3]} offen",min(1,.4+row[3]/20),"list",ref_type="list",
+                     component_id=f"home:list:{row[0]}")
+
+    selected=[task_card(row) for row in tasks[:2]]
+    if lists and len(selected)<ESP_HOME_ITEMS:selected.append(list_card(lists[0]))
+    for row in tasks[2:]:
+        if len(selected)>=ESP_HOME_ITEMS:break
+        selected.append(task_card(row))
+    for row in lists[1 if lists else 0:]:
+        if len(selected)>=ESP_HOME_ITEMS:break
+        selected.append(list_card(row))
+    return selected
 
 
 def _ensure_identities(c,entity_type,table,where="TRUE",params=()):
@@ -187,7 +217,7 @@ def _idle_content(surface="default"):
             _ensure_identities(c,"list_item","list_items","archived=FALSE AND status='active'")
         c.commit()
         now=datetime.now(TIMEZONE)
-        failures=c.execute("SELECT count(*) FROM processing_jobs WHERE status='failed'").fetchone()[0]
+        failures=c.execute("SELECT count(*) FROM processing_jobs WHERE status IN('failed','parked','attention_required')").fetchone()[0]
         questions=c.execute("""SELECT i.public_id,q.question_text,q.priority FROM session_questions q JOIN client_entity_identities i ON i.entity_type='question' AND i.internal_id=q.id
         WHERE q.status='open' ORDER BY q.priority DESC,q.updated_at DESC LIMIT 10""").fetchall()
         notes=c.execute("""SELECT e.public_id,n.content,n.updated_at FROM notes n JOIN client_knowledge_entities e ON e.entity_type='note' AND e.internal_id=n.id
@@ -213,9 +243,12 @@ def _idle_content(surface="default"):
         HAVING count(li.id) FILTER(WHERE li.archived=FALSE AND li.status='active')>0
         ORDER BY l.updated_at DESC LIMIT 10""").fetchall() if surface=="esp32_epaper" else []
     if failures:
-        sections.append(_section("system-attention","Systemhinweise","system_attention",[{"component":"alert","required":False,"id":"failed-jobs","severity":"warning","title":"Verarbeitung benötigt Aufmerksamkeit","text":f"{failures} Job(s) sind fehlgeschlagen.","icon":"warning"}],0))
+        attention_text="1 Vorgang bitte prüfen." if failures==1 else f"{failures} Vorgänge bitte prüfen."
+        sections.append(_section("system-attention","Systemhinweise","system_attention",[{"component":"alert","required":False,"id":"processing-attention","severity":"warning","title":"Verarbeitung benötigt Aufmerksamkeit","text":attention_text,"icon":"warning","color_role":"warning","border_role":"emphasis"}],0))
     if questions:sections.append(_section("open-clarifications","Offene Fragen","clarification_due",[_card("question_open",r[0],r[1],r[1],priority=r[2],icon="question",action={"type":"open_clarification","params":{"question_id":str(r[0])}},ref_type="question") for r in questions],10))
     if sessions:sections.append(_section("active-sessions","Offene Sessions","active_session",[_card("session",s["client_session_id"],s.get("state","Session"),s.get("state",""),s["state"],.7,"session",{"type":"open_session","params":{"client_session_id":s["client_session_id"]}}) for s in sessions],20))
+    home_next=_home_next_cards(tasks,lists,now)
+    if home_next:sections.append(_section("home-next","Als Nächstes","next_entities",home_next,23))
     if tasks:sections.append(_section("today","Aufgaben","due_today",[_card("task",r[0],r[1][:100],_task_window_preview(r[2],r[3],r[4],now),"open",r[4],"task",ref_type="task") for r in tasks],25))
     if lists:sections.append(_section("lists","Listen","active_lists",[_card("list",r[0],r[1],(r[4] or r[2] or "")[:240],f"{r[3]} offen",min(1,.4+r[3]/20),"list",ref_type="list") for r in lists],27))
     knowledge=[_card("note",r[0],r[1][:100],r[1],priority=.5) for r in notes]+[_card("fact",r[0],r[1][:100],r[1],r[2],r[3],"fact") for r in facts]

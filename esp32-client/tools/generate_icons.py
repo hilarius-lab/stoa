@@ -264,6 +264,15 @@ def history(s):
     d.line((s // 2, s // 2, s // 2 + 6, s // 2 + 3), fill=255, width=STROKE)
     return image
 
+def settings(s):
+    """Three controls read more cleanly than a tiny cog on the one-bit panel."""
+    image, d = new(s)
+    for y, knob in ((5, 8), (12, 16), (19, 11)):
+        d.line((3, y, s - 4, y), fill=255, width=STROKE)
+        d.ellipse((knob - 2, y - 2, knob + 2, y + 2), fill=0)
+        d.ellipse((knob - 2, y - 2, knob + 2, y + 2), outline=255, width=STROKE)
+    return image
+
 ICONS = [
     ("generic", generic, ART), ("microphone", microphone, ART),
     ("recording", recording, ART), ("session", session, ART),
@@ -278,6 +287,7 @@ ICONS = [
     ("battery", battery, BATTERY), ("storage", storage, STATUS),
     ("queue", queue, STATUS), ("offline", offline, STATUS),
     ("menu", menu, ART), ("home", home, ART), ("history", history, ART),
+    ("settings", settings, ART),
 ]
 
 def pack(image, size):

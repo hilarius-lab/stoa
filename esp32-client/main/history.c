@@ -12,18 +12,34 @@ const char *history_state_label(const char *state) {
     if (!state || !state[0]) return "unbekannt";
     /* The closed set from the contract's `session_states`. */
     if (!strcmp(state, "created"))           return "angelegt";
-    if (!strcmp(state, "recording"))         return "nimmt auf";
+    if (!strcmp(state, "recording"))         return "Aufnahme läuft";
     if (!strcmp(state, "paused"))            return "pausiert";
-    if (!strcmp(state, "draining"))          return "überträgt";
-    if (!strcmp(state, "processing"))        return "verarbeitet";
+    if (!strcmp(state, "draining"))          return "Upload läuft";
+    if (!strcmp(state, "uploads_pending"))   return "Upload ausstehend";
+    if (!strcmp(state, "processing"))        return "in Verarbeitung";
     if (!strcmp(state, "completed"))         return "fertig";
     if (!strcmp(state, "failed"))            return "fehlgeschlagen";
-    if (!strcmp(state, "attention_required"))return "braucht Aufmerksamkeit";
+    if (!strcmp(state, "attention_required"))return "Aufmerksamkeit";
     if (!strcmp(state, "aborted"))           return "abgebrochen";
     /* A state the firmware does not know is shown as it came. Translating it to
      * something familiar would be a guess, and hiding the row would hide a
      * recording that exists. */
     return state;
+}
+
+icon_id history_state_icon(const char *state, bool has_error) {
+    if (has_error) return ICON_SEV_ERROR;
+    if (!state || !state[0]) return ICON_SEV_INFO;
+    if (!strcmp(state, "recording")) return ICON_RECORDING;
+    if (!strcmp(state, "draining") || !strcmp(state, "uploads_pending"))
+        return ICON_QUEUE;
+    if (!strcmp(state, "completed")) return ICON_SEV_SUCCESS;
+    if (!strcmp(state, "failed") || !strcmp(state, "aborted"))
+        return ICON_SEV_ERROR;
+    if (!strcmp(state, "paused") || !strcmp(state, "attention_required"))
+        return ICON_SEV_WARNING;
+    if (!strcmp(state, "created")) return ICON_SESSION;
+    return ICON_SEV_INFO; /* processing and unknown forward-compatible states */
 }
 
 /* Days between 1970-01-01 and the given civil date, proleptic Gregorian.
@@ -108,12 +124,14 @@ void history_row_draw(unsigned char *canvas, const history_row *row,
 
     int text_y = y + (HISTORY_ROW_HEIGHT - 6 - text_font_preview.line_height) / 2;
 
-    /* The failure mark sits in its own gutter so the time column stays aligned
-     * whether or not a row carries one. */
-    int mark = icon_size(ICON_SEV_ERROR);
-    if (row->failed)
-        icon_draw(canvas, ICON_SEV_ERROR, x, y + (HISTORY_ROW_HEIGHT - 6 - mark) / 2, false);
-    int left = x + mark + 8;
+    /* Every row carries its state mark. A fixed 24 px gutter keeps the time
+     * column aligned even though severity, queue and recording glyphs differ
+     * slightly in size. */
+    const int mark_gutter = 24;
+    int mark = icon_size(row->icon);
+    icon_draw(canvas, row->icon, x + (mark_gutter - mark) / 2,
+              y + (HISTORY_ROW_HEIGHT - 6 - mark) / 2, false);
+    int left = x + mark_gutter + 8;
 
     text_draw(canvas, &text_font_preview, left, text_y, row->when, strlen(row->when));
 

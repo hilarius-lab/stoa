@@ -20,7 +20,5 @@ void clock_network_up(void);
  * treat the wall clock as unknown rather than as an approximation. */
 bool clock_ready(void);
 
-/* Minutes since local midnight, or CLOCK_TIME_UNKNOWN before the first
- * synchronisation. The value already carries the display timezone. */
+/* Value passed to the screen before the first synchronisation. */
 #define CLOCK_TIME_UNKNOWN 0xFFFFFFFFu
-unsigned clock_minutes(void);

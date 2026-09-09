@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdbool.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 #include "freertos/FreeRTOS.h"
@@ -20,38 +21,76 @@
 #include "recorder.h"
 #include "api_client.h"
 #include "clock.h"
+#include "network_config.h"
+#include "diagnostic_log.h"
 #include <fcntl.h>
 #include <unistd.h>
 #include "driver/usb_serial_jtag.h"
 #include "driver/usb_serial_jtag_vfs.h"
 
-static const char page[] =
+static const char initial_page[] =
 "<!doctype html><html lang=de><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
 "<title>Notebook einrichten</title><style>body{font:18px system-ui;max-width:420px;margin:40px auto;padding:20px;background:#f5f3ee}"
-"input,button{box-sizing:border-box;width:100%;padding:12px;margin:8px 0 20px}button{background:#183e34;color:white;border:0}label{display:block}</style>"
+"input,button{box-sizing:border-box;width:100%;padding:12px;margin:8px 0 20px}button{background:#183e34;color:white;border:0}button.secondary{background:#666}label{display:block}</style>"
 "<h1>Notebook einrichten</h1><p>Verbinde dein Notebook mit einem 2,4-GHz-WLAN.</p>"
 "<form><label>WLAN-Name<input id=s maxlength=32 required></label><label>WLAN-Passwort<input id=p type=password maxlength=63 autocomplete=new-password></label>"
 "<label>Serveradresse (optional)<input id=u type=url placeholder='http://192.168.1.100:8000' maxlength=255></label>"
 "<label>Enrollment-Code (optional)<input id=e maxlength=200 autocomplete=off></label>"
-"<p>Zum WLAN-Test leer lassen. Ein Backend ist nicht erforderlich. HTTP ist fuer lokale Tests erlaubt.</p><button>Speichern</button></form><p id=r role=status></p>"
+"<p>Eine leere Serveradresse behaelt die bisherige Einstellung. HTTP ist fuer lokale Tests erlaubt.</p><button>Speichern</button><button class=secondary type=button id=c>Abbrechen und bisheriges WLAN verwenden</button></form><p id=r role=status></p>"
 "<script>document.querySelector('form').onsubmit=async e=>{e.preventDefault();let b=document.querySelector('button');b.disabled=true;"
 "try{let a=await fetch('/configure',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ssid:document.querySelector('#s').value,password:document.querySelector('#p').value,server:document.querySelector('#u').value,enrollment_code:document.querySelector('#e').value})});"
-"document.querySelector('#r').textContent=await a.text()}catch(e){document.querySelector('#r').textContent='Verbindung unterbrochen. Bitte erneut versuchen.'}b.disabled=false}</script></html>";
+"document.querySelector('#r').textContent=await a.text()}catch(e){document.querySelector('#r').textContent='Verbindung unterbrochen. Bitte erneut versuchen.'}b.disabled=false};"
+"document.querySelector('#c').onclick=async()=>{let r=document.querySelector('#r');try{let a=await fetch('/cancel',{method:'POST'});r.textContent=await a.text()}catch(e){r.textContent='Verbindung beendet. Das Notebook kehrt zum bisherigen WLAN zurueck.'}}</script></html>";
+
+static const char add_network_page[] =
+"<!doctype html><html lang=de><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
+"<title>WLAN hinzufuegen</title><style>body{font:18px system-ui;max-width:420px;margin:40px auto;padding:20px;background:#f5f3ee}"
+"input,button{box-sizing:border-box;width:100%;padding:12px;margin:8px 0 20px}button{background:#183e34;color:white;border:0}button.secondary{background:#666}label{display:block}</style>"
+"<h1>WLAN hinzufuegen</h1><p>Fuege ein weiteres 2,4-GHz-WLAN hinzu. Bereits gespeicherte WLANs bleiben erhalten; das Notebook verwendet automatisch ein erreichbares Profil.</p>"
+"<form><label>WLAN-Name<input id=s maxlength=32 required></label><label>WLAN-Passwort<input id=p type=password maxlength=63 autocomplete=new-password></label>"
+"<button>WLAN hinzufuegen</button><button class=secondary type=button id=c>Abbrechen</button></form><p id=r role=status></p>"
+"<script>document.querySelector('form').onsubmit=async e=>{e.preventDefault();let b=document.querySelector('button');b.disabled=true;"
+"try{let a=await fetch('/configure',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ssid:document.querySelector('#s').value,password:document.querySelector('#p').value})});"
+"document.querySelector('#r').textContent=await a.text()}catch(e){document.querySelector('#r').textContent='Verbindung unterbrochen. Bitte erneut versuchen.'}b.disabled=false};"
+"document.querySelector('#c').onclick=async()=>{let r=document.querySelector('#r');try{let a=await fetch('/cancel',{method:'POST'});r.textContent=await a.text()}catch(e){r.textContent='Verbindung beendet. Das Notebook kehrt zum bisherigen WLAN zurueck.'}}</script></html>";
+
+static httpd_handle_t portal_server;
+static atomic_bool portal_cancel_requested, portal_saved_requested;
+static bool portal_active;
+static atomic_bool portal_cancellable;
+static char portal_password[17];
+static notebook_network_config network_configuration;
+static unsigned active_network;
+static atomic_bool station_has_ip;
+/* Wi-Fi callbacks run in the shared event loop and therefore only publish a
+ * tiny state edge. SD I/O for the durable diagnostic happens in app_main. */
+static atomic_int wifi_diag_pending;
 
 static esp_err_t root(httpd_req_t *r) {
     httpd_resp_set_type(r, "text/html; charset=utf-8");
     httpd_resp_set_hdr(r, "Cache-Control", "no-store");
-    return httpd_resp_send(r, page, HTTPD_RESP_USE_STRLEN);
+    const char *body = atomic_load(&portal_cancellable)
+        ? add_network_page : initial_page;
+    return httpd_resp_send(r, body, HTTPD_RESP_USE_STRLEN);
 }
 
 static esp_err_t configure(httpd_req_t *r) {
-    char body[1024];
-    if (r->content_len == 0 || r->content_len >= sizeof(body))
+    bool adding_network = atomic_load(&portal_cancellable);
+    if (r->content_len == 0 || r->content_len >= 1024)
         return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "Ungueltige Eingabe.");
+    char *body = calloc(1, r->content_len + 1);
+    if (!body)
+        return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR,
+                                   "Kein Speicher.");
     size_t used = 0;
     while (used < r->content_len) {
         int count = httpd_req_recv(r, body + used, r->content_len - used);
-        if (count <= 0) return ESP_FAIL;
+        if (count == HTTPD_SOCK_ERR_TIMEOUT) continue;
+        if (count <= 0) {
+            memset(body, 0, r->content_len + 1);
+            free(body);
+            return ESP_FAIL;
+        }
         used += count;
     }
     body[used] = 0;
@@ -61,46 +100,178 @@ static esp_err_t configure(httpd_req_t *r) {
     cJSON *u = cJSON_GetObjectItemCaseSensitive(j, "server");
     cJSON *e = cJSON_GetObjectItemCaseSensitive(j, "enrollment_code");
     const char *server_url = cJSON_IsString(u) ? u->valuestring : "";
-    bool server_valid = !u || (cJSON_IsString(u) && (server_url[0] == '\0' ||
-        (strncmp(server_url, "https://", 8) == 0 && strlen(server_url) > 8) ||
-        (strncmp(server_url, "http://", 7) == 0 && strlen(server_url) > 7)));
-    bool valid = cJSON_IsString(s) && cJSON_IsString(p) && server_valid && (!e || cJSON_IsString(e));
-    if (valid) valid = strlen(s->valuestring) > 0 && strlen(s->valuestring) <= 32 &&
-        (strlen(p->valuestring) == 0 || strlen(p->valuestring) >= 8) && strlen(p->valuestring) <= 63 &&
-        strlen(server_url) <= 255 && (!cJSON_IsString(e) || strlen(e->valuestring) <= 200);
+    const char *enrollment = cJSON_IsString(e) ? e->valuestring : "";
+    bool valid = cJSON_IsString(s) && cJSON_IsString(p) &&
+        (!u || cJSON_IsString(u)) && (!e || cJSON_IsString(e)) &&
+        notebook_network_profile_valid(s->valuestring, p->valuestring) &&
+        notebook_server_url_valid(server_url) && strlen(enrollment) <= 200;
     if (!valid) {
         cJSON_Delete(j);
-        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "WLAN ungueltig. Serveradresse leer lassen oder HTTP/HTTPS verwenden.");
+        memset(body, 0, r->content_len + 1);
+        free(body);
+        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST,
+            "WLAN ungueltig. Passwort leer lassen oder mindestens acht Zeichen verwenden; Serveradressen muessen HTTP/HTTPS nutzen.");
     }
-    // One blob prevents partial multi-key configuration updates.
+    esp_err_t err = notebook_network_config_store(s->valuestring,
+        p->valuestring, server_url, enrollment);
+    cJSON_Delete(j);
+    memset(body, 0, r->content_len + 1);
+    free(body);
+    if (err != ESP_OK) return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "Speichern fehlgeschlagen.");
+    screen_show(SCREEN_SAVED, NULL);
+    atomic_store(&portal_saved_requested, true);
+    httpd_resp_set_type(r, "text/plain; charset=utf-8");
+    return httpd_resp_sendstr(r, adding_network
+        ? "WLAN hinzugefuegt. Das Notebook versucht jetzt automatisch ein erreichbares gespeichertes Profil."
+        : "Gespeichert. Das Geraet startet neu und versucht die neue WLAN-Konfiguration.");
+}
+
+static esp_err_t cancel_portal(httpd_req_t *r) {
+    httpd_resp_set_type(r, "text/plain; charset=utf-8");
+    if (!atomic_load(&portal_cancellable)) {
+        httpd_resp_set_status(r, "409 Conflict");
+        return httpd_resp_sendstr(r,
+            "Abbrechen ist ohne ein bereits gespeichertes WLAN nicht moeglich.");
+    }
+    atomic_store(&portal_cancel_requested, true);
+    return httpd_resp_sendstr(r,
+        "Abgebrochen. Das bisherige Profil bleibt unveraendert.");
+}
+
+static void fill_station_config(wifi_config_t *config,
+                                const notebook_network_profile *profile) {
+    memset(config, 0, sizeof(*config));
+    memcpy(config->sta.ssid, profile->ssid,
+           strnlen(profile->ssid, sizeof(config->sta.ssid)));
+    memcpy(config->sta.password, profile->password,
+           strnlen(profile->password, sizeof(config->sta.password)));
+    config->sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
+    config->sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
+}
+
+static esp_err_t select_network(unsigned index, bool connect) {
+    if (index >= network_configuration.network_count)
+        return ESP_ERR_INVALID_ARG;
+    wifi_config_t station = {0};
+    fill_station_config(&station, &network_configuration.networks[index]);
+    esp_err_t err = esp_wifi_set_config(WIFI_IF_STA, &station);
+    memset(&station, 0, sizeof(station));
+    if (err == ESP_OK) active_network = index;
+    if (err == ESP_OK && connect) err = esp_wifi_connect();
+    return err;
+}
+
+static esp_err_t start_portal(bool cancellable, bool wifi_started) {
+    if (portal_active) return ESP_OK;
+    wifi_config_t access_point = {0};
+    strcpy((char *)access_point.ap.ssid, "Notebook-Setup");
+    snprintf(portal_password, sizeof(portal_password), "%08lx%08lx",
+             (unsigned long)esp_random(), (unsigned long)esp_random());
+    memcpy(access_point.ap.password, portal_password, sizeof(portal_password));
+    access_point.ap.authmode = WIFI_AUTH_WPA2_PSK;
+    access_point.ap.max_connection = 1;
+    access_point.ap.channel = 1;
+    esp_err_t err = esp_wifi_set_mode(cancellable ? WIFI_MODE_APSTA : WIFI_MODE_AP);
+    if (err == ESP_OK) err = esp_wifi_set_config(WIFI_IF_AP, &access_point);
+    if (err == ESP_OK && cancellable && !wifi_started)
+        err = select_network(0, false);
+    if (err == ESP_OK && !wifi_started) err = esp_wifi_start();
+    memset(&access_point, 0, sizeof(access_point));
+    if (err != ESP_OK) {
+        memset(portal_password, 0, sizeof(portal_password));
+        return err;
+    }
+
+    httpd_config_t http = HTTPD_DEFAULT_CONFIG();
+    err = httpd_start(&portal_server, &http);
+    if (err == ESP_OK) {
+        httpd_uri_t get = {.uri="/", .method=HTTP_GET, .handler=root};
+        httpd_uri_t post = {.uri="/configure", .method=HTTP_POST,
+                            .handler=configure};
+        httpd_uri_t cancel = {.uri="/cancel", .method=HTTP_POST,
+                              .handler=cancel_portal};
+        err = httpd_register_uri_handler(portal_server, &get);
+        if (err == ESP_OK) err = httpd_register_uri_handler(portal_server, &post);
+        if (err == ESP_OK) err = httpd_register_uri_handler(portal_server, &cancel);
+    }
+    if (err != ESP_OK) {
+        if (portal_server) httpd_stop(portal_server);
+        portal_server = NULL;
+        if (cancellable) esp_wifi_set_mode(WIFI_MODE_STA);
+        memset(portal_password, 0, sizeof(portal_password));
+        return err;
+    }
+    portal_active = true;
+    atomic_store(&portal_cancellable, cancellable);
+    atomic_store(&portal_cancel_requested, false);
+    atomic_store(&portal_saved_requested, false);
+    diagnostic_log_event(DIAG_EVENT_SETUP_OPEN,
+                         (int)network_configuration.network_count, 0, 0);
+    printf("Einrichtung: Notebook-Setup / %s / http://192.168.4.1\n",
+           portal_password);
+    screen_show(cancellable ? SCREEN_SETUP_TEMP : SCREEN_SETUP,
+                portal_password);
+    return ESP_OK;
+}
+
+static void stop_temporary_portal(void) {
+    if (!portal_active || !atomic_load(&portal_cancellable)) return;
+    if (portal_server) httpd_stop(portal_server);
+    portal_server = NULL;
+    portal_active = false;
+    atomic_store(&portal_cancellable, false);
+    memset(portal_password, 0, sizeof(portal_password));
+    esp_wifi_set_mode(WIFI_MODE_STA);
+    if (!atomic_load(&station_has_ip)) select_network(active_network, true);
+    screen_network_setup_end();
+}
+
+static bool clear_forced_setup(void) {
     nvs_handle_t n;
     esp_err_t err = nvs_open("notebook", NVS_READWRITE, &n);
     if (err == ESP_OK) {
-        if (cJSON_IsString(e) && e->valuestring[0]) err=nvs_set_str(n,"enroll",e->valuestring);
-        cJSON_DeleteItemFromObjectCaseSensitive(j, "enrollment_code");
-        char *encoded=cJSON_PrintUnformatted(j);
-        if (err == ESP_OK) err = encoded ? nvs_set_str(n, "config", encoded) : ESP_ERR_NO_MEM;
-        if (err == ESP_OK) err = nvs_set_u8(n, "setup", 0);
+        err = nvs_set_u8(n, "setup", 0);
         if (err == ESP_OK) err = nvs_commit(n);
-        if(encoded){memset(encoded,0,strlen(encoded));cJSON_free(encoded);}
         nvs_close(n);
     }
-    cJSON_Delete(j);
-    memset(body, 0, sizeof(body));
-    if (err != ESP_OK) return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "Speichern fehlgeschlagen.");
-    screen_show(SCREEN_SAVED, NULL);
-    httpd_resp_set_type(r, "text/plain; charset=utf-8");
-    return httpd_resp_sendstr(r, "Gespeichert. Bitte das Geraet neu starten. Die WLAN-Verbindung wird dann versucht.");
+    return err == ESP_OK;
+}
+
+static void report_network_status(void) {
+    notebook_network_config persisted = {0};
+    notebook_network_config_load(&persisted);
+    unsigned associated = 0;
+    wifi_ap_record_t access_point = {0};
+    if (esp_wifi_sta_get_ap_info(&access_point) == ESP_OK) {
+        for (unsigned index = 0; index < network_configuration.network_count;
+             index++) {
+            if (strcmp((const char *)access_point.ssid,
+                       network_configuration.networks[index].ssid) == 0) {
+                associated = index + 1;
+                break;
+            }
+        }
+    }
+    memset(&access_point, 0, sizeof(access_point));
+    printf("@NETWORK ram_profiles=%u stored_profiles=%u selected=%u associated=%u portal=%u connected=%u\n",
+           network_configuration.network_count, persisted.network_count,
+           active_network + 1, associated, portal_active ? 1 : 0,
+           atomic_load(&station_has_ip) ? 1 : 0);
+    memset(&persisted, 0, sizeof(persisted));
 }
 
 static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data) {
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) esp_wifi_connect();
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+        atomic_store(&station_has_ip, false);
+        atomic_store(&wifi_diag_pending, 1);
         printf("WLAN getrennt; erneuter Versuch.\n");
         screen_status_network(false);
         // Retry scheduling occurs in app_main, without blocking the event loop.
     }
     if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
+        atomic_store(&station_has_ip, true);
+        atomic_store(&wifi_diag_pending, 2);
         printf("WLAN verbunden.\n");
         /* Which resolver the lease handed over. Missing from the log until now,
          * and it is exactly the fact a failing name lookup needs: whether the
@@ -199,18 +370,15 @@ void app_main(void) {
     gpio_set_pull_mode(GPIO_NUM_4, GPIO_PULLUP_ONLY);
     gpio_set_direction(GPIO_NUM_6, GPIO_MODE_INPUT);
     gpio_set_pull_mode(GPIO_NUM_6, GPIO_PULLUP_ONLY);
-    char stored[1024] = {0}; size_t len = sizeof(stored); nvs_handle_t n;
+    nvs_handle_t n;
     uint8_t force_setup = 0;
     if (nvs_open("notebook", NVS_READONLY, &n) == ESP_OK) {
-        if (nvs_get_str(n, "config", stored, &len) != ESP_OK) stored[0] = 0;
         nvs_get_u8(n, "setup", &force_setup);
         nvs_close(n);
     }
-    cJSON *j = cJSON_Parse(stored);
-    cJSON *s = cJSON_GetObjectItemCaseSensitive(j, "ssid");
-    cJSON *p = cJSON_GetObjectItemCaseSensitive(j, "password");
-    cJSON *u = cJSON_GetObjectItemCaseSensitive(j, "server");
-    bool setup = !cJSON_IsString(s) || !cJSON_IsString(p) || force_setup;
+    bool have_network = notebook_network_config_load(&network_configuration);
+    printf("@NETWORK loaded_profiles=%u\n", network_configuration.network_count);
+    bool setup = !have_network || force_setup;
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     /* After esp_netif_init and not before: SNTP registers itself with the lwIP
@@ -218,39 +386,26 @@ void app_main(void) {
      * not a warning. Starting it here also covers the setup-portal case, where
      * it simply never synchronises because there is no upstream network. */
     clock_start();
-    if (setup) esp_netif_create_default_wifi_ap(); else esp_netif_create_default_wifi_sta();
+    esp_netif_create_default_wifi_sta();
+    esp_netif_create_default_wifi_ap();
     wifi_init_config_t init = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&init));
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
-    wifi_config_t cfg = {0};
+    if (have_network) {
+        ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT,
+            ESP_EVENT_ANY_ID, wifi_event, NULL));
+        ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT,
+            IP_EVENT_STA_GOT_IP, wifi_event, NULL));
+    }
     if (setup) {
-        strcpy((char *)cfg.ap.ssid, "Notebook-Setup");
-        snprintf((char *)cfg.ap.password, sizeof(cfg.ap.password), "%08lx%08lx", (unsigned long)esp_random(), (unsigned long)esp_random());
-        cfg.ap.authmode = WIFI_AUTH_WPA2_PSK; cfg.ap.max_connection = 1; cfg.ap.channel = 1;
-        ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
-        ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &cfg));
-        ESP_ERROR_CHECK(esp_wifi_start());
-        // Intentional local onboarding output; never print home Wi-Fi credentials.
-        printf("Einrichtung: Notebook-Setup / %s / http://192.168.4.1\n", cfg.ap.password);
-        screen_show(SCREEN_SETUP, (char *)cfg.ap.password);
-        httpd_config_t h = HTTPD_DEFAULT_CONFIG(); httpd_handle_t server;
-        ESP_ERROR_CHECK(httpd_start(&server, &h));
-        httpd_uri_t get = {.uri="/", .method=HTTP_GET, .handler=root};
-        httpd_uri_t post = {.uri="/configure", .method=HTTP_POST, .handler=configure};
-        ESP_ERROR_CHECK(httpd_register_uri_handler(server, &get));
-        ESP_ERROR_CHECK(httpd_register_uri_handler(server, &post));
+        ESP_ERROR_CHECK(start_portal(have_network, false));
     } else {
         screen_show(SCREEN_CONNECTING, NULL);
-        api_client_start(cJSON_IsString(u) ? u->valuestring : "");
-        memcpy(cfg.sta.ssid, s->valuestring, strnlen(s->valuestring, sizeof(cfg.sta.ssid)));
-        memcpy(cfg.sta.password, p->valuestring, strnlen(p->valuestring, sizeof(cfg.sta.password)));
-        ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event, NULL));
-        ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_event, NULL));
+        api_client_start(network_configuration.server);
         ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-        ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &cfg));
+        ESP_ERROR_CHECK(select_network(0, false));
         ESP_ERROR_CHECK(esp_wifi_start());
     }
-    cJSON_Delete(j); memset(stored, 0, sizeof(stored)); memset(&cfg, 0, sizeof(cfg));
     if(!setup) recorder_start();
     static char command[300]; size_t command_len=0;
     unsigned held = 0, ticks = 0, middle_ticks = 0;
@@ -260,6 +415,62 @@ void app_main(void) {
     bool up_was_down = false, down_was_down = false;
     while (true) {
         vTaskDelay(pdMS_TO_TICKS(100));
+        int wifi_edge = atomic_exchange(&wifi_diag_pending, 0);
+        if (wifi_edge == 1)
+            diagnostic_log_event(DIAG_EVENT_WIFI_DOWN, 0, 0, 0);
+        else if (wifi_edge == 2)
+            diagnostic_log_event(DIAG_EVENT_WIFI_UP, 0, 0, 0);
+        if (!setup && screen_take_network_setup_request() &&
+            !portal_active && !recorder_busy()) {
+            esp_err_t err = start_portal(true, true);
+            if (err != ESP_OK)
+                printf("@SETUP start_failed=%s\n", esp_err_to_name(err));
+        }
+        if (atomic_exchange(&portal_cancel_requested, false)) {
+            if (setup) {
+                if (clear_forced_setup()) {
+                    printf("@SETUP cancelled; restarting with saved profiles\n");
+                    vTaskDelay(pdMS_TO_TICKS(100));
+                    esp_restart();
+                }
+            } else {
+                printf("@SETUP cancelled; keeping saved profiles\n");
+                diagnostic_log_event(DIAG_EVENT_SETUP_CANCEL,
+                    (int)network_configuration.network_count, 0, 0);
+                stop_temporary_portal();
+            }
+        }
+        if (atomic_exchange(&portal_saved_requested, false)) {
+            /* Give the HTTP task time to finish the small acknowledgement. */
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            if (setup) {
+                printf("@SETUP saved; restarting initial setup\n");
+                esp_restart();
+            }
+            stop_temporary_portal();
+            notebook_network_config *loaded = calloc(1, sizeof(*loaded));
+            if (!loaded || !notebook_network_config_load(loaded)) {
+                printf("@SETUP saved_but_reload_failed\n");
+                diagnostic_log_event(DIAG_EVENT_SETUP_SAVED,
+                    (int)network_configuration.network_count, 0, 0);
+            } else {
+                memset(&network_configuration, 0, sizeof(network_configuration));
+                memcpy(&network_configuration, loaded, sizeof(network_configuration));
+                esp_wifi_disconnect();
+                atomic_store(&station_has_ip, false);
+                esp_err_t err = select_network(0, true);
+                printf("@SETUP saved; profiles=%u live_switch=%s\n",
+                       network_configuration.network_count,
+                       esp_err_to_name(err));
+                diagnostic_log_event(DIAG_EVENT_SETUP_SAVED,
+                    (int)network_configuration.network_count,
+                    err == ESP_OK ? 1 : 0, 0);
+            }
+            if (loaded) {
+                memset(loaded, 0, sizeof(*loaded));
+                free(loaded);
+            }
+        }
         char ch;
         while(usb_serial_jtag_read_bytes(&ch,1,0)>0) {
             if(ch=='\n' || ch=='\r') {
@@ -273,6 +484,10 @@ void app_main(void) {
                 if(!setup && strcmp(command,"memo-list")==0) recorder_files(NULL);
                 if(!setup && strcmp(command,"queue-status")==0) recorder_queue_status();
                 if(!setup && strcmp(command,"api-status")==0) api_client_report();
+                if(!setup && strcmp(command,"network-status")==0)
+                    report_network_status();
+                if(!setup && strcmp(command,"diaglog-status")==0)
+                    diagnostic_log_report();
                 if(!setup && strncmp(command,"server-set ",11)==0) {
                     if (save_server(command+11)) {
                         printf("@SERVER saved; restarting\n");
@@ -357,10 +572,21 @@ void app_main(void) {
             } else if(command_len<sizeof(command)-1) command[command_len++]=ch;
         }
         held = gpio_get_level(GPIO_NUM_0) == 0 ? held + 1 : 0;
+        bool middle_down=gpio_get_level(GPIO_NUM_5)==0;
+        /* The temporary portal owns the middle key: a short press is the
+         * always-visible, device-local escape path and can never start audio. */
+        if (portal_active && atomic_load(&portal_cancellable)) {
+            if (middle_down) middle_ticks++;
+            else {
+                if (middle_ticks > 0)
+                    atomic_store(&portal_cancel_requested, true);
+                middle_ticks = 0;
+            }
+            recording_gesture = false;
+            if (!setup) recorder_hold(false);
         // A short middle press is reserved for dashboard selection. Audio starts
         // only after 450 ms, so opening a card cannot create a mini recording.
-        if(!setup) {
-            bool middle_down=gpio_get_level(GPIO_NUM_5)==0;
+        } else if(!setup) {
             if(middle_down) {
                 middle_ticks++;
                 if(middle_ticks>=5) recording_gesture=true;
@@ -389,7 +615,7 @@ void app_main(void) {
             up_was_down = up_down;
             down_was_down = down_down;
         }
-        if (!setup && held == 30 && !recorder_busy()) {
+        if (!setup && !portal_active && held == 30 && !recorder_busy()) {
             if (nvs_open("notebook", NVS_READWRITE, &n) == ESP_OK) {
                 esp_err_t err = nvs_set_u8(n, "setup", 1);
                 if (err == ESP_OK) err = nvs_commit(n);
@@ -402,12 +628,19 @@ void app_main(void) {
          * symbol standing forever, because nothing else ever revises it. Only
          * downwards — the association alone does not mean the device can reach
          * anything, so raising the symbol stays with IP_EVENT_STA_GOT_IP. */
-        if (!setup && ++ticks >= 100) {
+        if (!setup && !portal_active && ++ticks >= 100) {
             ticks = 0;
             wifi_ap_record_t ap;
             if (esp_wifi_sta_get_ap_info(&ap) != ESP_OK) {
                 screen_status_network(false);
-                esp_wifi_connect();
+                unsigned next = network_configuration.network_count > 1
+                    ? (active_network + 1) % network_configuration.network_count
+                    : active_network;
+                esp_err_t err = select_network(next, true);
+                if (err != ESP_OK)
+                    printf("@WIFI retry_failed=%s profile=%u/%u\n",
+                           esp_err_to_name(err), next + 1,
+                           network_configuration.network_count);
             }
         }
     }

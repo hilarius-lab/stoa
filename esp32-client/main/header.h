@@ -26,8 +26,8 @@ typedef struct {
     unsigned age_minutes;
     bool focused; /* the menu button carries the focus */
     /* The menu button opens a view selector rather than jumping straight to
-     * the recording list. The four view icons (0=dashboard, 1=tasks,
-     * 2=lists, 3=history) sit in this row all the time, not only while
+     * the recording list. The five view icons (0=dashboard, 1=tasks,
+     * 2=lists, 3=history, 4=settings) sit in this row all the time, not only while
      * picking one — a marker that only exists for a few button presses is
      * easy to miss entirely. `active_view` always names which one is
      * currently showing and gets a standing outline. While `selector_open`,
@@ -43,6 +43,10 @@ void header_draw(unsigned char *canvas, const header_state *state);
 
 /* The age wording, exposed so the host test can check the boundaries. */
 void header_age_text(char *out, unsigned capacity, unsigned age_minutes);
+
+/* Resolve the standing view marker defensively. Local full-screen views win if
+ * stale dashboard-family flags overlap during a transition. */
+int header_active_view(bool tasks, bool lists, bool history, bool settings);
 
 /* Two hours without a successful poll. Applies only when the server states no
  * limit of its own. */

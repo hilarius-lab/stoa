@@ -1,5 +1,5 @@
 #pragma once
-typedef enum { SCREEN_SETUP, SCREEN_CONNECTING, SCREEN_CONNECTED, SCREEN_SAVED,
+typedef enum { SCREEN_SETUP, SCREEN_SETUP_TEMP, SCREEN_CONNECTING, SCREEN_CONNECTED, SCREEN_SAVED,
     SCREEN_READY, SCREEN_RECORDING, SCREEN_MEMO_SAVED, SCREEN_ERROR } screen_state;
 void screen_start(void);
 void screen_show(screen_state state, const char *password);
@@ -9,10 +9,17 @@ void screen_memo(screen_state state, unsigned seconds);
 void screen_status(unsigned pending, unsigned attention, bool storage_low);
 void screen_status_storage_block(bool blocked);
 void screen_status_network(bool connected);
-/* Minutes since midnight, or 0xFFFFFFFF while the clock is not trustworthy.
- * Before a verified SNTP sync the bar shows a placeholder rather than a
- * plausible-looking time. */
-void screen_status_time(unsigned minutes_since_midnight);
+/* The local Settings row hands the actual Wi-Fi transition to app_main, which
+ * owns the driver and portal. Taking the request is atomic and edge-like. */
+bool screen_take_network_setup_request(void);
+/* Explicitly releases the temporary setup screen. Ordinary API/queue/status
+ * redraws cannot do this; only the user's cancel action may return to Settings. */
+void screen_network_setup_end(void);
+/* Local minute and calendar date from the same verified SNTP reading. Before
+ * synchronisation, pass 0xFFFFFFFF and zeroes; the bar then shows only the
+ * time placeholder rather than a plausible-looking date. */
+void screen_status_time(unsigned minutes_since_midnight, unsigned day,
+                        unsigned month, unsigned year);
 /* Diagnostic: draw a marked rectangle into the live framebuffer and push it
  * with the windowed partial update. Coordinates are framebuffer coordinates:
  * byte columns of 8 pixels and rows. Kept past the H4 bring-up because it is
@@ -54,14 +61,15 @@ void screen_snapshot_cache_limit(unsigned seconds);
  * cards. The work happens in the display task, which owns both the framebuffer
  * and the snapshot. */
 void screen_focus_move(int delta);
-/* Act on whatever currently carries the focus: open the focused card, or close
- * an open detail. */
+/* Act on whatever currently carries the focus: open a dashboard card, refresh
+ * a focused history row, or close an open detail. */
 void screen_focus_activate(void);
 /* The entity for an open detail arrived, or NULL if the fetch failed. */
 void screen_entity_received(const char *json);
 /* The session list for the history view arrived, or NULL if the fetch failed. */
 void screen_history_received(const char *json);
-/* The dashboard of one past recording arrived, or NULL if the fetch failed. */
+/* A session dashboard requested by a server-driven card arrived, or NULL. The
+ * history list itself no longer opens this detail surface. */
 void screen_session_received(const char *json);
 /* Diagnostic: render a UTF-8 sample with the title (0), body (1) or preview (2) cut into
  * a cleared area of the body and push it through the windowed update. Exists to

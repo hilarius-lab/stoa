@@ -16,12 +16,15 @@
 #include "status_bar.h"
 #include "header.h"
 #include "history.h"
+#include "settings.h"
+#include "diagnostic_log.h"
 #include "clock.h"
 #include "card.h"
 #include "dashboard.h"
 #include "list_detail.h"
 #include "cJSON.h"
 #include "api_client.h"
+#include "memo_queue.h"
 #include "freertos/semphr.h"
 #include "esp_heap_caps.h"
 extern const unsigned char ready[] asm("_binary_ready_bin_start");
@@ -86,18 +89,17 @@ static QueueHandle_t queue;
 static atomic_uint status_pending, status_attention;
 static atomic_bool status_storage_low, status_storage_block;
 static atomic_bool status_network, status_recording;
-static atomic_uint status_minutes; /* minutes since midnight, or UINT_MAX */
+static atomic_bool network_setup_requested;
+static atomic_bool network_setup_screen_active;
+/* One atomic word keeps minute and calendar date coherent across midnight.
+ * bit 31 valid; 0..10 minute; 11..15 day; 16..19 month; 20..26 year modulo 100. */
+static atomic_uint status_clock;
 static atomic_bool snapshot_seen, snapshot_empty;
 static _Atomic int64_t snapshot_at_us;
-/* Set from the upload worker's task when a new snapshot arrives, consumed
- * exactly once by the display task (see screen_task's message loop) to reset
- * the three dashboard-family focuses to the header. Not touched directly from
- * there: dashboard_focus/tasks_focus/lists_focus belong to the display task
- * alone, the same reason move_focus() etc. are never called from outside it.
- * Focus identity across revisions is a later step; until then a new snapshot
- * returns to the menu button rather than pointing at a card that may no
- * longer exist. */
-static atomic_bool snapshot_focus_reset = true;
+/* The upload worker writes a pending snapshot, then wakes the display task.
+ * Only that display task swaps it into the live buffer and remaps its three
+ * focuses while both old and new JSON are available. */
+static atomic_bool snapshot_pending;
 /* The server decides when its own snapshot stops being trustworthy; the value
  * comes from `limits.dashboard_cache_max_age_seconds` in the capabilities. 0
  * means the server did not say, in which case the local fallback applies. */
@@ -114,6 +116,9 @@ static atomic_uint cache_max_age_s;
  * the size is nearly free. */
 #define SNAPSHOT_MAX 16384
 static char *snapshot_json;
+static char *pending_snapshot_json;
+static bool pending_snapshot_empty;
+static int64_t pending_snapshot_at_us;
 static SemaphoreHandle_t snapshot_lock;
 /* Focus and scroll belong to the display task alone; nothing else touches them.
  * -1 is the menu button, which is where the dashboard is entered and which now
@@ -170,8 +175,15 @@ static bool session_open, session_waiting;
 static bool tasks_open, lists_open;
 static int tasks_focus = -1, tasks_scroll;
 static int lists_focus = -1, lists_scroll;
+/* The fifth view is device-local. Focus 0 is its explicit Back row; the
+ * diagnostics child keeps that row as its only action. */
+static bool settings_open, diagnostics_open, logs_open;
+static int settings_focus, settings_scroll, settings_return_view;
+#define SETTINGS_LOG_TEXT_MAX 2048
+static char settings_log_text[SETTINGS_LOG_TEXT_MAX];
+static int settings_log_first, settings_log_lines;
 /* The menu button now opens this instead of jumping straight to the
- * recording list. 0=dashboard, 1=tasks, 2=lists, 3=history. */
+ * recording list. 0=dashboard, 1=tasks, 2=lists, 3=history, 4=settings. */
 static bool selector_open;
 static int selector_focus;
 
@@ -194,7 +206,6 @@ static int *active_scroll_ptr(void) {
     if (lists_open) return &lists_scroll;
     return &dashboard_scroll;
 }
-#define STATUS_TIME_UNKNOWN 0xFFFFFFFFu
 #define PARTIAL_REFRESH_LIMIT 200
 
 /* Non-blocking, and a full queue drops the message rather than stalling its
@@ -232,12 +243,14 @@ static void draw_header(unsigned char *buffer) {
      * follows whichever dashboard-family view is active. One button, one
      * meaning, in every view — read directly rather than through a cached
      * flag, since this runs in the same task that owns all four focuses. */
-    header_state state = {.focused = history_open ? history_focus < 0
-                                                  : *active_focus_ptr() < 0,
+    header_state state = {.focused = settings_open ? false
+                                 : history_open ? history_focus < 0
+                                                : *active_focus_ptr() < 0,
                           .selector_open = selector_open,
                           .selector_focus = selector_focus,
-                          .active_view = tasks_open ? 1 : lists_open ? 2
-                                       : history_open ? 3 : 0};
+                          .active_view = header_active_view(tasks_open, lists_open,
+                                                           history_open,
+                                                           settings_open)};
     /* What ages is the contact, not the content: `snapshot_at_us` is set on
      * every accepted poll, including one that returns an unchanged dashboard.
      * A snapshot the server keeps confirming stays current no matter how old
@@ -389,9 +402,10 @@ static void open_detail(void) {
      * which the entity endpoint does not serve and answers with 404 — the
      * device was asking the wrong route a question it could not have.
      *
-     * `open_session` has a home already: the same view the history list opens,
-     * fed by the same request. `open_clarification` is served by the entity
-     * route because a question *is* one of its types, so it stays here.
+     * `open_session` uses the session dashboard path for any future
+     * server-driven card. History rows no longer open that detail: their
+     * complete device-facing state is shown inline. `open_clarification` is
+     * served by the entity route because a question *is* one of its types.
      * Anything else stays visible and does nothing, which is what the contract
      * says an unimplemented action must do. */
     if (strcmp(plan.focus_action, "open_session") == 0) {
@@ -435,7 +449,7 @@ static void open_detail(void) {
  * Returns the number of rows the response holds; `canvas` may be NULL to count
  * and measure without drawing. */
 static int history_rows(unsigned char *canvas, const char *json,
-                        int scroll, int focus, char *selected, size_t capacity) {
+                        int scroll, int focus) {
     cJSON *root = cJSON_Parse(json);
     if (!cJSON_IsArray(root)) { cJSON_Delete(root); return 0; }
     /* The status bar and the header row are already on the canvas at this
@@ -461,11 +475,9 @@ static int history_rows(unsigned char *canvas, const char *json,
         snprintf(row.state, sizeof(row.state), "%s",
                  history_state_label(cJSON_IsString(state) ? state->valuestring : NULL));
         /* Presence is the signal; the server's wording is never rendered. */
-        row.failed = cJSON_IsString(cJSON_GetObjectItemCaseSensitive(item, "last_error"));
-        if (selected && index == focus) {
-            cJSON *id = cJSON_GetObjectItemCaseSensitive(item, "client_session_id");
-            if (cJSON_IsString(id)) snprintf(selected, capacity, "%s", id->valuestring);
-        }
+        row.icon = history_state_icon(
+            cJSON_IsString(state) ? state->valuestring : NULL,
+            cJSON_IsString(cJSON_GetObjectItemCaseSensitive(item, "last_error")));
         if (canvas && y >= BODY_TOP && y + HISTORY_ROW_HEIGHT <= BODY_BOTTOM)
             history_row_draw(canvas, &row, 12, y, CARD_FULL_WIDTH, index == focus);
         y += HISTORY_ROW_HEIGHT;
@@ -496,7 +508,7 @@ static void draw_history(unsigned char *buffer) {
         free(copy);
         return;
     }
-    if (history_rows(buffer, copy, history_scroll, history_focus, NULL, 0) == 0) {
+    if (history_rows(buffer, copy, history_scroll, history_focus) == 0) {
         const char *line = "Noch keine Aufnahmen";
         text_draw(buffer, &text_font_body, 24, BODY_TOP + 24, line, strlen(line));
     }
@@ -509,7 +521,7 @@ static void move_history_focus(int delta) {
     char *copy = heap_caps_malloc(HISTORY_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!copy) return;
     if (!history_take(copy, HISTORY_MAX)) { free(copy); return; }
-    int count = history_rows(NULL, copy, 0, -1, NULL, 0);
+    int count = history_rows(NULL, copy, 0, -1);
     free(copy);
     if (count <= 0) return;
     int next = history_focus + delta;
@@ -535,6 +547,10 @@ static void open_history(void) {
         history_json[0] = 0;
         xSemaphoreGive(history_lock);
     }
+    /* History is a peer view, not an overlay. Clear the previous dashboard
+     * family flags so both the active marker and later selector entry agree
+     * with the content on screen. */
+    tasks_open = lists_open = false;
     history_open = true;
     history_waiting = true;
     history_focus = -1;
@@ -542,15 +558,111 @@ static void open_history(void) {
     api_client_open_history();
 }
 
+/* --- local settings ------------------------------------------------------ */
+
+static void draw_settings(unsigned char *buffer) {
+    if (logs_open) {
+        settings_logs_draw(buffer, BODY_TOP, BODY_BOTTOM, settings_log_text,
+                           settings_log_first);
+        return;
+    }
+    if (!diagnostics_open) {
+        settings_draw(buffer, BODY_TOP, BODY_BOTTOM, settings_scroll,
+                      settings_focus, atomic_load(&status_network),
+                      diagnostic_log_available());
+        return;
+    }
+    api_client_diagnostic api = api_client_get_diagnostic();
+    memo_queue_status queue_state = memo_queue_get();
+    settings_diagnostics state = {
+        .firmware = MEMO_FIRMWARE,
+        .network_connected = atomic_load(&status_network),
+        .api_configured = api.configured,
+        .api_authenticated = api.authenticated,
+        .api_compatible = api.compatible,
+        .gate_ok = api.gate_ok,
+        .gate_failed = api.gate_failed,
+        .queue_ready = queue_state.ready,
+        .queue_acked = queue_state.acked,
+        .queue_attention = queue_state.attention,
+        .bytes_free = queue_state.bytes_free,
+        .bytes_total = queue_state.bytes_total,
+        .space_low = queue_state.space_low,
+        .space_block = queue_state.space_block,
+    };
+    settings_diagnostics_draw(buffer, BODY_TOP, BODY_BOTTOM, &state);
+}
+
+static void move_settings_focus(int delta) {
+    int next = settings_focus + delta;
+    if (next < 0) next = 0;
+    if (next > SETTINGS_ITEM_COUNT) next = SETTINGS_ITEM_COUNT;
+    settings_focus = next;
+    settings_scroll = settings_scroll_for(BODY_TOP, BODY_BOTTOM, next,
+                                          settings_scroll);
+}
+
+static void move_settings_logs(int delta) {
+    int visible = settings_log_visible_capacity(BODY_TOP, BODY_BOTTOM);
+    int limit = settings_log_lines > visible ? settings_log_lines - visible : 0;
+    int next = settings_log_first + delta;
+    if (next < 0) next = 0;
+    if (next > limit) next = limit;
+    settings_log_first = next;
+}
+
+static void leave_settings(void) {
+    settings_open = diagnostics_open = logs_open = false;
+    history_open = settings_return_view == 3;
+    tasks_open = settings_return_view == 1;
+    lists_open = settings_return_view == 2;
+}
+
+static void activate_settings(void) {
+    if (logs_open) {
+        logs_open = false;
+        return;
+    }
+    if (diagnostics_open) {
+        diagnostics_open = false;
+        return;
+    }
+    if (settings_focus == 0) {
+        leave_settings();
+        return;
+    }
+    if (settings_focus == 2) {
+        diagnostics_open = true;
+        return;
+    }
+    if (settings_focus == 3 && diagnostic_log_available()) {
+        memset(settings_log_text, 0, sizeof(settings_log_text));
+        diagnostic_log_read_tail(settings_log_text, sizeof(settings_log_text));
+        settings_log_lines = settings_log_line_count(settings_log_text);
+        int visible = settings_log_visible_capacity(BODY_TOP, BODY_BOTTOM);
+        settings_log_first = settings_log_lines > visible
+            ? settings_log_lines - visible : 0;
+        logs_open = true;
+        return;
+    }
+    if (settings_focus == 1) {
+        atomic_store(&network_setup_requested, true);
+        return;
+    }
+    ESP_LOGI("settings", "row %d is visible but not implemented in this slice",
+             settings_focus);
+}
+
 /* --- view selector --------------------------------------------------------- */
 
-/* Reachable from the header button in any of the four views. Lands on
+/* Reachable from the header button in any of the four content views. Lands on
  * whichever one is currently showing, so activating again without moving
  * closes it without changing anything — the same "re-select what's already
  * open" no-op the dashboard-family views give for free. */
 static void open_selector(void) {
     selector_open = true;
-    selector_focus = tasks_open ? 1 : lists_open ? 2 : history_open ? 3 : 0;
+    selector_focus = header_active_view(tasks_open, lists_open, history_open,
+                                        settings_open);
 }
 
 static void move_selector_focus(int delta) {
@@ -562,12 +674,25 @@ static void move_selector_focus(int delta) {
     /* Same non-wrapping ring as the history list: a wrap past either end
      * looks like a jump on a panel that takes half a second to redraw. */
     if (next < 0) next = 0;
-    if (next > 3) next = 3;
+    if (next > 4) next = 4;
     selector_focus = next;
 }
 
 static void activate_selector(void) {
     selector_open = false;
+    if (selector_focus == 4) {
+        if (!settings_open) {
+            settings_return_view = header_active_view(tasks_open, lists_open,
+                                                       history_open, false);
+            tasks_open = lists_open = history_open = history_waiting = false;
+            settings_open = true;
+            diagnostics_open = logs_open = false;
+            settings_focus = 0;
+            settings_scroll = 0;
+        }
+        return;
+    }
+    settings_open = diagnostics_open = logs_open = false;
     if (selector_focus == 3) {
         if (!history_open) open_history();
         return;
@@ -605,28 +730,6 @@ static void draw_session(unsigned char *buffer) {
     dashboard_walk(buffer, copy, BODY_TOP, BODY_BOTTOM, 0, -1, NULL,
                    DASHBOARD_SURFACE_ALL);
     free(copy);
-}
-
-/* Open the recording the list has selected. */
-static void open_session(void) {
-    char *copy = heap_caps_malloc(HISTORY_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!copy) return;
-    char id[40] = {0};
-    if (history_take(copy, HISTORY_MAX))
-        history_rows(NULL, copy, 0, history_focus, id, sizeof(id));
-    free(copy);
-    if (!id[0]) {
-        ESP_LOGW("history", "selected row carries no session id");
-        return;
-    }
-    if (session_json && session_lock &&
-        xSemaphoreTake(session_lock, pdMS_TO_TICKS(200)) == pdTRUE) {
-        session_json[0] = 0;
-        xSemaphoreGive(session_lock);
-    }
-    session_open = true;
-    session_waiting = true;
-    api_client_open_session(id);
 }
 
 static void draw_dashboard(unsigned char *buffer) {
@@ -670,11 +773,16 @@ static void move_focus(int delta) {
 }
 
 static void draw_status(unsigned char *buffer) {
-    unsigned minutes = atomic_load(&status_minutes);
+    unsigned packed = atomic_load(&status_clock);
+    bool valid = (packed & 0x80000000u) != 0;
+    unsigned minutes = packed & 0x7FFu;
     status_state state = {
-        .time_valid = minutes != STATUS_TIME_UNKNOWN,
-        .hour = minutes == STATUS_TIME_UNKNOWN ? 0 : (int)(minutes / 60),
-        .minute = minutes == STATUS_TIME_UNKNOWN ? 0 : (int)(minutes % 60),
+        .time_valid = valid,
+        .hour = valid ? (int)(minutes / 60) : 0,
+        .minute = valid ? (int)(minutes % 60) : 0,
+        .day = valid ? (packed >> 11) & 0x1Fu : 0,
+        .month = valid ? (packed >> 16) & 0x0Fu : 0,
+        .year = valid ? (packed >> 20) & 0x7Fu : 0,
         .wifi_connected = atomic_load(&status_network),
         .recording = atomic_load(&status_recording),
         .queue_ready = atomic_load(&status_pending),
@@ -702,6 +810,33 @@ static void draw_qr(esp_qrcode_handle_t qr) {
         }
     }
 }
+
+static void apply_pending_snapshot(void) {
+    if (!atomic_exchange(&snapshot_pending, false) || !snapshot_json ||
+        !pending_snapshot_json || !snapshot_lock) return;
+    if (xSemaphoreTake(snapshot_lock, pdMS_TO_TICKS(500)) != pdTRUE) {
+        atomic_store(&snapshot_pending, true);
+        return;
+    }
+    int viewport = BODY_BOTTOM - BODY_TOP;
+    dashboard_focus = dashboard_remap_focus(
+        snapshot_json, pending_snapshot_json, DASHBOARD_SURFACE_MAIN,
+        dashboard_focus, dashboard_scroll, viewport, &dashboard_scroll);
+    tasks_focus = dashboard_remap_focus(
+        snapshot_json, pending_snapshot_json, DASHBOARD_SURFACE_TASKS,
+        tasks_focus, tasks_scroll, viewport, &tasks_scroll);
+    lists_focus = dashboard_remap_focus(
+        snapshot_json, pending_snapshot_json, DASHBOARD_SURFACE_LISTS,
+        lists_focus, lists_scroll, viewport, &lists_scroll);
+    snprintf(snapshot_json, SNAPSHOT_MAX, "%s", pending_snapshot_json);
+    bool empty = pending_snapshot_empty;
+    int64_t received_at = pending_snapshot_at_us;
+    xSemaphoreGive(snapshot_lock);
+    atomic_store(&snapshot_empty, empty);
+    atomic_store(&snapshot_at_us, received_at);
+    atomic_store(&snapshot_seen, true);
+}
+
 static void screen_task(void *unused) {
     unsigned char *buffer = heap_caps_malloc(48000,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
     unsigned char *previous = heap_caps_malloc(48000,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
@@ -713,14 +848,16 @@ static void screen_task(void *unused) {
     screen_message message;
     while (xQueueReceive(queue, &message, portMAX_DELAY)) {
         if (message.ambient) atomic_store(&redraw_pending, false);
-        /* Test-and-clear: fires exactly once per snapshot that actually
-         * arrived, however many redraws happen between checks. Safe to touch
-         * the three focuses directly here — this is the one task that owns
-         * them. */
-        if (atomic_exchange(&snapshot_focus_reset, false)) {
-            dashboard_focus = tasks_focus = lists_focus = -1;
-            dashboard_scroll = tasks_scroll = lists_scroll = 0;
-        }
+        apply_pending_snapshot();
+        /* Setup has no status bar and its QR payload password lives only in
+         * the explicit setup message. Re-rendering an ambient clock/queue
+         * update as the previous setup state would therefore generate a new
+         * QR with an empty password while the access point kept the original
+         * one. Ignore those visually irrelevant redraws completely. */
+        if (message.ambient &&
+            (previous_state == SCREEN_SETUP ||
+             previous_state == SCREEN_SETUP_TEMP))
+            continue;
         if (message.window_test) {
             /* The probe writes into the live framebuffer instead of reloading a
              * background, so the panel keeps whatever it currently shows and
@@ -788,6 +925,11 @@ static void screen_task(void *unused) {
                     }
                 }
                 else if (session_open) { /* nothing to move: one page, back only */ }
+                else if (settings_open) {
+                    if (logs_open) move_settings_logs(message.focus_delta);
+                    else if (!diagnostics_open)
+                        move_settings_focus(message.focus_delta);
+                }
                 else if (selector_open) move_selector_focus(message.focus_delta);
                 else if (history_open) move_history_focus(message.focus_delta);
                 else move_focus(message.focus_delta);
@@ -808,20 +950,27 @@ static void screen_task(void *unused) {
                  * this view alone is enough — the draw path picks the next open
                  * one by itself. */
                 session_open = session_waiting = false;
+            } else if (settings_open) {
+                activate_settings();
             } else if (selector_open) {
                 activate_selector();
             } else if (history_open) {
-                /* The header button now opens the selector, same as every
-                 * other view; a row opens the recording it names. */
+                /* The header button opens the selector. Session details are
+                 * intentionally absent from history; pressing a row refreshes
+                 * its directly visible status instead. */
                 if (history_focus < 0) open_selector();
-                else open_session();
+                else {
+                    history_waiting = true;
+                    api_client_open_history();
+                }
             } else if (*active_focus_ptr() < 0) {
                 open_selector();
             } else {
                 open_detail();
             }
             /* Fall through into the ordinary redraw of the dashboard screen. */
-            message.state = previous_state >= SCREEN_READY ? previous_state : SCREEN_READY;
+            message.state = message.ambient ? previous_state :
+                previous_state >= SCREEN_READY ? previous_state : SCREEN_READY;
             message.focus_move = message.focus_activate = false;
         }
         if (message.card_demo) {
@@ -911,14 +1060,18 @@ static void screen_task(void *unused) {
             switch (message.cut) {
             case 1: break;                                     /* fresh device */
             case 2: demo = (status_state){.time_valid=true,.hour=14,.minute=32,
+                                          .day=2,.month=4,.year=2003,
                                           .wifi_connected=true}; break;
             case 3: demo = (status_state){.time_valid=true,.hour=14,.minute=33,
+                                          .day=23,.month=5,.year=2024,
                                           .wifi_connected=true,.recording=true,
                                           .queue_ready=3}; break;
             case 4: demo = (status_state){.time_valid=true,.hour=9,.minute=5,
+                                          .day=12,.month=10,.year=1989,
                                           .queue_ready=12,.queue_attention=2,
                                           .storage_low=true}; break;
             case 5: demo = (status_state){.time_valid=true,.hour=23,.minute=59,
+                                          .day=31,.month=12,.year=2099,
                                           .wifi_connected=true,.queue_ready=7,
                                           .storage_low=true,.storage_block=true,
                                           .battery_known=true,.battery_percent=42}; break;
@@ -1009,7 +1162,8 @@ static void screen_task(void *unused) {
             continue;
         }
         if (message.force_full) message.state = previous_state;
-        const unsigned char *background = message.state == SCREEN_SETUP ? setup :
+        const unsigned char *background =
+            (message.state == SCREEN_SETUP || message.state == SCREEN_SETUP_TEMP) ? setup :
             message.state == SCREEN_CONNECTING ? connecting : message.state == SCREEN_CONNECTED ? connected :
             message.state == SCREEN_READY ? ready : message.state == SCREEN_RECORDING ? recording :
             message.state == SCREEN_MEMO_SAVED ? memo_saved : message.state == SCREEN_ERROR ? error : saved;
@@ -1034,13 +1188,14 @@ static void screen_task(void *unused) {
             draw_header(buffer);
             if(message.state==SCREEN_READY || message.state==SCREEN_RECORDING ||
                message.state==SCREEN_MEMO_SAVED){
-                if(detail_open)draw_detail(buffer);
+                if(settings_open)draw_settings(buffer);
+                else if(detail_open)draw_detail(buffer);
                 else if(session_open)draw_session(buffer);
                 else if(history_open)draw_history(buffer);
                 else draw_dashboard(buffer);
             }
         }
-        if (message.state == SCREEN_SETUP) {
+        if (message.state == SCREEN_SETUP || message.state == SCREEN_SETUP_TEMP) {
             qr_buffer = buffer;
             char payload[100];
             snprintf(payload,sizeof(payload),"WIFI:T:WPA;S:Notebook-Setup;P:%s;;",message.password);
@@ -1060,6 +1215,11 @@ static void screen_task(void *unused) {
                 int glyph = digit - digits;
                 draw_glyph_portrait(buffer,glyph,24+c*24,682);
             }
+            if (message.state == SCREEN_SETUP_TEMP) {
+                static const char cancel[] = "Mitteltaste: Abbrechen";
+                text_draw(buffer, &text_font_body, 24, 748, cancel,
+                          strlen(cancel));
+            }
         }
         int left=100,right=-1,top=480,bottom=-1;
         if(initialized) for(int y=0;y<480;y++) for(int x=0;x<100;x++) {
@@ -1073,12 +1233,15 @@ static void screen_task(void *unused) {
         // Full update establishes controller base RAM. No deep sleep between partials.
         // Defer periodic ghosting cleanup until recording has ended.
         bool leave_start=previous_state<=SCREEN_SAVED && message.state>=SCREEN_READY;
+        bool setup_transition =
+            (message.state == SCREEN_SETUP || message.state == SCREEN_SETUP_TEMP) &&
+            message.state != previous_state;
         /* The ghosting safety net. 20 was far too eager: at one refresh per key
          * press a full update landed in the middle of ordinary navigation. The
          * cleanup rides on view changes, which need a full update anyway; this
          * counter only catches a session that never changes view. See the
          * refresh policy in docs/IMPLEMENTATION_DECISIONS.md. */
-        if(!initialized || leave_start || message.force_full ||
+        if(!initialized || leave_start || setup_transition || message.force_full ||
            (partial_count>=PARTIAL_REFRESH_LIMIT && message.state!=SCREEN_RECORDING)) {
             int64_t started = esp_timer_get_time();
             EPD_Init(); EPD_Display_Base(buffer); initialized=true; partial_count=0;
@@ -1131,8 +1294,15 @@ void screen_status(unsigned pending,unsigned attention,bool storage_low) {
 }
 void screen_status_storage_block(bool blocked){atomic_store(&status_storage_block,blocked);queue_redraw();}
 void screen_status_network(bool connected){atomic_store(&status_network,connected);queue_redraw();}
-void screen_status_time(unsigned minutes_since_midnight){
-    atomic_store(&status_minutes,minutes_since_midnight);
+void screen_status_time(unsigned minutes_since_midnight, unsigned day,
+                        unsigned month, unsigned year){
+    unsigned packed = 0;
+    if (minutes_since_midnight < 24u * 60u && day >= 1 && day <= 31 &&
+        month >= 1 && month <= 12) {
+        packed = 0x80000000u | minutes_since_midnight | (day << 11) |
+                 (month << 16) | ((year % 100) << 20);
+    }
+    atomic_store(&status_clock, packed);
     queue_redraw();
 }
 void screen_memo(screen_state state,unsigned seconds) {
@@ -1140,8 +1310,9 @@ void screen_memo(screen_state state,unsigned seconds) {
     post(&message);
 }
 void screen_start(void) {
-    atomic_store(&status_minutes, STATUS_TIME_UNKNOWN);
+    atomic_store(&status_clock, 0);
     snapshot_json = heap_caps_calloc(1, SNAPSHOT_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    pending_snapshot_json = heap_caps_calloc(1, SNAPSHOT_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     entity_json = heap_caps_calloc(1, ENTITY_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     history_json = heap_caps_calloc(1, HISTORY_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     session_json = heap_caps_calloc(1, SNAPSHOT_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -1149,7 +1320,7 @@ void screen_start(void) {
     entity_lock = xSemaphoreCreateMutex();
     history_lock = xSemaphoreCreateMutex();
     session_lock = xSemaphoreCreateMutex();
-    if (!snapshot_json || !entity_json || !history_json || !session_json ||
+    if (!snapshot_json || !pending_snapshot_json || !entity_json || !history_json || !session_json ||
         !snapshot_lock || !entity_lock || !history_lock || !session_lock)
         ESP_LOGE("screen", "no memory for the dashboard snapshot");
     /* Room for a few messages. It used to be a single slot written with
@@ -1173,15 +1344,14 @@ void screen_snapshot_cache_limit(unsigned seconds) {
     atomic_store(&cache_max_age_s, seconds);
 }
 void screen_snapshot_received(const char *json, bool empty) {
-    if (snapshot_json && snapshot_lock &&
+    if (pending_snapshot_json && snapshot_lock &&
         xSemaphoreTake(snapshot_lock, pdMS_TO_TICKS(500)) == pdTRUE) {
-        snprintf(snapshot_json, SNAPSHOT_MAX, "%s", json ? json : "");
+        snprintf(pending_snapshot_json, SNAPSHOT_MAX, "%s", json ? json : "");
+        pending_snapshot_empty = empty;
+        pending_snapshot_at_us = esp_timer_get_time();
         xSemaphoreGive(snapshot_lock);
+        atomic_store(&snapshot_pending, true);
     }
-    atomic_store(&snapshot_empty, empty);
-    atomic_store(&snapshot_at_us, esp_timer_get_time());
-    atomic_store(&snapshot_seen, true);
-    atomic_store(&snapshot_focus_reset, true);
     /* Redraw through the queue so the display task stays the only writer --
      * the same pattern screen_entity_received()/_history_/_session_ already
      * use. Without this the fresh snapshot sits in the buffer unseen until
@@ -1265,7 +1435,22 @@ void screen_window_test(unsigned byte_x, unsigned y,
     post(&message);
 }
 void screen_show(screen_state state, const char *password) {
+    if (state == SCREEN_SETUP_TEMP)
+        atomic_store(&network_setup_screen_active, true);
+    else if (atomic_load(&network_setup_screen_active)) {
+        if (state == SCREEN_SAVED)
+            atomic_store(&network_setup_screen_active, false);
+        else
+            return;
+    }
     screen_message message={.state=state};
     if(password) strncpy(message.password,password,sizeof(message.password)-1);
     post(&message);
+}
+void screen_network_setup_end(void) {
+    atomic_store(&network_setup_screen_active, false);
+    screen_show(SCREEN_READY, NULL);
+}
+bool screen_take_network_setup_request(void) {
+    return atomic_exchange(&network_setup_requested, false);
 }

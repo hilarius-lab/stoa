@@ -48,6 +48,7 @@ typedef enum {
 /* --- layout plan and paging ----------------------------------------------- */
 
 #define DASHBOARD_MAX_ROWS 48
+#define DASHBOARD_COMPONENT_ID_CHARS 80
 
 /* One laid out row: a section heading, a full width card, or a pair of half
  * width cards. Focus indices are -1 where the row takes no focus. */
@@ -59,11 +60,23 @@ typedef struct {
 } dashboard_row;
 
 typedef struct {
+    char component_id[DASHBOARD_COMPONENT_ID_CHARS];
+    char entity_type[32];
+    char entity_id[40];
+} dashboard_focus_identity;
+
+/* 2 for equal component ids, 1 for an equal entity fallback, 0 for no match. */
+int dashboard_focus_identity_match(const dashboard_focus_identity *wanted,
+                                   const dashboard_focus_identity *candidate);
+int dashboard_focus_fallback(int old_focus, int new_count);
+
+typedef struct {
     dashboard_row rows[DASHBOARD_MAX_ROWS];
     int count;
     int content_height;
     int focusable;
     bool overflowed;   /* more rows than the plan can hold */
+    dashboard_focus_identity focus_identity;
     /* The entity behind the focused card, captured by the same walk that laid
      * the rows out. Resolving it separately would count the focusable cards a
      * second time, and the two counts would eventually disagree. */

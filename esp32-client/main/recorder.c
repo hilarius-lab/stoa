@@ -30,6 +30,7 @@
 #include "journal.h"
 #include "memo_queue.h"
 #include "api_client.h"
+#include "diagnostic_log.h"
 
 static atomic_bool held, busy, test_requested, queue_rescan_requested;
 static atomic_bool export_requested;
@@ -463,7 +464,10 @@ static bool record_memo(bool diagnostic) {
     int64_t start=esp_timer_get_time();
     // The initial prototype is limited to five minutes; no silent endless recording.
     unsigned limit=diagnostic?12:300;
-    if(ok) screen_memo(SCREEN_RECORDING,0);
+    if(ok) {
+        screen_memo(SCREEN_RECORDING,0);
+        diagnostic_log_event(DIAG_EVENT_CAPTURE_START, 0, 0, 0);
+    }
     ESP_LOGI("memo","capture start; diagnostic=%d",diagnostic);
     bool keep=ok;
     while(keep) {
@@ -583,6 +587,7 @@ static bool record_memo(bool diagnostic) {
         }
         ESP_LOGI("memo","recording too short (%llu ms); discarded, not offered",
                  (unsigned long long)(samples*1000/48000));
+        diagnostic_log_event(DIAG_EVENT_CAPTURE_END, 1, 0, 0);
         return true;
     }
     if(ok && sequence) {
@@ -625,11 +630,15 @@ static bool record_memo(bool diagnostic) {
     ESP_LOGI("memo","capture %s; segments=%u ready=%u attention=%u samples=%llu peak=%d stack_free=%u heap_internal=%u",
         ok?"SAVED":"FAILED",sequence,ready,attention,(unsigned long long)samples,peak,
         (unsigned)uxTaskGetStackHighWaterMark(NULL),(unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    diagnostic_log_event(DIAG_EVENT_CAPTURE_END, ok ? 1 : 0,
+                         (int)sequence, 0);
     screen_memo(ok?SCREEN_MEMO_SAVED:SCREEN_ERROR,(unsigned)(samples/48000));
     return ok;
 }
 static void recorder_task(void *unused) {
-    bool ok=storage_check() && (mkdir("/sdcard/MEMOS",0700)==0 || errno==EEXIST) && init_mic();
+    bool storage_ok = storage_check();
+    if (storage_ok) diagnostic_log_start();
+    bool ok=storage_ok && (mkdir("/sdcard/MEMOS",0700)==0 || errno==EEXIST) && init_mic();
     if(ok) ok=mp4_muxer_register()==ESP_MUXER_ERR_OK;
     if(!ok) {
         ESP_LOGE("memo","initialization failed"); screen_memo(SCREEN_ERROR,0); vTaskDelete(NULL); return;
@@ -638,6 +647,11 @@ static void recorder_task(void *unused) {
     // the card is verified and classified first, so READY is an honest state.
     memo_queue_scan();
     memo_queue_status queued=memo_queue_get();
+    diagnostic_log_event(DIAG_EVENT_STORAGE, 1,
+                         (int)(queued.bytes_free / (1024 * 1024)),
+                         (int)(queued.bytes_total / (1024 * 1024)));
+    diagnostic_log_event(DIAG_EVENT_QUEUE, (int)queued.ready,
+                         (int)queued.acked, (int)queued.attention);
     screen_status(queued.ready,queued.attention,queued.space_low);
     screen_status_storage_block(queued.space_block);
     screen_memo(SCREEN_READY,0);

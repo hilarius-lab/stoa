@@ -85,6 +85,7 @@ python scripts/serial_check.py --port COM9 --seconds 12
 python scripts/serial_check.py --port COM9 --seconds 35 --command memo-test
 python scripts/serial_check.py --port COM9 --seconds 6 --command queue-status --no-reset
 python scripts/serial_check.py --port COM9 --seconds 6 --command api-status --no-reset
+python scripts/serial_check.py --port COM9 --seconds 6 --command diaglog-status --no-reset
 python scripts/export_test.py --port COM9 --list
 python scripts/export_test.py --port COM9 --memo 0123ABCD --output .work/export
 ```
@@ -92,6 +93,8 @@ python scripts/export_test.py --port COM9 --memo 0123ABCD --output .work/export
 `memo-test` nimmt tatsächlich zwölf Sekunden Audio auf. Nur mit bewusster
 Testabsicht verwenden. `queue-status`, `memo-list` und `memo-get` sind lesend;
 `queue-status` gibt nur Zähler, Speicherwerte und Statusflags aus.
+`diaglog-status` zeigt ausschließlich Verfügbarkeit, Dateigrößen und die
+Rotationsgrenze des bereinigten SD-Logs, niemals dessen Zeilen.
 
 `reboot` startet das Gerät neu, ohne den Akku zu trennen oder den seriellen
 Port zu schließen. Während einer Aufnahme wird er verweigert (`@REBOOT

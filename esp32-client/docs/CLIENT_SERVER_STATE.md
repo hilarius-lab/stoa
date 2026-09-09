@@ -778,3 +778,168 @@ ohne solche Fragen ist er leer. Die nächsten Schritte sind daher:
 Der alte DNS-Befund bleibt beobachtenswert, blockiert aber nicht. Den Worker nur
 über `python background.py` starten; ein paralleles `python worker.py all`
 erzeugt identische Standard-Worker-IDs und verfälscht Heartbeats.
+
+## Kleines Home-Dashboard, Alerts und Fokus-Erhalt — implementiert, 9. September
+
+Die bisherige leere Zwischenstufe ist im Arbeitsstand geschlossen. Das Backend
+liefert für `esp32_epaper` auf Home weiterhin offene Rückfragen und ergänzt
+handlungsrelevante Processing-Hinweise für `failed`, `parked` und
+`attention_required`. Unter „Als Nächstes“ erscheinen höchstens drei Karten:
+zuerst höchstens zwei Tasks aus der bestehenden fachlichen Auswahl und eine
+aktive Liste; wenn eine Art fehlt, füllt die andere auf. Die vollständigen
+Task-/Listen-Sektionen bleiben für ihre getrennten Ansichten erhalten. Die
+Home-Kopien haben eigene stabile Komponenten-IDs und dieselbe Entity-Referenz.
+
+`main/dashboard.c` zeichnet `alert` jetzt als vollbreite, nicht fokussierbare
+Hinweisfläche mit Text, Symbol, Severity, Farb- und Rahmenrolle. Andere nicht
+unterstützte Komponenten werden weiterhin serverseitig entfernt; technische
+Sessions kehren nicht auf Home zurück.
+
+`screen_snapshot_received` überschreibt den sichtbaren Snapshot nicht mehr im
+Uploadtask, sondern schreibt einen Pending-Puffer. Erst der Displaytask hält
+für Dashboard, Aufgaben und Listen den Fokus per `component.id`, danach
+`entity_ref`. Ist das Ziel verschwunden, nimmt er die nächste Karte an der
+alten Position, sonst die vorherige und zuletzt den Menüknopf. So werden weder
+Displaytask-Eigentum noch der unveränderliche offene Detail-Lesesnapshot
+aufgeweicht.
+
+Geprüft: Python-Syntax, gezielter Backend-/Wire-Test einschließlich
+Default-Surface-Isolation und 6605/8192-Byte-Budget sowie ESP-IDF-Build und
+Flash auf COM9. Danach: `compatible=1`, Gate grün, `upload_failed=0` und Queue
+`ready=0 acked=8 attention=0`. Der
+UI-Hosttest startet in Git Bash, findet auf diesem Host aber weiterhin kein
+Host-`cc`; das ist derselbe Werkzeugmangel wie beim Journaltest. Die reale
+Probe zeigte zwei Aufgaben und die Einkaufsliste unter „Als Nächstes“; der
+Kartenfokus blieb über den verzögert einsetzenden erzwungenen Sync erhalten.
+Damit ist das Home-Teilziel vom Nutzer abgenommen. Der Firmwarebezeichner
+des Arbeitsstands ist `h4-home`. Der Worker muss für diese reine Projektion
+nicht neu gestartet werden; Uvicorn lädt die Backendänderung automatisch.
+
+## Lokales Statusdatum — implementiert, 9. September
+
+Die Statusleiste erhält Uhrzeit und lokales Kalenderdatum nun als einen atomar
+gepackten Zustand aus demselben `localtime_r`-Ergebnis. Dadurch kann selbst am
+Tageswechsel kein altes Datum mit einer neuen Uhrzeit oder umgekehrt sichtbar
+werden. Nach vertrauenswürdiger SNTP-Synchronisation steht links neben den
+lokalen Statussymbolen das Datum als `D.M.YY`; Tag und Monat haben keine
+führenden Nullen. Ohne Synchronisation bleibt es bei `--:--` und es wird kein
+Datum geraten.
+
+Der ESP-IDF-Build ist grün. Der UI-Hosttest enthält exakte Prüfungen für
+`2.4.03`, `23.5.24` und `12.10.89`, kann auf diesem Windows-Host aber mangels
+Host-`cc` weiterhin nicht ausgeführt werden. Build und Flash auf COM9 sind
+grün; danach meldete das Gerät `compatible=1`, `gate_failed=0`,
+`upload_failed=0` und `ready=0 attention=0`. Nach Angleichung auf denselben Font
+und dieselbe Grundlinie bestätigte die reale Sichtprüfung eine homogene, gut
+lesbare Darstellung; der Nutzer hat das Feature abgenommen. Der Worker ist für
+diese rein lokale Firmwareänderung nicht betroffen. Der teils langsame
+Verbindungsaufbau nach einem Neustart wird als separates späteres Thema
+behandelt.
+
+## Direkter Verlaufstatus und korrekter Ansichtsmarker — Arbeitsstand 9. September
+
+Die Verlaufszeile ist jetzt die vollständige ESP-Ansicht einer Aufnahme. Sie
+zeigt links ein vom Sessionzustand abgeleitetes Symbol, danach die lokale
+Zeit und rechts einen deutschen Kurzstatus für Aufnahme, Pause, Upload,
+Verarbeitung, Abschluss, Fehler, Aufmerksamkeit oder Abbruch. Ein vorhandenes
+`last_error` erzwingt das Fehlerzeichen, sein unbeschränkter Text bleibt
+weiterhin unsichtbar. Ein Mitteldruck auf eine Zeile lädt das Fenster erneut,
+statt das vor fachlicher Verarbeitung häufig leere Session-Dashboard zu öffnen.
+
+Der falsche Listenmarker hatte eine lokale Ursache: Beim Öffnen des Verlaufs
+blieb `lists_open` gesetzt, während der Zeichenpfad den Verlauf bereits
+priorisierte. `open_history` löscht jetzt beide Dashboard-Unteransichten;
+zusätzlich priorisiert die zentrale Markerauflösung `history_open` gegen einen
+überlappenden Altzustand.
+
+Der ESP-IDF-Build ist grün. Der erweiterte UI-Hosttest deckt Zustandswörter,
+Symbole und den historischen Listen/Verlauf-Überlappungsfall ab, bleibt auf
+diesem Windows-Host aber wegen `cc: command not found` nicht ausführbar. Build
+und Flash auf COM9 sind grün; nach dem vorgesehenen DNS-Retry meldete das Gerät
+`compatible=1`, `gate_failed=0` und `upload_failed=0`. Die reale Sicht-/
+Navigationsprobe bestätigte den korrekten Verlaufsmarker, passende
+Zustandssymbole und das Aktualisieren ohne Detailansicht; der Nutzer hat das
+Teilziel abgenommen. Eine manuelle Abbruchaktion bei Fehler oder
+Aufmerksamkeitsbedarf ist nur als spätere Option festgehalten.
+
+## Lokale Einstellungsansicht — historischer erster Zwischenstand 9. September
+
+Dieser Zwischenstand wurde durch die beiden folgenden Abschnitte zu WLAN und
+SD-Logs erweitert. Der Kopfselector besaß hier erstmals mit einem
+Schieberegler-Symbol eine fünfte,
+vollständig lokale Ansicht „Einstellungen“. Sie bleibt ohne Server und ohne
+gültigen Dashboard-Snapshot erreichbar. Der Fokus beginnt auf „Zurück“ und
+kehrt von dort in die zuvor geöffnete Hauptansicht zurück. Darunter stehen die
+Zeilen Netzwerk und Server, Diagnose, SD-Logs und Zeitzone; Auswahl und Scrollen
+verwenden dieselbe geschlossene Tastenbedienung wie die übrigen Ansichten.
+
+Nur „Diagnose“ ist in dieser ersten Stufe aktiv. Sie zeigt inhaltsarm
+Softwareversion, Vertragskompatibilität und Gate-Zähler, WLAN-Zustand,
+Queueklassen sowie freien und gesamten SD-Speicher. Die API-Diagnose übergibt
+nur atomar gespiegelte Statuswerte; Serveradresse, Anmeldedaten, Tokens,
+Inhalte und Response-Bodies gelangen nicht in die Anzeige. Netzwerk und Server
+zeigt vorerst nur `WLAN verbunden|WLAN offline`, SD-Logs ist ausdrücklich
+`noch nicht verfügbar`, und Zeitzone zeigt das fest eingebaute
+`Europe/Berlin`. Diese drei Zeilen lösen noch keine Aktion aus.
+
+Das neue Symbol wurde aus dem Generator erzeugt und im Kontaktbogen visuell
+geprüft. Der ESP-IDF-Build ist grün; der erweiterte UI-Hosttest enthält
+Einstellungs-, Fokus-, Scroll- und Diagnoseprüfungen, kann auf diesem Host aber
+weiterhin mangels Host-`cc` nicht ausgeführt werden. Build und Flash auf COM9
+sind grün; nach dem automatischen Verbindungsretry meldete das Gerät
+`compatible=1`, `ready=0`, `acked=8` und `attention=0`. Die reale Bedienprobe
+bestätigte den fünften Ansichtsmarker, Fokusstart auf „Zurück“, alle vier
+Einstellungszeilen, die lesbare Diagnose sowie beide Rückwege; der Nutzer hat
+diese erste Stufe abgenommen. Der Firmwarebezeichner ist `h4-settings`. Der
+sichere Hotspot-Rückweg mit mehreren WLAN-Profilen sowie ein begrenzter,
+rotierter und geheimnisfreier SD-Logsink bleiben nachgelagerte Teilziele.
+
+## WLAN hinzufügen mit Mehrprofil-Rückfall — Arbeitsstand 9. September
+
+Auf Nutzerfeedback ist „Netzwerk und Server“ in „WLAN hinzufügen“ getrennt
+worden. Die Settings-Aktion startet weiterhin `Notebook-Setup` und zeigt beide
+QR-Codes, das zugehörige Webformular enthält aber nur SSID und Passwort.
+Serveradresse und Enrollment werden dort weder angezeigt noch verändert; sie
+bleiben im unabhängigen Erstinstallationsweg.
+
+Der temporäre AP läuft parallel zum bisherigen Stationsprofil und bleibt bis
+zum manuellen Mitteldruck, Browser-Abbruch oder erfolgreichen Speichern aktiv.
+Beide Abbruchwege kehren ohne NVS-Änderung in die Settings-Liste zurück. Das
+alte Einzelprofilformat wird beim Lesen unterstützt; beim ersten Speichern wird
+es verlustfrei in eine Liste von bis zu fünf eindeutigen SSIDs übernommen. Das
+zuletzt hinzugefügte Profil steht zuerst, bei ausbleibender Verbindung probiert
+die Firmware zyklisch die übrigen. SSIDs und Passwörter werden nicht geloggt;
+`network-status` nennt nur Anzahl, Index, Portal- und Verbindungszustand.
+
+Zwei während der Geräteprobe sichtbare Fehler sind behoben: Zuerst setzte ein
+Status-Redraw die temporäre Ansicht auf `SCREEN_READY` zurück. Danach blieb sie
+zwar offen, aber derselbe Redraw besaß das einmalig übergebene AP-Passwort nicht
+mehr und erzeugte einen unpassenden QR. Setup-Redraws werden nun vollständig
+ignoriert und das Öffnen erzwingt einen Vollrefresh. Build und Flash auf COM9
+sind grün. Die reale Probe bestätigte stabilen QR und geräteseitigen Abbruch
+ohne NVS-Änderung. Danach wurden Heimnetz und Handyhotspot gemeinsam gespeichert
+und der Hotspot zweimal zuverlässig ausgewählt; nach Abschalten fiel das Gerät
+ins Heimnetz zurück. Settings-Speichern lädt und aktiviert die Profile ohne
+Neustart, wodurch der Dashboard-RAM-Zustand erhalten bleibt. Ein beim
+Portalabruf beobachteter `StoreProhibited`-Absturz war ein HTTP-Task-
+Stacküberlauf durch große lokale Request-/Profilpuffer; die Puffer liegen nun
+auf dem Heap. Dass das Dashboard über den Handyhotspot mit HTTP 403 ausblieb,
+war bei gleichzeitig bestätigter WLAN-Assoziation ein separater Backend-
+Zugriffs-/Pfadbefund, kein Fehler der Mehrnetzverwaltung. Firmware:
+`h4-settings-net`.
+
+## Bereinigter SD-Diagnoselog — Arbeitsstand 9. September
+
+`DIAG/DIAG0.LOG` nimmt ausschließlich fest definierte technische Ereignisse
+mit bis zu drei Zahlenparametern auf. Es existiert keine Freitextschnittstelle;
+SSID, Passwort, URL, Token, Response-Body, Session-/Objekt-ID und Memo-Inhalt
+können nicht übergeben werden. Bei 16 KiB rotiert die Datei über zwei ältere
+Generationen. Gleiche Queuezustände werden dedupliziert.
+
+„SD-Logs“ liest höchstens 2047 Byte vom Ende der aktuellen Datei, beginnt bei
+den neuesten sichtbaren Zeilen und scrollt mit Hoch/Runter; Mitteldruck kehrt
+zur Settings-Liste zurück. Build und Flash auf COM9 sind grün. Der inhaltsfreie
+USB-Status bestätigte auf der realen SD-Karte `available=1`, eine beschriebene
+aktuelle Datei und die konfigurierte Grenze 16384 Byte. Die reale Sichtprobe
+bestätigte technischen Inhalt, Scrollen und Rückkehr wie vorgesehen. Firmware:
+`h4-settings-log`.

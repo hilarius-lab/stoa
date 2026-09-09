@@ -10,7 +10,7 @@
 /* Reported to the backend during enrollment and inside `device_metadata`. It
  * names the roadmap stage the running firmware actually implements and is
  * raised together with every stage, so the server never sees a stale claim. */
-#define MEMO_FIRMWARE "h3-surface"
+#define MEMO_FIRMWARE "h4-settings-log"
 
 /* Free-space policy from docs/IMPLEMENTATION_DECISIONS.md. */
 #define MEMO_SPACE_WARN_BYTES (1024ull * 1024 * 1024)

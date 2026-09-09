@@ -1,6 +1,14 @@
 #pragma once
 #include <stdbool.h>
 
+typedef struct {
+    bool configured;
+    bool authenticated;
+    bool compatible;
+    unsigned gate_ok;
+    unsigned gate_failed;
+} api_client_diagnostic;
+
 /* Start the H2 REST worker. An empty URL keeps the device fully local. */
 void api_client_start(const char *base_url);
 
@@ -32,9 +40,13 @@ bool api_client_list_item_desired(const char *item_id, bool *done);
  * belongs to the worker, drawing to the display task; the result comes back
  * through screen_history_received. */
 void api_client_open_history(void);
-/* Fetch the dashboard of one past recording, selected in the history view. The
- * response uses the same envelope as the home dashboard. */
+/* Fetch a session dashboard requested by a server-driven card. History rows
+ * show their complete device-facing state inline and do not call this path. */
 void api_client_open_session(const char *session_id);
+
+/* Content-free local state for the settings diagnostics. No URL, credential,
+ * response body or user content crosses this boundary. */
+api_client_diagnostic api_client_get_diagnostic(void);
 
 /* Content-free diagnostics for USB tests. */
 void api_client_report(void);

@@ -5,6 +5,7 @@
 // Free of JSON so the layout and the wording can be checked on the host. The
 // caller parses the response into rows; this module only draws them.
 #include <stdbool.h>
+#include "icons.h"
 
 #define HISTORY_ROW_HEIGHT 46
 #define HISTORY_HEADER_HEIGHT 30
@@ -16,16 +17,20 @@ typedef struct {
      * and the renderer should not. */
     char when[HISTORY_TIME_CHARS];
     char state[HISTORY_LABEL_CHARS];
-    /* The server reported an error for this recording. Drawn as a mark, never
-     * as the error text: `last_error` may carry server wording of unknown
-     * length and is not something the panel should render verbatim. */
-    bool failed;
+    /* Closed local symbol vocabulary derived from the server state. The error
+     * mark may also override it when `last_error` is present; the wording is
+     * never rendered because it has unknown length and content. */
+    icon_id icon;
 } history_row;
 
 /* The German label for a server session state. Unknown states are returned
  * unchanged rather than guessed at or hidden, so a contract extension shows up
  * as an unfamiliar word instead of silently reading as something it is not. */
 const char *history_state_label(const char *state);
+
+/* Compact leading symbol for the same state. `has_error` deliberately wins:
+ * a server-reported problem must not be softened by a lagging state token. */
+icon_id history_state_icon(const char *state, bool has_error);
 
 /* Format an ISO 8601 UTC timestamp as `06.09. 14:32`. Returns false and writes
  * a placeholder if the text is not a timestamp of the expected shape; a

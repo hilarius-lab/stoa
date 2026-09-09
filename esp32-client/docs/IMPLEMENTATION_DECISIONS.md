@@ -10,9 +10,10 @@ werden, ohne die Architektur neu zu entscheiden.
   Hochformat mit logisch 480 × 800 Pixeln und 90-Grad-Abbildung im Renderer.
   Schwarz und Weiß, keine simulierten Farbstufen. Querformat bleibt nur für
   Einrichtung und technische Übergangsbilder zulässig.
-- lokale Statuszeile: 48 Pixel hoch; langfristig mit lokaler Uhrzeit und
-  Akkuanzeige nach Android-Vorbild, auch während USB-C-Versorgung; Inhalt, Detail oder leeres Dashboard beginnt
-  darunter und bleibt während einer Aufnahme sichtbar.
+- lokale Statuszeile: 48 Pixel hoch; mit lokaler Uhrzeit und Datum im Format
+  `D.M.YY` sowie langfristig mit Akkuanzeige nach Android-Vorbild, auch während
+  USB-C-Versorgung; Inhalt, Detail oder leeres Dashboard beginnt darunter und
+  bleibt während einer Aufnahme sichtbar.
 - Außenrand: 16 Pixel; Artsymbol 24 × 24 Pixel; Fokusmarker 6 Pixel breit.
 - Kartenschlagzeile: 24-Pixel-Schrift, höchstens zwei Zeilen. Unterzeile:
   16-Pixel-Schrift, höchstens zwei Zeilen. Metadaten: mindestens 14 Pixel.
@@ -48,7 +49,10 @@ werden, ohne die Architektur neu zu entscheiden.
 - Fokusidentität folgt `DASHBOARD_UI.md`. Bei einer neu eingefügten Karte bleibt
   die bisherige ID fokussiert, unabhängig von ihrer neuen Position.
 - Entfällt sie, wird an ihrem alten Index die nächste Karte gewählt, sonst die
-  vorherige, sonst die erste; bei leerem Dashboard existiert kein Fokus.
+  vorherige und zuletzt der Menüknopf; bei leerem Dashboard existiert kein
+  Kartenfokus. Der Uploadtask schreibt neue JSON-Daten nur in einen
+  Pending-Puffer. Erst der Displaytask vergleicht alten und neuen Snapshot und
+  verändert die drei Surface-Fokuswerte.
 - Ein geöffnetes Detail ist eine unveränderliche lokale Kopie. Hintergrundupdates
   ersetzen den Dashboardcache, niemals das offene Detail. Zurück zeigt den
   neuesten Cache und verwirft die Detailkopie.
@@ -115,12 +119,14 @@ werden, ohne die Architektur neu zu entscheiden.
 - Einstellungen sind eine fünfte lokale Ansicht neben Dashboard, Aufgaben,
   Listen und Verlauf. Sie bleiben ohne Server und ohne Dashboardsnapshot
   erreichbar; der Server darf ihre Verfügbarkeit nicht steuern.
-- Fokus beginnt auf „Zurück“. Darunter stehen Netzwerk/Server,
+- Fokus beginnt auf „Zurück“. Darunter stehen WLAN hinzufügen,
   Gerätestatus/Diagnose, SD-Logs und später Zeitzone als scrollbare Zeilen.
-- Netzwerk/Server darf den vorhandenen `Notebook-Setup`-Hotspot, QR-Code und
-  Webserver wiederverwenden. Im Unterschied zur Erstinstallation braucht der
-  temporäre Einstieg einen Abbruch zurück zum unveränderten alten Profil und
-  langfristig mehrere WLAN-Profile.
+- WLAN hinzufügen verwendet den vorhandenen `Notebook-Setup`-Hotspot und die
+  QR-Codes, aber ein eigenes Formular ohne Serveradresse oder Enrollment. Der
+  temporäre Bildschirm bleibt bis zum manuellen Abbruch oder Speichern stehen.
+  Mitteltaste und Portal-Abbruch verändern kein Profil. Bis zu fünf Profile
+  werden zusätzlich gespeichert und bei Verbindungsverlust automatisch
+  durchprobiert; das zuletzt hinzugefügte zuerst.
 - Diagnose bleibt inhaltsarm. Memo-Text, WLAN-Passwörter, Enrollment-Code,
   Gerätecredential und Response-Bodies erscheinen weder auf der Ansicht noch
   im Diagnoseprotokoll.
@@ -128,8 +134,17 @@ werden, ohne die Architektur neu zu entscheiden.
   Diagnoselog. Der SD-Viewer setzt einen eigenen begrenzten, rotierten und
   bereinigten Logsink voraus; er wird nicht durch das Anzeigen der
   Journalrecords abgekürzt.
-- Stand 9. September: Die Ansicht und der Diagnoselogsink sind noch nicht
-  implementiert. BOOT drei Sekunden öffnet nur den bestehenden Setupmodus.
+- Der Diagnoselogsink besitzt kein Freitext-API. Ein Enum wählt eine feste
+  Meldung, ausschließlich drei numerische Parameter dürfen ergänzt werden.
+  `DIAG0.LOG` rotiert bei 16 KiB nach `DIAG1.LOG`/`DIAG2.LOG`; der Viewer liest
+  maximal 2047 Byte aus dem Ende der aktuellen Datei und scrollt zeilenweise.
+- Stand 9. September: Die fünfte Ansicht, ihre Rückkehrnavigation und die
+  inhaltsarme lokale Diagnose sind implementiert und abgenommen. Der sichere
+  Hotspoteinstieg, manuelle Abbruch und Mehrnetzspeicherung sind implementiert
+  und mit Heimnetz sowie Handyhotspot einschließlich Rückfall real bestätigt.
+  Speichern wechselt live und erhält den vorhandenen Dashboard-RAM-Zustand.
+  SD-Logsink und Viewer sind implementiert; SD-Schreibung, Darstellung,
+  Scrollen und Rückkehr sind real bestätigt.
 
 ## Abschluss einer Session
 
@@ -391,7 +406,7 @@ beschriftete Statuszeile entsteht in H3 zusammen mit den übrigen Indikatoren.
 - `MEMO_FIRMWARE` benennt die tatsächlich implementierte Roadmapstufe und wird
   mit jeder Stufe angehoben. Der Wert geht in Enrollment und `device_metadata`;
   eine stehengebliebene Kennung würde dem Server eine falsche Firmwareversion
-  melden. Aktueller Wert: `h3-surface`.
+  melden. Aktueller Wert: `h4-home`.
 - Der Uploadworker bearbeitet je Durchlauf höchstens 32 Sessionverzeichnisse.
   Der Fensteranfang rotiert zwischen den Durchläufen, damit Sessions hinter dem
   Fenster nicht dauerhaft ausgeschlossen bleiben, solange die lokale Retention

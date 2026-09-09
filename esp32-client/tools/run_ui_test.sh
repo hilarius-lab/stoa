@@ -25,7 +25,7 @@ cc -std=c11 -D_POSIX_C_SOURCE=200809L \
    -I"$root/main" \
    "$root/main/text.c" "$root/main/icons.c" "$root/main/status_bar.c" \
    "$root/main/header.c" "$root/main/card.c" "$root/main/dashboard_map.c" \
-   "$root/main/history.c" \
+   "$root/main/history.c" "$root/main/settings.c" \
    "$root/tools/ui_test.c" "$work/blobs.c" \
    -o "$work/ui_test"
 "$work/ui_test"

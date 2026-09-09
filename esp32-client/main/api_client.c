@@ -24,6 +24,7 @@
 #include "recorder.h"
 #include "api_client.h"
 #include "screen.h"
+#include "diagnostic_log.h"
 
 /* Headroom, not a fit. The server projects the e-paper surface down to roughly
  * six kilobytes, so 8192 would have worked on paper — and a worst case measured
@@ -90,6 +91,10 @@ static char credential[65];
 static char installation[JOURNAL_UUID_CHARS];
 static TaskHandle_t worker;
 static api_status status;
+/* Atomic mirrors for the display task. The full status struct belongs to the
+ * API worker; exposing it directly would race while a settings page is drawn. */
+static atomic_bool diagnostic_compatible;
+static atomic_uint diagnostic_gate_ok, diagnostic_gate_failed;
 /* Set only after a journaled queue/session state transition. The recorder task
  * consumes it as a request to verify the incremental RAM counters against the
  * complete journals after this synchronization pass. */
@@ -518,6 +523,8 @@ static bool enroll_if_needed(void) {
  * panel until the next recording. */
 static void publish_queue_status(void) {
     memo_queue_status queued = memo_queue_get();
+    diagnostic_log_event(DIAG_EVENT_QUEUE, (int)queued.ready,
+                         (int)queued.acked, (int)queued.attention);
     screen_status(queued.ready + list_action_count(false), queued.attention, queued.space_low);
     screen_status_storage_block(queued.space_block);
     if (!recorder_busy()) screen_memo(SCREEN_READY, 0);
@@ -1433,14 +1440,20 @@ static void fetch_session(void) {
 
 static void synchronize(void) {
     status.compatible = false;
+    atomic_store(&diagnostic_compatible, false);
     if(!enroll_if_needed()){ESP_LOGW("api","device enrollment pending; http=%d",status.last_http);return;}
     if (!gate("/api/client/capabilities") || !gate("/api/client/v1/contract")) {
         status.gates_failed++;
+        atomic_fetch_add(&diagnostic_gate_failed, 1);
+        diagnostic_log_event(DIAG_EVENT_GATE_FAILED, status.last_http, 0, 0);
         ESP_LOGW("api", "contract gate failed; http=%d", status.last_http);
         return;
     }
     status.compatible = true;
     status.gates_ok++;
+    atomic_store(&diagnostic_compatible, true);
+    atomic_fetch_add(&diagnostic_gate_ok, 1);
+    diagnostic_log_event(DIAG_EVENT_GATE_OK, status.last_http, 0, 0);
     /* Apply queued list mutations before fetching the dashboard. A successful
      * check therefore disappears from both the following list detail and the
      * overview snapshot in the same synchronization pass. */
@@ -1685,6 +1698,16 @@ void api_client_open_session(const char *session_id) {
     snprintf(session_id_wanted, sizeof(session_id_wanted), "%s", session_id);
     atomic_store(&session_pending, true);
     if (worker) xTaskNotifyGive(worker);
+}
+
+api_client_diagnostic api_client_get_diagnostic(void) {
+    return (api_client_diagnostic){
+        .configured = base[0] != 0,
+        .authenticated = credential[0] != 0,
+        .compatible = atomic_load(&diagnostic_compatible),
+        .gate_ok = atomic_load(&diagnostic_gate_ok),
+        .gate_failed = atomic_load(&diagnostic_gate_failed),
+    };
 }
 
 void api_client_network_up(void) { if (worker) xTaskNotifyGive(worker); }

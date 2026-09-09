@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from smart_notebook.app import app
 from smart_notebook.config import CLIENT_DASHBOARD_CACHE_MAX_AGE_SECONDS,EMBEDDING_DIMENSIONS,TIMEZONE
 from smart_notebook.database import get_db_connection,init_db
-from smart_notebook.services.client_dashboard import (ESP_DROP_KEYS,ESP_ITEMS_PER_SECTION,
+from smart_notebook.services.client_dashboard import (ESP_DROP_KEYS,ESP_HOME_ITEMS,ESP_ITEMS_PER_SECTION,
     ESP_PREVIEW_MAX,ESP_RENDERED_COMPONENTS,ESP_SURFACE,ESP_TASK_ITEMS_PER_SECTION,ESP_TITLE_MAX,
     _idle_content,_project_for_epaper,get_dashboard_entity)
 from smart_notebook.routers.client import _capabilities
@@ -59,6 +59,7 @@ def check_epaper_projection():
             assert not set(item)&set(ESP_DROP_KEYS),f"unrendered keys survived: {set(item)&set(ESP_DROP_KEYS)}"
             assert len(item.get("title") or "")<=ESP_TITLE_MAX
             assert len(item.get("preview") or "")<=ESP_PREVIEW_MAX
+            assert len(item.get("text") or "")<=ESP_PREVIEW_MAX
             if item["component"]=="entity_card":
                 missing=[key for key in ESP_RENDERED_KEYS if key not in item]
                 assert not missing,f"the renderer reads {missing} and they were dropped"
@@ -109,6 +110,12 @@ def main():
         assert any(token in x["title"] for x in sections["today"]["items"])
         assert not any(f"future low {token}" in x["title"] for x in sections["today"]["items"])
         assert any(f"future moderate {token}" in x["title"] for x in sections["today"]["items"])
+        home=sections["home-next"]["items"]
+        assert 0<len(home)<=ESP_HOME_ITEMS
+        assert all(x["id"]==f"home:{x['entity_ref']['type']}:{x['entity_ref']['id']}" for x in home)
+        if sections["today"]["items"] and sections["lists"]["items"]:
+            assert sum(x["entity_ref"]["type"]=="task" for x in home)<=2
+            assert any(x["entity_ref"]["type"]=="list" for x in home)
         projected_tasks=next(x for x in _project_for_epaper(esp)["sections"] if x["id"]=="today")
         assert any(f"future moderate {token}" in x["title"] for x in projected_tasks["items"])
         assert any(token in x["title"] for x in sections["lists"]["items"])
@@ -127,7 +134,7 @@ def main():
                 (f"ESP reorder {token}",now,now,now,now+timedelta(minutes=1))).fetchone()[0]
             db.commit()
         later=_idle_content("esp32_epaper");later_task=next(
-            x for section in later["sections"] for x in section["items"]
+            x for section in later["sections"] if section["id"]=="today" for x in section["items"]
             if x.get("title","")==f"ESP today {token}"
         )
         assert (later_task["id"],later_task["entity_ref"])==original_identity
@@ -158,16 +165,17 @@ def main():
                 json={"status":"active"})
             assert reopened.status_code==200,reopened.text
             assert reopened.json()["status"]=="active"
-        # The e-paper walker ignores every non-card component. The projection
-        # must remove both those items and their headings instead of producing
-        # the visually empty "Systemhinweise"/"Neue Eingabe" sections seen on
-        # the real panel. Session cards belong to the recording history.
+        # Alerts now have a real, non-focusable ESP renderer. Other unsupported
+        # components and their empty headings stay filtered; session cards
+        # belong to the recording history.
         sparse=_project_for_epaper({"sessions":[],"sections":[
-            {"id":"system-attention","title":"Systemhinweise","items":[{"component":"alert","title":"Warnung"}]},
+            {"id":"system-attention","title":"Systemhinweise","items":[{"component":"alert","title":"Warnung","text":"Bitte prüfen"}]},
             {"id":"active-sessions","title":"Offene Sessions","items":[{"component":"entity_card","title":"processing"}]},
             {"id":"capture","title":"Neue Eingabe","items":[{"component":"input_prompt","title":"Memo"}]},
         ]})
-        assert sparse["sections"]==[],sparse
+        assert [x["id"] for x in sparse["sections"]]==["system-attention"],sparse
+        assert sparse["sections"][0]["items"]==[
+            {"component":"alert","title":"Warnung","text":"Bitte prüfen"}],sparse
         size=check_epaper_projection()
         print(f"M8 ESP DASHBOARD PROJECTION TEST: PASS (esp32_epaper snapshot {size} bytes "
               f"of {ESP_RESPONSE_BUDGET_BYTES})")

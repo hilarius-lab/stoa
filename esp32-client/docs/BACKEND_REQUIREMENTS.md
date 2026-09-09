@@ -103,11 +103,14 @@ vom ESP beim nächsten Abruf ohne Firmwareänderung übernommen.
 
 Kein Bestandteil des Capabilities-Gates — ein Server ohne Angabe bleibt gültig.
 
-## 7. Stabile Fokusidentität über Revisionen — Backend umgesetzt, Firmware offen
+## 7. Stabile Fokusidentität über Revisionen — umgesetzt und physisch bestätigt
 
-Das Backend garantiert stabile Karten-IDs. Die Firmware hält den Fokus derzeit
-noch nicht über einen Snapshotwechsel hinweg; diese verbleibende Clientarbeit
-ändert den Vertrag nicht.
+Das Backend garantiert stabile Karten-IDs. Die Firmware hält den Fokus beim
+Snapshotwechsel zuerst anhand der Komponenten-ID, ersatzweise anhand der
+Entity-Referenz. Entfällt die Karte, gilt der Positionsfallback aus
+`DASHBOARD_UI.md`. Die physische Probe mit einem während der Navigation
+einsetzenden erzwungenen Sync hielt den Fokus wie vorgesehen; der Vertrag wurde
+dafür nicht erweitert.
 
 `entity_card.id` und `entity_ref` derselben logischen Entität sind innerhalb
 einer Surface über Revisionen, Textänderungen und Umordnungen stabil. Rang und
@@ -162,8 +165,9 @@ und hier neu verifiziert (`main/api_client.c::create_session()` und
    `never`/`user_action` werden inzwischen als dauerhafte Session-`attention`
    samt Grund im Journal sichtbar; transiente Fehler bleiben retrybar.
 3. **Umgesetzt**, siehe Abschnitt 5.
-4. **Offen.** Der Fokus hängt weiterhin am Index, nicht an der Komponenten-ID.
-   SSE bleibt bewusst ungenutzt.
+4. **Umgesetzt.** Der Fokus folgt Komponenten-ID beziehungsweise Entity-
+   Referenz und fällt bei Wegfall positionsstabil zurück. SSE bleibt bewusst
+   ungenutzt.
 
 ## 11. Task und Listenpunkte abhaken — festgelegt und umgesetzt, 7./8. September
 
@@ -208,15 +212,23 @@ noch Zeitzonenlogik werden in der Firmware dupliziert. Der historische
 Section-Key `today` bleibt wire-kompatibel, die sichtbare Überschrift lautet
 „Aufgaben“.
 
-## 13. Ruhige E-Paper-Projektion und Listenlesbarkeit — festgelegt und umgesetzt, 8. September
+## 13. Ruhige E-Paper-Projektion, Home und Listenlesbarkeit — umgesetzt, 8./9. September
 
-Die E-Paper-Surface enthält nur Sektionen mit wenigstens einer `entity_card`,
-weil `main/dashboard.c` nur diesen Komponententyp zeichnet. Nicht gerenderte
-`alert`-, `status_banner`-, `text_block`- und `input_prompt`-Komponenten dürfen
-keine leeren Überschriften auf dem Panel hinterlassen. Die Sektion „Offene
-Sessions“ bleibt auf dieser Surface aus: dieselben Aufnahmen stehen im
-paginierten Verlauf, einschließlich Zustand und Fehlermarke. Default-Surface
-und gemeinsamer Komponentenvertrag werden dadurch nicht beschnitten.
+Die E-Paper-Surface enthält nur Sektionen mit wenigstens einer gezeichneten
+`entity_card`- oder `alert`-Komponente. `alert` ist ein vollbreiter,
+nicht fokussierbarer Systemhinweis; `status_banner`, `text_block` und
+`input_prompt` dürfen weiterhin keine leeren Überschriften hinterlassen. Die
+Sektion „Offene Sessions“ bleibt aus: dieselben Aufnahmen stehen im paginierten
+Verlauf, einschließlich Zustand und zustandsabhängigem Symbol. `last_error`
+erzwingt dort nur das Fehlerzeichen; sein Text bleibt verborgen. Default-Surface und
+gemeinsamer Komponentenvertrag werden dadurch nicht beschnitten.
+
+Home zeigt offene Rückfragen, Processing-Hinweise für `failed`, `parked` und
+`attention_required` sowie höchstens drei Karten unter „Als Nächstes“: zunächst
+bis zu zwei Tasks aus der bereits gefilterten/sortierten Aufgabenmenge und eine
+aktive Liste, danach Auffüllen aus der verbleibenden Art. Die vollständigen
+`today`-/`lists`-Sektionen bleiben für ihre eigenen Ansichten erhalten. Home-
+Kopien besitzen eine eigene stabile Komponenten-ID und dieselbe `entity_ref`.
 
 Listenkarten liefern einen verständlichen Status `<n> offen`. Die
 Entity-Detailantwort für `type=list` enthält das strukturierte `items`-Array mit
