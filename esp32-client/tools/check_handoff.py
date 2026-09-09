@@ -40,5 +40,5 @@ for markdown in root.rglob("*.md"):
     for target in re.findall(r"\[[^]]+\]\(([^)]+)\)",text):
         if "://" in target or target.startswith("#"): continue
         assert (markdown.parent/target).resolve().exists(),f"Broken link {target} in {markdown}"
-assert len(contract["paths"])==22,"ESP contract must include all 22 device paths"
+assert len(contract["paths"])==24,"ESP contract must include all 24 device paths"
 print(f"Handoff OK: {len(required)} required files, {len(contract['paths'])} API paths, {len(schema_names)} schemas")

@@ -605,12 +605,22 @@ Note-Projektionen leiten einen Anzeigescore aus bis zu fünf Eventquellen ab (`0
 | Task anlegen / ändern | Capture, Task-API, Promotion | Allgemeines „ändere die Aufgabe von gestern“ wird nicht zuverlässig objektübergreifend aufgelöst. |
 | Listen / Einträge anlegen | Listen-API, Capture/Listenzielauflösung, Promotion | Ziellistenauflösung vorhanden, aber kein universeller Befehlsrouter. |
 | Task erledigen | Task-Status-API; zusätzlich Client-v1-`complete_task`; CalDAV | Gezielte Objektaktion, keine allgemeine natürliche-Sprach-Zuordnung. |
-| Listeneintrag erledigen / wieder öffnen | List-Item-Status-API / CalDAV | Kein durchgängiger Auto-Sprachpfad. |
+| Listeneintrag erledigen / wieder öffnen | List-Item-Status-API, Client-v1-Desired-State / CalDAV | Gezielte Objektaktion; kein durchgängiger Auto-Sprachpfad. |
 | Archivieren / reaktivieren | Entitätsspezifische APIs, Wartung und CalDAV | Archivierung ist nicht physische Löschung aller Quellen. |
 | Session-Kandidat korrigieren / ersetzen / verwerfen | Artefaktoperationen und spezielle Task-Modifier-Regel | Bestehende dauerhafte Wissensobjekte werden dadurch nicht automatisch rückwirkend synchron korrigiert. |
 | Fragen beantworten / wieder öffnen | Question-API | Capture-Kontext noch nicht vollständig angeschlossen. |
 
 Im aktuellen Code ist `POST /api/client/v1/entities/task/{entity_id}/complete` vorhanden. Die öffentliche UUID wird auf den internen Task aufgelöst und der Status idempotent auf `done` gesetzt. Das ist eine gegenüber früheren Aussagen dieses Chats zu berücksichtigende Ergänzung. Es hebt nicht automatisch alle dokumentierten Android-Produktgrenzen auf.
+
+Entsprechend setzt `PUT /api/client/v1/entities/list-item/{entity_id}/status`
+nach Auflösung der stabilen öffentlichen UUID den Desired-State `active|done`
+über `lists.py::set_list_item_status`. Das erneuert die Listeneinbettung, läuft
+aber bewusst nicht durch Segmentierung, Artefaktklassifikation oder Promotion:
+Der Nutzer hat das konkrete Objekt in der Detailansicht bereits ausgewählt.
+Damit ist dies keine Abkürzung für neue Wissenseingaben, sondern ein eng
+typisierter Aktionskanal. Die unter W01 dokumentierte Lücke bleibt bestehen:
+Der Statusservice schreibt noch kein allgemeines Vorher/Nachher-Mutationsaudit
+mit Entscheidungsgrund.
 
 Eine allgemeine „vergiss/lösche das“-Sprachaktion mit eindeutigem Ziel und definierter Aufbewahrungswirkung fehlt. Semantisches Ersetzen, Archivieren, Sync-Tombstones und physisches Löschen sind getrennte Vorgänge.
 
@@ -945,6 +955,30 @@ Bei Änderungen an einer Verarbeitungskette sind in dieser Datei mindestens Ausl
 
 **Codeänderung 2026-09-08 (Task-Bearbeitungsfenster nach Queue-Fix):** Auslöser war das bestätigte Zielbild, Tasks nicht nur am Fristtag, sondern in ihrem Bearbeitungszeitraum und ab moderater Dringlichkeit auf dem ESP zu zeigen. Migration `0039_task_work_window` ergänzt das nullable `work_start_at`, migriert bestehende Tasks mit Frist auf den Beginn ihres Erfassungstags (bei bereits früherer Frist höchstens den Fristzeitpunkt) und sichert `work_start_at <= due_at`. Task-CRUD, Capture, Deduplizierung, Tageskonsolidierung und Artefaktpromotion führen das Feld mit; `save_task` bildet bei vorhandener Frist ohne expliziten Start genau einmal einen persistenten Standard aus der ursprünglichen Event-/Sessionzeit. Der Regelrouter trennt `ab …` von `bis …`/`spätestens …`, damit ein Bearbeitungsbeginn nicht als Frist fehlgedeutet wird. CalDAV bildet Beginn/Ende als `DTSTART`/`DUE` ab. Die serverseitige `esp32_epaper`-Projektion wählt offene, nicht archivierte Tasks, wenn `work_start_at <= jetzt` oder `urgency >= 0.5`; der Policy-Default `0.4` genügt allein nicht. Die Karten zeigen `Ab … · bis …`; der bestehende Abschnittsschlüssel `today` bleibt aus Kompatibilitätsgründen erhalten, sein Titel lautet nun „Aufgaben“. Nach der realen Probe wurde das zunächst pauschale Drei-Karten-Limit als Grund für eine fehlende vierte, korrekt ausgewählte dringende Task erkannt. Nur die scrollbare Task-Sektion darf deshalb bis zu zehn Karten tragen; andere ESP-Sektionen bleiben auf drei begrenzt. Fehlerpfad: Ein expliziter Start nach der Frist wird im Service bzw. Operator-API mit Validierungsfehler abgelehnt; ungültige LLM-Zeitwerte bleiben im jeweiligen bestehenden Fehler-/Deferred-Pfad. Geprüft sind Parser, Standardbeginn, CalDAV-Roundtrip, Schwellen `0.4/0.5`, Entity-Detail, dringende Task jenseits Position drei, Wire-Budget (6247/8192 Byte im belasteten Projektionstest), generierter Client-OpenAPI-Vertrag und das vollständige M8-Release-Gate einschließlich logischem Vier-Stunden-Soak. Nach Kaltstart bestätigte der Nutzer die zuvor fehlende Balkonbeleuchtungs-Task sichtbar auf dem ESP; Diagnose danach: `compatible=1`, `gate_failed=0`, `upload_failed=0`, Queue `ready=0 acked=5 attention=0`.
 
-**Codeänderung 2026-09-08 (ESP-Dashboard und Listenlesbarkeit):** Auslöser waren die real sichtbaren, aber inhaltsleeren Sektionen „Systemhinweise“ und „Neue Eingabe“ sowie zwei Karten, die `processing` als Titel, Vorschau und Status wiederholten. Input waren der vollständige Idle-Snapshot und der tatsächliche Walker in `esp32-client/main/dashboard.c`, der innerhalb einer Sektion ausschließlich `entity_card` zeichnet. `client_dashboard.py::_project_for_epaper` filtert nun zuerst nicht gerenderte Komponententypen und entfernt danach leere Sektionen; die redundante Sektion `active-sessions` wird nur auf der E-Paper-Surface ausgelassen, weil der Verlauf dieselben Aufnahmen mit Zustand und Fehlermarke führt. Die Default-Surface bleibt unverändert. Listen werden weiterhin aus offenen, nicht archivierten Einträgen aufgebaut; ihre Karte erhält `<n> offen`, und `get_dashboard_entity('list', …)` liefert zusätzlich zum strukturierten `items`-Array eine auf aktive Einträge begrenzte lesbare `content`-Fassung. Reihenfolge und Fehlerpfad der Memo-/Artefakt-/Promotionkette ändern sich nicht. Zwei nach fehlgeschlagenen Regressionstests liegengebliebene Test-Sessions wurden anhand `source_type` und Test-Firmwarekennung eindeutig von echten Geräteaufnahmen getrennt und entfernt; die betreffenden Vertragstests registrieren nun eine Cleanup-Routine, die auch bei Assertion/Exception läuft. Geprüft sind Syntax, E-Paper-Projektion, Listenübersicht/-detail und das 8192-Byte-Wire-Budget; die reale Memo→Liste→ESP-Probe steht noch aus.
+**Codeänderung 2026-09-08 (ESP-Dashboard und Listenlesbarkeit):** Auslöser waren die real sichtbaren, aber inhaltsleeren Sektionen „Systemhinweise“ und „Neue Eingabe“ sowie zwei Karten, die `processing` als Titel, Vorschau und Status wiederholten. Input waren der vollständige Idle-Snapshot und der tatsächliche Walker in `esp32-client/main/dashboard.c`, der innerhalb einer Sektion ausschließlich `entity_card` zeichnet. `client_dashboard.py::_project_for_epaper` filtert nun zuerst nicht gerenderte Komponententypen und entfernt danach leere Sektionen; die redundante Sektion `active-sessions` wird nur auf der E-Paper-Surface ausgelassen, weil der Verlauf dieselben Aufnahmen mit Zustand und Fehlermarke führt. Die Default-Surface bleibt unverändert. Listen werden weiterhin aus offenen, nicht archivierten Einträgen aufgebaut; ihre Karte erhält `<n> offen`, und `get_dashboard_entity('list', …)` liefert zusätzlich zum strukturierten `items`-Array eine auf aktive Einträge begrenzte lesbare `content`-Fassung. Reihenfolge und Fehlerpfad der Memo-/Artefakt-/Promotionkette ändern sich nicht. Zwei nach fehlgeschlagenen Regressionstests liegengebliebene Test-Sessions wurden anhand `source_type` und Test-Firmwarekennung eindeutig von echten Geräteaufnahmen getrennt und entfernt; die betreffenden Vertragstests registrieren nun eine Cleanup-Routine, die auch bei Assertion/Exception läuft. Geprüft sind Syntax, E-Paper-Projektion, Listenübersicht/-detail und das 8192-Byte-Wire-Budget. Die anschließende physische Memo→Liste→ESP-Probe erzeugte aus „Hafermilch, Zitronen und Spülmaschinentabs“ über den normalen Audio-/Worker-/Promotionspfad drei dauerhafte Listenitems und zeigte sie am Gerät.
 
 **Codeänderung 2026-09-08 (einzelne Listenpunkte am ESP):** Auslöser ist ein Kurzdruck auf ein Item innerhalb eines geöffneten Listendetails; Input sind die öffentliche Item-UUID und der lokale Desired-State `active|done`. `get_dashboard_entity('list', …)` erzeugt stabile `client_entity_identities` für aktive Items und gibt erledigte Items nicht zurück. Die Firmware journalisiert jeden Toggle zunächst als NVS-Draft; ein Zurücktoggeln entfernt einen ungecommitten Netto-Nullstand. Beim Verlassen werden Drafts sendebereit, der Worker ruft idempotent `PUT /api/client/v1/entities/list-item/{id}/status` auf und entfernt die lokale Aktion erst nach passender `200`-Antwort. Ein Neustart promoted liegengebliebene Drafts als implizites Verlassen. Output ist ein aktualisierter Itemstatus; der folgende Dashboard-/Detailabruf enthält erledigte Items nicht mehr. Fehlerpfad: fehlende öffentliche ID liefert `ENTITY_NOT_FOUND`; Netzwerk-/Serverfehler lassen die persistierte Aktion für Retry stehen, und ein fehlgeschlagener NVS-Write übernimmt den sichtbaren Toggle beziehungsweise das Verlassen nicht. Backendtests belegen Done, idempotente Wiederholung, Reopen und Filterung; OpenAPI-Haupt-/ESP-Vertrag sowie ESP-IDF-Build sind grün. Die physische COM9-Probe bestätigte Fokusstart, Toggle und Zurücktoggeln sowie das anschließende Verschwinden von „Hafermilch“. Ein nicht im Gerätefont enthaltenes `‹` vor „Zurück“ wurde nach der Sichtprüfung entfernt, weil es als Ersatzbox erschien.
+
+**Übergabe-Audit 2026-09-08 (kein verkürzter Eingangsweg):** Die reale
+Listenprobe begann am physischen Mikrofon in
+`esp32-client/main/recorder.c::record_memo`, persistierte UUID, M4A-Segmente,
+Hashes und Finish im SD-Journal und wurde von
+`api_client.c::create_local_sessions/upload_chunk/finish_session` über die
+Client-v1-Sessionrouten übertragen. `audio.py::run_stt_once`,
+`segmentation.py::run_text_processing_once` und
+`artifacts.py::run_session_artifact_worker_once` liefen über `worker.py all`;
+`client_sessions.py::settle_client_session_for_ingestion` schloss danach
+fachliche Finalisierung und `promotion.py::promote_session_artifacts` vor dem
+technischen Abschluss und der Audiofreigabe an. Erst die Promotion rief für die
+drei `list_item`-Artefakte `lists.py::process_list_item_candidate` auf; die
+ESP-Projektion las anschließend das dauerhafte Listenmodell. Direkte
+Test-Fixtures existieren zusätzlich, waren aber nicht der Nachweis dieser
+Live-Probe. Das spätere Abhaken ist, wie Abschnitt 14.1 beschreibt, eine
+separate explizite Objektmutation und ersetzt diesen Eingang nicht.
+
+Der Audit bestätigt zugleich eine verbleibende Darstellungsgrenze: Weil die
+E-Paper-Projektion derzeit ausschließlich `entity_card` rendert und Tasks sowie
+Listen in eigene Ansichten ausgelagert sind, ist die Hauptansicht ohne offene
+Rückfragen leer. Handlungsrelevante `alert`-Komponenten verschwinden korrekt
+statt als leere Überschrift, besitzen aber noch keine gleichwertige Darstellung
+auf dem ESP. Das betrifft nur den Ausgabeweg in Abschnitt 17, nicht A01–A13.

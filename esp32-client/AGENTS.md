@@ -42,11 +42,11 @@ Hardware-Sicherheitszustände erforderlich.
 ## Pflichtprüfungen
 
 - nach Firmware-, Build- oder Dependencyänderungen `idf.py build`
-- nach Änderungen an `main/journal.c` oder der Recovery: der hier verlangte
-  `sh tools/run_journal_test.sh` **existiert nicht mehr im Baum**. Bis er wieder
-  existiert, ist jede Änderung an Journal oder Recovery ungetestet und muss am
-  Gerät geprüft werden; siehe ROADMAP H1.
-  (läuft auf dem Host, ohne ESP-IDF und ohne Hardware)
+- nach Änderungen an `main/journal.c` oder der Recovery
+  `sh tools/run_journal_test.sh` (läuft auf dem Host, ohne ESP-IDF und ohne
+  Hardware). Der Test umfasst 6341 Prüfungen; auf einem Windows-Host muss dafür
+  ein Host-`gcc` mit Address-/Undefined-Sanitizer verfügbar sein. Ein bloßer
+  ESP-IDF-Crosscompiler ersetzt diese Prüfung nicht.
 - nach Änderungen an `main/text.c` oder den Schriftassets `sh tools/run_text_test.sh`
   (ebenfalls Host, ohne ESP-IDF und ohne Hardware)
 - nach Änderungen an `main/card.c`, `main/status_bar.c`, `main/header.c` oder

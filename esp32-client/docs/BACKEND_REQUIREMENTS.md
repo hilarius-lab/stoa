@@ -103,7 +103,7 @@ vom ESP beim nächsten Abruf ohne Firmwareänderung übernommen.
 
 Kein Bestandteil des Capabilities-Gates — ein Server ohne Angabe bleibt gültig.
 
-## 7. Stabile Fokusidentität über Revisionen — festgelegt und umgesetzt
+## 7. Stabile Fokusidentität über Revisionen — Backend umgesetzt, Firmware offen
 
 Das Backend garantiert stabile Karten-IDs. Die Firmware hält den Fokus derzeit
 noch nicht über einen Snapshotwechsel hinweg; diese verbleibende Clientarbeit
@@ -127,7 +127,7 @@ Enrollment und serverseitige Zwei-Phasen-Rotation sind implementiert; der ESP
 kann einen einmaligen Code einlösen. Die **automatische Rotation auf dem ESP**
 fehlt noch, ist aber Firmwarearbeit, keine Backendarbeit.
 
-## 10. HTTPS — Serverseite, in Arbeit
+## 10. HTTPS — Clientpfad umgesetzt und am Gerät bestätigt
 
 Der lokale HTTP-Pfad ist ausschließlich ein Entwicklungsprofil. Produktiv gilt
 erzwungenes HTTPS mit Zertifikatsprüfung. Ein öffentlich vertrauenswürdiges
@@ -158,9 +158,9 @@ und hier neu verifiziert (`main/api_client.c::create_session()` und
    `sequence_base` über `number_matches_or_absent()` gegen
    `JOURNAL_SEQUENCE_BASE`; bei Abweichung schlägt der Create fehl und die
    Session lädt nichts hoch. Ein fehlendes Feld wird akzeptiert — ein Server,
-   der nichts sagt, widerspricht nicht. Offen bleibt weiterhin die dauerhaft
-   sichtbare Einordnung eines fehlgeschlagenen Create als `attention`; derzeit
-   erscheint nur eine Fehlerzeile im Log und der Zähler `create_failed`.
+   der nichts sagt, widerspricht nicht. Fehlgeschlagene Creates mit
+   `never`/`user_action` werden inzwischen als dauerhafte Session-`attention`
+   samt Grund im Journal sichtbar; transiente Fehler bleiben retrybar.
 3. **Umgesetzt**, siehe Abschnitt 5.
 4. **Offen.** Der Fokus hängt weiterhin am Index, nicht an der Komponenten-ID.
    SSE bleibt bewusst ungenutzt.

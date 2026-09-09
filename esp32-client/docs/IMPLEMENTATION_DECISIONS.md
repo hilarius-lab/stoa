@@ -110,6 +110,27 @@ werden, ohne die Architektur neu zu entscheiden.
   Refreshabstände messen gegen `esp_timer` und funktionieren, ob die Uhr je
   synchronisiert wurde oder nicht.
 
+## Lokale Einstellungsansicht
+
+- Einstellungen sind eine fünfte lokale Ansicht neben Dashboard, Aufgaben,
+  Listen und Verlauf. Sie bleiben ohne Server und ohne Dashboardsnapshot
+  erreichbar; der Server darf ihre Verfügbarkeit nicht steuern.
+- Fokus beginnt auf „Zurück“. Darunter stehen Netzwerk/Server,
+  Gerätestatus/Diagnose, SD-Logs und später Zeitzone als scrollbare Zeilen.
+- Netzwerk/Server darf den vorhandenen `Notebook-Setup`-Hotspot, QR-Code und
+  Webserver wiederverwenden. Im Unterschied zur Erstinstallation braucht der
+  temporäre Einstieg einen Abbruch zurück zum unveränderten alten Profil und
+  langfristig mehrere WLAN-Profile.
+- Diagnose bleibt inhaltsarm. Memo-Text, WLAN-Passwörter, Enrollment-Code,
+  Gerätecredential und Response-Bodies erscheinen weder auf der Ansicht noch
+  im Diagnoseprotokoll.
+- `MEMOS/*/JOURNAL.LOG` ist der persistente Aufnahmezustand und kein
+  Diagnoselog. Der SD-Viewer setzt einen eigenen begrenzten, rotierten und
+  bereinigten Logsink voraus; er wird nicht durch das Anzeigen der
+  Journalrecords abgekürzt.
+- Stand 8. September: Die Ansicht und der Diagnoselogsink sind noch nicht
+  implementiert. BOOT drei Sekunden öffnet nur den bestehenden Setupmodus.
+
 ## Abschluss einer Session
 
 - Der `finish`-Satz wird geschrieben, sobald Segmente existieren, unabhängig

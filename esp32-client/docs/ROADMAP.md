@@ -6,7 +6,7 @@ WLAN-Einrichtung, SD, Mikrofon, M4A-Segmentierung, wahrheitsgetreue UI,
 Partial Refresh, USB-Diagnose und reales Sprach-/Displayfeedback sind am Gerät
 nachgewiesen.
 
-## H1 – verlustfreie lokale Queue (implementiert, Hosttest offen)
+## H1 – verlustfreie lokale Queue (implementiert, Hosttest vorhanden)
 
 - Session- und Chunk-UUIDs vor Aufnahme erzeugen
 - versioniertes, checksummiertes Journal und Boot-Recovery
@@ -17,12 +17,14 @@ nachgewiesen.
 Abnahme: Nach Reset an jeder Write-Grenze ist jedes Segment eindeutig `ready`,
 `acked`, absichtlich verworfen oder sichtbar `attention`; nie still verloren.
 
-Stand: Format, Recovery und Adoption sind implementiert. **Der hier früher
-genannte Hosttest `tools/run_journal_test.sh` existiert nicht** — die Datei ist
-im Baum nicht vorhanden, die behauptete Abdeckung „Trennung des Journals an
-jedem Byte" ist also unbelegt. Das ist eine Lücke und keine Formalie: die
-Boot-Recovery wurde seither geändert (`close_open_horizon`), ohne dass ein Test
-sie absichert. Nachzuholen, bevor H1 als abgenommen gilt.
+Stand: Format, Recovery und Adoption sind implementiert. Der Hosttest
+`tools/run_journal_test.sh` ist vorhanden und umfasst 6341 Prüfungen, darunter
+Trennung an jeder Record-Bytegrenze, Recovery, Adoption und 32 Segmente. In der
+Übergabesitzung vom 8. September konnte er auf diesem Windows-Host nicht erneut
+gestartet werden, weil kein Host-`gcc` installiert ist; der letzte dokumentierte
+grüne Lauf steht im `CHANGELOG.md`. Das ist eine Werkzeuggrenze, keine fehlende
+Testdatei. Reale Stromausfälle an allen physischen Schreib-/Rename-Grenzen
+bleiben trotzdem offen.
 
 Build gegen die echten Komponenten, Flash, Adoption von 11 Altsessions und eine
 neue Zwei-Segment-Aufnahme sind am realen Gerät bestanden. Am Gerät geprüft (6. September): Leerlauf und Neustart lassen die Zahlen
@@ -58,8 +60,8 @@ beschrieb. Merkposten für H1: das Diagnosewerkzeug ist Teil der Abnahme, nicht
 Beiwerk — eine Queue, deren Zustand man nicht ablesen kann, ist nicht
 nachweisbar verlustfrei.
 
-Offen bleiben der Journal-Hosttest und die gezielten Stromausfälle an den
-Schreib-/Rename-Grenzen.
+Offen bleiben die gezielten Stromausfälle an den Schreib-/Rename-Grenzen; der
+Hosttest muss nach Journal-/Recoveryänderungen auf einem Host mit `gcc` laufen.
 
 ## H2 – minimale Backendanbindung
 
@@ -83,20 +85,23 @@ absichtlich nach dem Speichern verworfenes ACK. Transiente Fehler bleiben
 
 Enrollment und serverseitige Zwei-Phasen-Rotation sind implementiert; der ESP
 kann einen einmaligen Code einlösen. Für die produktive H2-Abnahme fehlen die
-automatische Rotation auf dem ESP, HTTPS mit Wurzelzertifikatsspeicher (umgesetzt; am Gerät noch nicht bestätigt),
-die vollständige persistierte Retryklassifizierung mit Jitter/Serverhinweisen,
-die Bestätigung der Verbindungswiederverwendung am Gerät — sowohl die
-JSON-Aufrufe als auch der Chunkupload teilen sich inzwischen je eine Verbindung.
-Anlass war die Messung vom 6. September: eine Memo von 14 Segmenten erzeugte 14
-Handshakes im Abstand von je rund 3,4 Sekunden, insgesamt 48 Sekunden Upload.
-Da ein Handshake allein etwa 3 Sekunden kostet, entfiel der weitaus größte Teil
-davon nicht auf die Daten. Die frühere Einschätzung, der Handshake falle neben
-einem mehrere hundert Kilobyte großen Segment kaum ins Gewicht, war damit
-falsch; für den Mehrstundenmodus aus H5 mit 360 Segmenten je Stunde wäre sie
-teuer geworden —,
-die Backendumsetzung der Retentionfreigabe, die Persistenz der Abschlussbestätigung
-— dass der Server `finish` angenommen hat, merkt sich der ESP derzeit nur bis
-zum Neustart und bietet danach jede Session einmal erneut an.
+automatische Rotation auf dem ESP, die vollständige persistierte
+Retryklassifizierung mit Jitter/Serverhinweisen, die Bestätigung der
+Verbindungswiederverwendung am Gerät und die Persistenz der
+Abschlussbestätigung. Sowohl JSON-Aufrufe als auch Chunkupload teilen sich
+inzwischen je eine Verbindung, dies ist aber noch nicht vermessen. Anlass war
+die Messung vom 6. September: Eine Memo mit 14 Segmenten erzeugte 14 Handshakes
+im Abstand von rund 3,4 Sekunden und benötigte 48 Sekunden Upload. Ein einzelner
+Handshake kostete etwa drei Sekunden; für H5 wäre das teuer. Dass der Server
+`finish` angenommen hat, merkt sich der ESP weiterhin nur bis zum Neustart und
+bietet danach jede Session einmal idempotent erneut an.
+
+HTTPS mit öffentlichem Wurzelzertifikatsspeicher ist implementiert und am Gerät
+gegen `living-notebook.heusgenradig.de` einschließlich erfolgreicher
+Zertifikatsvalidierung gelaufen. Die sessionsweite Retentionfreigabe ist auf
+beiden Seiten umgesetzt: Der ESP löscht Audio nur nach lokal vollständigem
+durable ACK, explizitem `local_audio_release_allowed` und einer unmittelbar
+vorher erneut vollständigen Reconciliation.
 
 Die gezielte Prüfung der ACK-Grenze ist bestanden, siehe H1. Der lokale
 HTTP-Pfad ist ausschließlich ein Entwicklungsprofil.
@@ -163,6 +168,17 @@ alle Segmente genau einmal logisch zustellen und serverseitig vollständig verar
   Tasks ab moderater Dringlichkeit (`urgency >= 0.5`) in die Taskansicht
   aufnehmen. Das neue `work_start_at`/CalDAV-`DTSTART` ist ein eigener
   Backend-/Clientvertragsschritt, keine lokal erfundene Firmwaresemantik.
+
+Stand 8. September: Tasks, Listen, Verlauf und interaktive Details sind real
+abgenommen. Die Hauptansicht ist nach der Entfernung redundanter Sessions und
+nicht renderbarer Komponenten im Normalfall leer und zeigt höchstens offene
+Rückfragen. Für das eigentliche Home-Dashboard fehlen deshalb eine bewusst
+serverseitig priorisierte Übersicht und eine sichtbare Darstellung
+handlungsrelevanter Systemhinweise. Ebenfalls offen: Fokus über
+Snapshotrevisionen anhand stabiler IDs halten; die Firmware setzt ihn derzeit
+auf den Menüknopf zurück. Die produktive Einstellungsansicht gehört als lokale
+fünfte Ansicht neben Dashboard, Aufgaben, Listen und Verlauf; Details stehen in
+`docs/DASHBOARD_UI.md`.
 
 ## H5 – Meetingmodus
 

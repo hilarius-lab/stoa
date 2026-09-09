@@ -92,9 +92,11 @@ Es wird nichts gezeigt, was nicht gemessen ist:
 
 ## Kopfzeile
 
-Links der Verlaufsknopf als Dreipunktsymbol: fokussierbar und beim Betreten des
-Dashboards vorausgewählt. Rechts, rechtsbündig und nicht fokussierbar, die
-Zustandsanzeige des Snapshots:
+Links der Menüknopf als Dreipunktsymbol: fokussierbar und beim Betreten einer
+Ansicht vorausgewählt. Ein Kurzdruck öffnet den horizontalen Ansichtsselector.
+Der aktuelle Build enthält Dashboard, Aufgaben, Listen und Verlauf; als fünfte
+lokale Ansicht kommt „Einstellungen“ hinzu. Rechts, rechtsbündig und nicht
+fokussierbar, steht die Zustandsanzeige des Snapshots:
 
 - `gerade eben`, `vor 3 min`, `vor 2 h`, `vor 1 d` bei aktuellem Snapshot
 - `offline · vor 47 min` bei zwischengespeichertem Snapshot ohne Netz
@@ -107,7 +109,7 @@ bleibt vor einer vertrauenswürdigen Zeitsynchronisation ehrlich, funktioniert
 also schon ohne SNTP, und beantwortet die Frage, die der Leser tatsächlich hat.
 Gemessen wird gegen die monotone Gerätezeit, nicht gegen die Wanduhr.
 
-Der Default-Fokus auf dem Verlaufsknopf hat einen zweiten Zweck: beim Ankommen
+Der Default-Fokus auf dem Menüknopf hat einen zweiten Zweck: beim Ankommen
 ist keine Karte invertiert, sodass die Dringlichkeiten der Karten unverstellt
 sichtbar sind.
 
@@ -130,6 +132,15 @@ Surface nicht als leere Überschrift angedeutet. Sie bleiben im Default-Vertrag
 für andere Clients unverändert erhalten. Technische offene Sessions erscheinen
 nicht zusätzlich auf dem ESP-Hauptdashboard: Aufnahmezustände gehören in den
 paginierten Verlauf, und die lokale Statusleiste zeigt Aufnahme und Queue.
+
+Die aktuelle Filterung ist eine ehrliche Zwischenstufe, nicht das Zielbild des
+Home-Dashboards. Aufgaben und Listen werden in ihren eigenen Ansichten
+ausgeblendet, `alert`/`input_prompt` mangels Renderer entfernt und technische
+Sessions in den Verlauf verschoben. Ohne offene Rückfragen bleibt die
+Hauptansicht daher leer. Das Ziel ist eine kleine, serverseitig priorisierte
+Übersicht aus offenen Rückfragen, handlungsrelevanten Systemhinweisen und
+wenigen nächsten Entitäten. Sie darf keine lokalen Dringlichkeitsregeln
+erfinden und keine bedeutungslosen Processingkarten zurückbringen.
 
 ## Karten
 
@@ -269,9 +280,9 @@ Fläche, weiße Schrift. Die Rahmenstärke bleibt dadurch frei für `border_role
 - untere Taste: nächstes fokussierbares Element
 - kurze mittlere Betätigung: Detailansicht öffnen beziehungsweise auslösen
 
-Reihenfolge: Verlaufsknopf, dann die Karten in Lesereihenfolge — innerhalb einer
+Reihenfolge: Menüknopf, dann die Karten in Lesereihenfolge — innerhalb einer
 Zeile links vor rechts, dann die nächste Zeile. Vom obersten Element führt die
-obere Taste auf den Verlaufsknopf.
+obere Taste auf den Menüknopf.
 
 Nur Komponenten mit unterstützter `action` oder auflösbarer `entity_ref` sind
 fokussierbar. Rein informative Überschriften werden übersprungen. Karten mit
@@ -294,7 +305,12 @@ Der ESP bestimmt die Fokusidentität in dieser Reihenfolge:
 `rank`, Arrayposition, Titel, Vorschau und Aktionsparameter sind keine stabile
 Identität. Nach einem Refresh sucht der ESP dieselbe Fokusidentität. Ist sie
 entfallen, wählt er die nächste fokussierbare Karte an der bisherigen Position,
-andernfalls die vorherige und zuletzt den Verlaufsknopf.
+andernfalls die vorherige und zuletzt den Menüknopf.
+
+Implementierungsstand 8. September: Das Backend liefert die stabilen IDs, die
+Firmware hält den Fokus aber noch nicht über einen Snapshotwechsel. In
+`screen.c` setzt `snapshot_focus_reset` Dashboard-, Task- und Listenfokus auf
+den Menüknopf zurück. Die obige ID-Fallbackregel bleibt offene H4-Arbeit.
 
 ### Blättern
 
@@ -405,6 +421,37 @@ Eine Historie von Dashboard-Snapshots über die Zeit gibt es bewusst nicht:
 Revisionsparameter. `limits.dashboard_history_hours` bleibt ohne Endpunkt
 wirkungslos. Wird echte Snapshot-Historie gewünscht, ist das ein Backend- und
 Contract-Task, kein Firmwarethema.
+
+## Einstellungen und Diagnose
+
+„Einstellungen“ ist eine **lokale** fünfte Ansicht. Sie ist auch ohne
+Dashboardsnapshot und ohne erreichbaren Server bedienbar. Der Fokus beginnt auf
+„Zurück“; darunter stehen scrollbare Zeilen für:
+
+1. Netzwerk und Server
+2. Gerätestatus/Diagnose
+3. SD-Logs
+4. Zeitzone, sobald mehr als die fest eingebaute Berlin-Regel unterstützt wird
+
+„Netzwerk und Server“ aktiviert ausdrücklich einen temporären
+`Notebook-Setup`-Hotspot und zeigt die bereits vorhandenen WLAN-/Portal-QR-Codes.
+Das lokale Portal darf WLAN-Netze, Serveradresse und einen einmaligen
+Enrollment-Code übernehmen; dauerhafte Geräte-Credentials werden weder
+angezeigt noch geloggt. Die bestehende Erstinstallation ersetzt derzeit genau
+eine WLAN-Konfiguration und startet nach dem Speichern neu. Für die
+Einstellungsansicht fehlen Mehrnetzspeicherung sowie ein sichtbarer
+„Abbrechen/zurück zum bisherigen Profil“-Weg, damit ein versehentlicher Einstieg
+nicht zum Speichern zwingt.
+
+„Gerätestatus/Diagnose“ zeigt nur technische, inhaltsarme Werte: Vertrag/Gate,
+Netz, Queueklassen, Speicher und Softwareversion. Keine Memo-Texte, WLAN-
+Passwörter, Tokens oder Response-Bodies.
+
+„SD-Logs“ ist nicht der Memo-Journalbrowser. `MEMOS/*/JOURNAL.LOG` enthält den
+verlustfreien Zustandsautomaten der Aufnahme und bleibt intern. Vor dem Viewer
+muss ein eigener begrenzter, rotierter und bereinigter Diagnoselog-Sink auf SD
+existieren. Danach kann die Ansicht Dateien und Zeilen scrollen; sie darf keine
+Nutzerinhalte oder Geheimnisse persistieren.
 
 ## Leerer Zustand und Cache
 

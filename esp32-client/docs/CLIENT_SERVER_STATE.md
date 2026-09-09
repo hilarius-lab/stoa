@@ -284,8 +284,9 @@ realen Gerät belegt statt vermutet:
    Task-Abhaken-Änderungen (`services/client_dashboard.py`,
    `routers/client.py`, `client_models.py`) schlicht noch nicht. Ein
    Neuflash der Firmware behob das folgerichtig nicht; ein Serverstart aus
-   diesem Worktree heraus schon. Der Merge nach `main` steht noch aus (siehe
-   „Reihenfolge für den nächsten Chat" unten).
+   diesem Worktree heraus schon. Historischer Nachtrag: Der Merge nach `main`
+   ist inzwischen abgeschlossen; der Befund bleibt als Warnung gegen Tests mit
+   einem Server aus dem falschen Checkout erhalten.
 2. **Zeichenreihenfolge in `detail.c`.** Mit korrektem `action`-Feld am Gerät
    war der Button da, aber unsichtbar: der Fokus-Rahmen (`icon_invert`,
    echtes Pixel-Invertieren) wurde vor dem Text gezeichnet statt danach —
@@ -704,8 +705,8 @@ zeigen `<n> offen` statt des technischen Tokens `active`. Projektionstest,
 Wire-Budget sowie die beiden gehärteten Session-/Capture-Vertragstests sind
 grün. Der ältere B6-Test kollidierte wie dokumentiert mit dem gleichzeitig
 laufenden Background-Worker (`idle`, weil dieser den Job zuerst beanspruchte);
-der deterministische Listenrouter selbst ist grün. Die reale
-Memo→Liste→ESP-Probe steht noch aus.
+der deterministische Listenrouter selbst ist grün. Die danach durchgeführte
+reale Memo→Liste→ESP-Probe ist im folgenden Abschnitt dokumentiert.
 
 ## Interaktive Listenpunkte — Backend/Firmware und physische Probe abgeschlossen, 8. September
 
@@ -731,25 +732,49 @@ Scrollen, Toggle/Zurücktoggeln, Verlassen und das Verschwinden von „Hafermilc
 nach erneutem Öffnen. Das vor „Zurück“ gesetzte Zeichen `‹` fehlte im Font und
 erschien als Ersatzbox; es wurde anschließend ersatzlos entfernt.
 
-## Reihenfolge für den nächsten Chat
+## Übergabe-Audit und Reihenfolge für den nächsten Chat — 8. September
 
-1. `worktree-esp32-cleanup` gemerged nach `main` (PR #1) — erledigt.
-2. Die tote Session serverseitig abbrechen (Punkt 6) — vom Nutzer selbst
-   ausgeführt, per `memo-why` bestätigt identifiziert
-   (`b4395a68-1f8c-42b2-83c1-b20d657aaeed`), Erfolg nicht weiter verfolgt.
-3. Die dauerhaft sichtbare `attention`-Markierung eines fehlgeschlagenen
-   Create — erledigt, siehe Punkt 1 oben (Nachtrag dritte Runde).
-4. `immediate`/`never`/`user_action` beim Chunk-Upload — erledigt, siehe
-   Punkt 3 oben (dritte Runde). Echtes Pro-Segment-Backoff-Timing für die
-   Klasse `backoff` bleibt bewusst offen.
-5. Den `surface`-Parameter am Gerät gezielt bestätigen: Verlaufsliste öffnen,
-   eine Session antippen, `dashboard: snapshot accepted` für die
-   Session-Ansicht im Log prüfen.
-6. DNS-Hypothese bleibt offen, ist aber kein Blocker mehr für weitere
-   Live-Tests, da die meisten Läufe erfolgreich waren. Bei Gelegenheit mit
-   mehr dokumentierten BSSID/RSSI-Paaren erhärten oder verwerfen.
-7. Neu, vierte Runde: Watchdog/Timeout für bei `status='running'` verwaiste
-   `processing_jobs` bauen (Punkt 8 oben) — bisher nur einmalig manuell
-   repariert, kein struktureller Fix. Klären, ob `worker.py`/`background.py`
-   künftig grundsätzlich mit explizitem `--worker-id` gestartet werden
-   sollen, um die Heartbeat-Kollision zu vermeiden.
+Die physische Listenprobe benutzte den normalen Produktweg und keinen
+Test-Shortcut: Mikrofon/SD-Journal → Client-Session-Create → Chunkupload →
+Finish → STT → Segmentierung → Artefaktworker → fachliche Finalisierung →
+Promotion → `lists/list_items` → ESP-Projektion. Das anschließende Abhaken ist
+bewusst ein anderer Kanal: ein eng typisierter Desired-State für ein bereits
+ausgewähltes Item. Der Server bleibt fachliche Autorität. Offen bleibt das in
+`BACKEND_LOGIK.md` als W01 geführte allgemeine Mutationsaudit; der
+List-Statusservice speichert noch keinen universellen Vorher/Nachher-Grund.
+
+Die bereinigte Hauptansicht ist technisch ehrlich, aber noch kein fertiges
+Home-Dashboard: Aufgaben und Listen besitzen eigene Ansichten, technische
+Sessions liegen im Verlauf, `alert` und `input_prompt` werden mangels Renderer
+entfernt. Damit bleiben im Hauptkörper normalerweise nur offene Rückfragen —
+ohne solche Fragen ist er leer. Die nächsten Schritte sind daher:
+
+1. Hauptdashboard als bewusst kleine serverseitige Übersicht festlegen und
+   umsetzen. Empfohlen: offene Rückfragen, handlungsrelevante Systemhinweise und
+   wenige priorisierte nächste Entitäten; keine redundanten Processingkarten.
+2. Für Systemhinweise entweder einen echten `alert`-Renderer bauen oder eine
+   ausdrückliche ESP-Entity-Card-Projektion definieren. `input_prompt` bleibt
+   entbehrlich, solange die physische Mitteltaste die eindeutige lokale
+   Aufnahmeaktion ist.
+3. Fokus über Snapshotrevisionen anhand Komponenten-ID erhalten. Der Vertrag
+   garantiert die ID; `screen.c::snapshot_focus_reset` setzt aktuell alle drei
+   Fokuswerte auf `-1` zurück.
+4. Lokale fünfte Ansicht „Einstellungen“ neben Dashboard, Aufgaben, Listen und
+   Verlauf bauen. Darin: Netzwerk/Server, Diagnose, SD-Logs und später
+   Zeitzone. Netzwerk/Server startet kontrolliert das vorhandene lokale
+   Setupportal mit QR-Code. Der aktuelle BOOT-3-s-Weg setzt nur ein Setupflag,
+   startet neu und hat ohne Speichern keinen sauberen Rückweg.
+5. Vor einer SD-Logansicht zuerst einen begrenzten, rotierten und inhaltsarmen
+   Gerätesink implementieren. `MEMOS/*/JOURNAL.LOG` ist ein Zustandsjournal,
+   kein Diagnoseprotokoll und darf nicht als solches dargestellt werden.
+6. Verlauf fachlich klären: Noch unverarbeitete Aufnahmen sollen ihren
+   technischen Stand lesbar zeigen; die Session-Dashboarddetailroute liefert
+   vor fachlicher Verarbeitung heute häufig keinen nützlichen Inhalt.
+7. Danach die Backend-Priorität aus `BACKEND_LOGIK.md` Abschnitt 18 fortsetzen,
+   insbesondere A01–A08/A11–A13 und W01–W10. Separat offen bleiben
+   Running-Job-Watchdog, automatische Credentialrotation, vollständige
+   Retry-/Backoffpersistenz, Verschlüsselung und reale Stromausfallgrenzen.
+
+Der alte DNS-Befund bleibt beobachtenswert, blockiert aber nicht. Den Worker nur
+über `python background.py` starten; ein paralleles `python worker.py all`
+erzeugt identische Standard-Worker-IDs und verfälscht Heartbeats.

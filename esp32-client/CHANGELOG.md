@@ -1,5 +1,32 @@
 # Änderungen
 
+## 2026-09-08 – Übergabe-Audit nach Dashboard-/Listenabnahme
+
+Die reale Listenprobe ist gegen `BACKEND_LOGIK.md` und die tatsächlichen
+Aufrufstellen geprüft: Sie lief vom physischen Mikrofon über SD-Journal,
+Client-Session, Upload/Finish, STT, Segmentierung, Artefaktworker,
+Finalisierung und Promotion in das dauerhafte Listenmodell. Das spätere
+Item-Abhaken bleibt bewusst eine eng typisierte Objektmutation und kein zweiter
+NLP-Eingang. Dokumentiert ist auch die verbleibende W01-Lücke: Der
+List-Statusservice besitzt noch kein allgemeines Vorher/Nachher-Mutationsaudit.
+
+Veraltete Übergabeangaben wurden korrigiert. Der Journal-Hosttest existiert und
+umfasst 6341 Prüfungen; ein erneuter Lauf war auf diesem Windows-Host mangels
+Host-`gcc` nicht möglich. HTTPS und die dreifach abgesicherte lokale
+Audiofreigabe sind nicht mehr als offen aufgeführt. Projektstatus, Roadmap,
+Backendlogik, Arbeitsqueue und Client-/Server-Status nennen nun denselben Stand.
+Der portable Übergabecheck erwartet nach den neuen Task-/Listenaktionen nun die
+tatsächlichen 24 statt der früheren 22 Gerätepfade.
+
+Als bewusst offene Produktarbeit sind festgehalten: Die Home-Ansicht ist nach
+der Trennung von Aufgaben, Listen und Verlauf ohne Rückfragen normalerweise
+leer; System-`alert`s haben noch keinen ESP-Renderer; Fokus wird bei jedem
+Snapshot auf den Menüknopf gesetzt. Die geplante fünfte Ansicht
+„Einstellungen“ bündelt Netzwerk/Server über das vorhandene QR-Hotspotportal,
+inhaltsarme Diagnose, einen erst noch zu bauenden rotierten/sanitisierten
+SD-Logsink mit Viewer und später die Zeitzone. Das Memo-`JOURNAL.LOG` ist kein
+Diagnoselog.
+
 ## 2026-09-08 – Interaktive, ausfallsichere Listendetails
 
 Listendetails sind kein Fließtext mehr. Der Server liefert bis zu 20 aktive
