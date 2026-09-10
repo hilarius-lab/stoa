@@ -303,6 +303,11 @@ async def finalize_client_session_with_knowledge(client_session_id,promotion_mod
     promotion_deferred=bool(intent_decision and len(intent_parts)==1 and
                             intent_decision["primary_intent"] in MUTATION_INTENTS)
     try:
+        if item["capture_mode"]=="auto":
+            from .knowledge_preflight import ensure_session_knowledge_preflights
+            preflight_artifact_ids=[] if promotion_deferred else promotion_ids
+            await ensure_session_knowledge_preflights(item["ingestion_session_id"],intent_parts,
+                                                       preflight_artifact_ids,promotion_mode)
         if not promotion_deferred and promotion_ids!=[]:
             if promotion_ids is None:
                 await promote_session_artifacts(item["ingestion_session_id"],promotion_mode)
@@ -360,6 +365,9 @@ def _materialize_capture_result(client_session_id):
             if any(part["primary_intent"] in ("change","complete","archive") for part in intent_parts):
                 result["action_status"]="pending_resolution"
             if len(intent_parts)>1:result["interpretation_status"]="split_completed"
+            from .knowledge_preflight import get_session_knowledge_preflights,public_knowledge_preflights
+            assessments=get_session_knowledge_preflights(item["ingestion_session_id"])
+            if assessments:result["knowledge_assessments"]=public_knowledge_preflights(assessments)
     with get_db_connection() as c:c.execute("UPDATE client_sessions SET capture_result=%s,updated_at=%s WHERE client_session_id=%s",(Jsonb(result),datetime.now(TIMEZONE),client_session_id));c.commit()
     return result
 

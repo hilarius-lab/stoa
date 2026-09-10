@@ -172,6 +172,9 @@ def main():
     assert all(mixed_content[part["source_start"]:part["source_end"]]==part["source_text"] for part in result["intents"]),result
     assert all("source_segment_ids" not in part for part in result["intents"]),result
     assert result["interpretation_status"]=="split_completed" and result["action_status"]=="pending_resolution",result
+    assert any(item["input_kind"]=="mutation_intent" and item["classification"]=="targeted"
+               for item in result["knowledge_assessments"]),result
+    assert all("candidate_refs" not in item for item in result["knowledge_assessments"]),result
     assert result["conversation_id"] and result["turn_id"],result
     _CLEANUP_CONVERSATION_IDS.append(result["conversation_id"])
     with get_db_connection() as db:
@@ -206,6 +209,7 @@ def main():
     assert action["status"]=="completed" and action["resolved_intent"]=="complete",action
     assert action["result"]["action_status"]=="pending_resolution",action
     assert action["result"]["intent"]["target_type"]=="list_item",action
+    assert action["result"]["knowledge_assessments"][0]["classification"]=="targeted",action
     with get_db_connection() as db:
         decision=db.execute("SELECT primary_intent,target_type,decision_source FROM session_intent_decisions WHERE session_id=%s",(action_internal,)).fetchone()
     assert tuple(decision)==("complete","list_item","deterministic_test"),decision

@@ -24,10 +24,11 @@ def _knowledge_version(connection):
     (SELECT concat(count(*),':',COALESCE(max(updated_at)::text,'')) FROM list_items),
     (SELECT count(*)::text FROM knowledge_topic_links),(SELECT count(*)::text FROM knowledge_supersessions)))""").fetchone()[0]
 
-def _cache_identity(connection,query,selected_types,limit,min_similarity):
+def _cache_identity(connection,query,selected_types,limit,min_similarity,include_vector):
     normalized=" ".join(query.casefold().split());version=_knowledge_version(connection)
     request={"query_hash":hashlib.sha256(normalized.encode()).hexdigest(),"types":sorted(selected_types),"limit":limit,
-        "min_similarity":min_similarity,"retrieval_version":RETRIEVAL_VERSION,"embedding_model":EMBEDDING_MODEL,"knowledge_version":version}
+        "min_similarity":min_similarity,"include_vector":include_vector,"retrieval_version":RETRIEVAL_VERSION,
+        "embedding_model":EMBEDDING_MODEL,"knowledge_version":version}
     return hashlib.sha256(json.dumps(request,sort_keys=True,separators=(',',':')).encode()).hexdigest(),request
 
 def purge_expired_retrieval_cache():
@@ -137,6 +138,7 @@ def get_knowledge_record(key: str):
             ),
             "metadata": {
                 "due_at": task["due_at"],
+                "work_start_at": task["work_start_at"],
                 "status": task["status"],
                 "priority": task["priority"],
                 "urgency": task["urgency"],
@@ -828,6 +830,7 @@ def _knowledge_search_result_from_record(
 
     if record["type"] == "task":
         result["due_at"] = metadata.get("due_at")
+        result["work_start_at"] = metadata.get("work_start_at")
         result["status"] = metadata.get("status")
         result["priority"] = metadata.get("priority",0)
         result["urgency"] = metadata.get("urgency",0.5)
@@ -853,7 +856,8 @@ async def search_knowledge(
     query: str,
     limit: int = KNOWLEDGE_RETRIEVAL_LIMIT,
     types: list[str] | None = None,
-    min_similarity: float | None = KNOWLEDGE_RETRIEVAL_MIN_SIMILARITY
+    min_similarity: float | None = KNOWLEDGE_RETRIEVAL_MIN_SIMILARITY,
+    include_vector: bool = True,
 ):
     allowed_types = {
         "note",
@@ -899,7 +903,7 @@ async def search_knowledge(
         return []
 
     with get_db_connection() as connection:
-        cache_key,cache_request=_cache_identity(connection,query,selected_types,limit,min_similarity)
+        cache_key,cache_request=_cache_identity(connection,query,selected_types,limit,min_similarity,include_vector)
         cached=connection.execute("""SELECT result_refs FROM retrieval_cache WHERE cache_key=%s AND knowledge_version=%s
         AND expires_at>%s""",(cache_key,cache_request['knowledge_version'],datetime.now(TIMEZONE))).fetchone()
         if cached:
@@ -943,7 +947,7 @@ async def search_knowledge(
     lexical_relevant=[entry for entry in fused.values() if _hybrid_candidate_is_relevant(entry,min_similarity)]
     # An exact identity/title/content match is terminal: do not spend energy
     # filling the response with weaker semantic neighbors.
-    vector_used=not exact_candidates and len(lexical_relevant)<limit
+    vector_used=include_vector and not exact_candidates and len(lexical_relevant)<limit
     if vector_used:
         embedding=await get_query_embedding(query);vector_value=embedding_to_pgvector(embedding)
         with get_db_connection() as connection:vector_candidates=_vector_channel_candidates(connection,selected_types,vector_value)

@@ -583,6 +583,27 @@ MIGRATIONS=[
         """ALTER TABLE semantic_segments ADD CONSTRAINT semantic_segments_segment_type_check CHECK(
         segment_type IN('statement','note_candidate','task_candidate','list_candidate','list_item_candidate','question','other'))""",
     ]),
+    ("0045_knowledge_preflight","Persist A05 knowledge and possible-target assessments",[
+        """CREATE TABLE knowledge_preflight_assessments(
+        id BIGSERIAL PRIMARY KEY,session_id BIGINT NOT NULL REFERENCES ingestion_sessions(id) ON DELETE CASCADE,
+        artifact_id BIGINT REFERENCES session_artifacts(id) ON DELETE CASCADE,
+        intent_part_id BIGINT REFERENCES session_intent_parts(id) ON DELETE CASCADE,
+        input_kind TEXT NOT NULL,input_type TEXT NOT NULL,input_text TEXT NOT NULL,
+        classification TEXT NOT NULL,confidence DOUBLE PRECISION NOT NULL,
+        candidate_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
+        related_candidate_keys JSONB NOT NULL DEFAULT '[]'::jsonb,
+        reason_codes JSONB NOT NULL DEFAULT '[]'::jsonb,decision_source TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL,updated_at TIMESTAMPTZ NOT NULL,
+        CHECK((artifact_id IS NULL) <> (intent_part_id IS NULL)),
+        CHECK(input_kind IN('artifact','mutation_intent')),
+        CHECK(input_type IN('unknown','note','task','list','list_item','fact','decision')),
+        CHECK(input_text<>''),
+        CHECK(classification IN('new','identical','complementary','contradictory','targeted')),
+        CHECK(confidence BETWEEN 0 AND 1))""",
+        "CREATE UNIQUE INDEX knowledge_preflight_artifact_uidx ON knowledge_preflight_assessments(artifact_id) WHERE artifact_id IS NOT NULL",
+        "CREATE UNIQUE INDEX knowledge_preflight_intent_part_uidx ON knowledge_preflight_assessments(intent_part_id) WHERE intent_part_id IS NOT NULL",
+        "CREATE INDEX knowledge_preflight_session_idx ON knowledge_preflight_assessments(session_id,id)",
+    ]),
 ]
 
 

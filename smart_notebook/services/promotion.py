@@ -12,6 +12,7 @@ from .notes import save_note
 from .tasks import save_task
 from .claims import materialize_validated_artifact_claims
 from .topics import normalize_topic_key
+from .knowledge_preflight import ensure_artifact_knowledge_preflight,identical_knowledge_target
 
 async def _task_fields(content,mode,started_at=None):
     if mode=='deterministic':
@@ -92,6 +93,17 @@ async def promote_session_artifacts(session_id,mode='llm',artifact_ids=None):
             promoted.append({"artifact_id":artifact_id,"knowledge_type":old[0],"knowledge_id":old[1],"idempotent":True,"claims":claim_result,"topic_ids":topic_ids})
             continue
         try:
+            assessment=await ensure_artifact_knowledge_preflight(artifact_id,mode)
+            target='note' if kind in {'note','fact','decision'} else kind
+            identical_id=identical_knowledge_target(assessment,target)
+            if identical_id is not None:
+                _record(artifact_id,target,identical_id)
+                claim_result=materialize_validated_artifact_claims(artifact_id,target,identical_id)
+                topic_ids=_transfer_all_topics(artifact_id,target,identical_id)
+                promoted.append({"artifact_id":artifact_id,"knowledge_type":target,"knowledge_id":identical_id,
+                    "idempotent":False,"reused_existing":True,"knowledge_classification":"identical",
+                    "claims":claim_result,"topic_ids":topic_ids})
+                continue
             if kind in {'note','fact','decision'}:
                 embedding=[0.0]*EMBEDDING_DIMENSIONS if mode=='deterministic' else await get_embedding(content)
                 knowledge_id=save_note(content,embedding);target='note'
