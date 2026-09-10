@@ -96,6 +96,14 @@ Session/Chunk-Identität und `durable_ack=true`. Erst danach wird lokal atomar
 `ready`; derselbe Request wird mit unveränderten Bytes und IDs wiederholt.
 Gleiche ID plus gleicher Hash liefert dasselbe ACK. Gleiche ID plus anderer Hash
 ist HTTP 409 und wird als `attention` behandelt, nie durch eine neue ID kaschiert.
+Ein Synchronisationsdurchlauf bearbeitet lokal gefundene `ready`-Sessions vor
+der rotierenden Pflege bereits bestätigter Historie. So erreicht das Wecksignal
+einer neuen Aufnahme stets zustellbare Audiodaten, auch wenn viele alte Journale
+auf der Karte verbleiben; das begrenzte Hintergrundfenster rotiert weiterhin.
+JSON- und Audioupload verwenden getrennte wiederverwendbare HTTP-Handles. Vor
+dem Audiostream wird jedoch der JSON-TLS-Transport geschlossen, nach allen
+Chunks der Uploadtransport; so beanspruchen Zertifikatsprüfung und TLS-I/O nicht
+zweimal gleichzeitig den knappen internen Heap.
 
 Retry richtet sich nach dem Fehlerumschlag:
 

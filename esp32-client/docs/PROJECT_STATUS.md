@@ -1,6 +1,6 @@
 # Projektstand
 
-Stand: 2026-09-10, A04 live abgenommen und ESP-Sichtkorrekturen implementiert
+Stand: 2026-09-10, A05 live abgenommen und ESP-Uploadpriorisierung verifiziert
 
 ## Nachgewiesen am realen Gerät
 
@@ -43,6 +43,14 @@ Stand: 2026-09-10, A04 live abgenommen und ESP-Sichtkorrekturen implementiert
 - Ein driftender Queueindikator heilt nach einer Zustandsänderung ohne Neustart
   aus dem SD-Journal. Die letzte Listenprobe endete mit `ready=0`,
   `attention=0` und ohne ausstehende Listaktionen.
+- Zustellbare `ready`-Sessions werden vor der rotierenden Pflege alter,
+  bestätigter Journale in das Acht-Sessions-Netzwerkfenster aufgenommen. Eine
+  neue Aufnahme wartet dadurch auch bei einer großen SD-Historie nicht mehrere
+  Dashboardintervalle auf ihren ersten Uploadversuch.
+- JSON- und Audioupload-TLS bleiben als wiederverwendbare Handles erhalten,
+  halten ihre speicherintensiven Transporte aber nicht gleichzeitig offen.
+  Die reale Probe mit 35 Journalen lieferte zwei priorisierte Aufnahmen in
+  einem Durchlauf mit `acked=2`, `finish=2` und ohne Uploadfehler aus.
 - Tasks zeigen serverseitig berechnete Bearbeitungsfenster „Ab … · bis …“.
   Bereits gestartete Tasks und Tasks ab `urgency >= 0.5` erscheinen in der
   scrollbaren Aufgabenansicht; eine zuvor an Position vier abgeschnittene
@@ -179,8 +187,8 @@ weiterhin die bestehende Oberfläche und behauptet nicht den H5-Meetingmodus.
   ESP-Projektion. Vollständiges M8 ist grün.
 
 Die auswählbare IANA-Zeitzone ist ein späteres Komfortfeature. Bis dahin bleibt
-die verifizierte `Europe/Berlin`-Regel bewusst fest eingebaut. A01–A04 sind
-umgesetzt und A04 ist real abgenommen; als nächster Backendblock folgt A05.
+die verifizierte `Europe/Berlin`-Regel bewusst fest eingebaut. A01–A05 sind
+umgesetzt und real abgenommen; als nächster Backendblock folgt A06.
 
 Historische Messwerte und Fehleranalysen stehen im `CHANGELOG.md` und in
 `CLIENT_SERVER_STATE.md`; diese Datei beschreibt nur den aktuellen Übergabestand.

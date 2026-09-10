@@ -1,5 +1,25 @@
 # Änderungen
 
+## 2026-09-10 – Neue Aufnahmen vor Historienpflege
+
+- Die A05-Liveprobe fand bei 35 lokalen Journalen zwei sichere `ready`-
+  Aufnahmen, deren einmaliges Aufnahme-Wecksignal jeweils nur ein altes
+  rotierendes Acht-Sessions-Fenster traf. Der Server sah neue leere Sessions,
+  aber noch keinen Audioblock; ein weiterer normaler Versuch hätte bis zum
+  nächsten vierminütigen Dashboardintervall gewartet.
+- `create_local_sessions()` füllt das unveränderte Acht-Sessions-Limit nun
+  zuerst mit tatsächlich `ready` journalisierten Sessions und nutzt nur freie
+  Plätze für die weiterhin faire rotierende Historienpflege. Es werden keine
+  Dateien gelöscht, keine ACKs geraten und keine Backendsemantik vorweggenommen.
+- Die erste reale Prioritätsprobe machte zusätzlich knappen internen TLS-Speicher
+  sichtbar: parallele offene JSON- und Uploadtransporte scheiterten bei der
+  Zertifikatsprüfung. Die Handles bleiben wiederverwendbar, aber ihre Transporte
+  werden nun phasenweise geschlossen. Danach wurden beide priorisierten
+  Aufnahmen in einem Durchlauf mit `acked=2`, `finish=2`, `failed=0` geliefert;
+  die Sessions liefen bis zu A05 `new`/`identical` und derselben Note durch.
+- `scripts/export_test.py --list` versteht wieder das dokumentierte erweiterte
+  `@MEMO ... ready=… acked=… attention=…`-Format sowie unvollständige Dauerwerte.
+
 ## 2026-09-10 – ESP-Sichtkorrekturen und begrenzter Dashboardpoll
 
 Die E-Paper-Projektion lässt bei offenen Taskkarten das redundante `open` weg;
@@ -43,7 +63,7 @@ Fehlinterpretation wird verworfen, und die umgekehrte Workerreihenfolge erzeugt
 kein zweites Artefakt. Das A04-Testcleanup erfasst nun auch den neu erzeugten
 Parent-Container eines verlinkten Listeneintrags. Gezielte Tests, leere
 Fixture-Nachkontrolle und vollständiges M8 samt logischem Vier-Stunden-Soak sind
-grün. Offen bleibt die echte Audio→DB→ESP-Abnahme nach Worker-Neustart.
+grün. Vier echte Audio→DB→ESP-Aufnahmen schlossen die Abnahme anschließend.
 
 ## 2026-09-10 – Ladeblitz und BOOT als direkter Aufnahmetaster
 

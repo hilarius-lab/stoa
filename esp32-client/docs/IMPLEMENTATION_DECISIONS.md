@@ -418,10 +418,14 @@ beschriftete Statuszeile entsteht in H3 zusammen mit den übrigen Indikatoren.
   mit jeder Stufe angehoben. Der Wert geht in Enrollment und `device_metadata`;
   eine stehengebliebene Kennung würde dem Server eine falsche Firmwareversion
   melden. Aktueller Wert: `h4-home`.
-- Der Uploadworker bearbeitet je Durchlauf höchstens 32 Sessionverzeichnisse.
-  Der Fensteranfang rotiert zwischen den Durchläufen, damit Sessions hinter dem
-  Fenster nicht dauerhaft ausgeschlossen bleiben, solange die lokale Retention
-  noch nichts löscht. Ein Durchlauf mit gekürztem Fenster wird geloggt.
+- Der Uploadworker bearbeitet je Durchlauf höchstens acht Sessionverzeichnisse.
+  Er liest vor der Auswahl die lokalen Journale und lässt tatsächlich
+  zustellbare `ready`-Sessions dieses Fenster zuerst füllen; das hängt beim
+  Start nicht von der später veröffentlichten globalen Queuezählung ab. Erst
+  freie Plätze gehen an die rotierende Historienpflege.
+  Der Fensteranfang der Hintergrundpflege rotiert zwischen den Durchläufen,
+  damit auch alte Sessions nicht dauerhaft ausgeschlossen bleiben. Ein
+  Durchlauf mit gekürztem Fenster wird geloggt.
 - Queue- und Speicheranzeige sind lokale Wahrheit. `screen_status` latcht nur;
   der Uploadworker stößt nach jedem Durchlauf eine Neuzeichnung an. Das
   Displaytask verwirft ein identisches Bild, deshalb kostet eine unveränderte

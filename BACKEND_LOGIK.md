@@ -826,7 +826,7 @@ Die folgende Liste konsolidiert das Gespräch und den tatsächlichen Integration
 | A02 | Inhaltliche Intent-Erkennung statt Frageheuristik — **seit 2026-09-10 geschlossen:** Nach gemeinsamer semantischer Verarbeitung wird eine validierte, persistierte Entscheidung aus `memo|query|change|complete|archive` samt Zielhinweis und Mehrfachkennzeichen getroffen. Mutationsabsichten werden bis A06/A07 nicht ausgeführt und nicht als neues Wissen promotet. | Beliebiger Inhalt → Mitteilung, Merkauftrag, Änderungsauftrag, Erledigung, Frage oder gekennzeichnete Kombination. |
 | A03 | Mehrere Absichten pro Eingabe — **seit 2026-09-10 geschlossen:** Gemischte `auto`-Eingaben werden in höchstens zwölf geordnete, vollständige und segmentgebundene Quellspannen zerlegt. Reine Memo-Artefakte dürfen selektiv weiterlaufen, Frageanteile bilden einen eigenen Query-Input und Mutationen bleiben bis A06/A07 zurückgestellt. | Gemischter Absatz → geordnete, quellengebundene Teilinformationen und erkannte, noch nicht ausgeführte Aktionen. |
 | A04 | Einheitliche Typdefinitionen und Validierung — **seit 2026-09-10 geschlossen:** `content_types.py` definiert Artefakt-, Claim-, Question- und Segmenttypen sowie gemeinsame lokale Guards. Die nach der ersten Audioabnahme gefundenen Listenfehler sind automatisiert geschlossen und mit vier echten Audio→DB→ESP-Proben bestätigt: benachbarte Chunk-Fortsetzungen werden gemeinsam als Listeneintrag gewertet, gleichnamige aktive Container exakt dedupliziert und rein deiktische Aktionssätze nicht als leere Liste zugelassen. | Kandidat → konsistente Note-/Task-/List-/Claim-/Question-Einordnung in allen Pfaden, einschließlich kombinierter Liste-plus-Item-Aussagen über Chunkgrenzen. |
-| A05 | Wissen und Ziele vor Mutationen abgleichen — **seit 2026-09-10 strukturell und automatisiert umgesetzt, Liveabnahme offen:** Jede vorgesehene Artefaktanlage und jede zurückgestellte Mutationsabsicht erhält vor Promotion über `search_knowledge` einen persistierten, idempotenten Abgleich als `new|identical|complementary|contradictory|targeted`. Exakte eindeutige Identität darf eine Neuanlage wiederverwenden; mögliche Mutationstreffer bleiben reine Kandidaten ohne A06-Zielwahl oder A07-Ausführung. | Neuer Inhalt + passende Suche → neu, identisch, ergänzend, widersprechend oder auf ein Objekt bezogen. |
+| A05 | Wissen und Ziele vor Mutationen abgleichen — **seit 2026-09-10 geschlossen:** Jede vorgesehene Artefaktanlage und jede zurückgestellte Mutationsabsicht erhält vor Promotion über `search_knowledge` einen persistierten, idempotenten Abgleich als `new|identical|complementary|contradictory|targeted`. Exakte eindeutige Identität darf eine Neuanlage wiederverwenden; mögliche Mutationstreffer bleiben reine Kandidaten ohne A06-Zielwahl oder A07-Ausführung. Zwei echte Audioaufnahmen bestätigten `new` und die Wiederverwendung einer STT-orthografisch leicht abweichenden `identical`-Aussage. | Neuer Inhalt + passende Suche → neu, identisch, ergänzend, widersprechend oder auf ein Objekt bezogen. |
 | A06 | Referenzen aus Sprache und Gespräch auflösen | „Das ist erledigt“, „dort noch Brot“ → eindeutige Objekt-ID oder offene Rückfrage. |
 | A07 | Gemeinsamer Aktionsplan und Executor | Validierte Interpretation → anlegen, ergänzen, ändern, abhaken, wieder öffnen oder archivieren. |
 | A08 | Teilweise Unsicherheit behandeln | Gemischte sichere/unsichere Aktionen → sichere Teile ausführen, restliche mit Kontext zur Klärung speichern. |
@@ -966,7 +966,7 @@ Diese Übersicht dokumentiert die Abweichungen, ohne ältere normative Dateien s
 | A02 | Geschlossen | `capture_intent.py::ensure_session_intent_decision` klassifiziert nach Text-/Artefaktverarbeitung strukturiert und persistiert die Entscheidung. `client_sessions.py` materialisiert daraus das autoritative Ergebnis; Mutation und gemischte Eingabe sperren die gewöhnliche Promotion. Der verbleibende Memo-/Query-Hinweis während `processing` ist ausdrücklich nur Vertragskompatibilität. Der deterministische Regressionstest deckt Frage, Memo, Ändern, Erledigen/Listenpunktstreichen und Archivieren ab. |
 | A03 | Geschlossen | `capture_intent.py::ensure_session_intent_parts` persistiert geordnete Quellspannen und Segmentbindungen. Der Abschluss promotet nur ausschließlich memo-gebundene Artefakte, bildet den Query-Turn nur aus Frageanteilen und hält Mutationsteile zurück. `m8_capture_contract_test.py` prüft Reihenfolge, exakte Spannen, interne-ID-Abschirmung, selektive Promotion und Querytext. |
 | A04 | Geschlossen | `content_types.py` trennt Artefakte, Claims und separat gespeicherte Questions und liefert die gemeinsamen Guards für Segmentierung, Router, Shadow, API-Schemas, Capture, Konsolidierung und LLM-Artefaktoperationen. Migration 0044 ergänzt `list_candidate`. Die Tests und vier echte Audio→DB→ESP-Proben prüfen kurze zeitfreie Tasktitel, Tageszeitfenster, explizite/implizite Listenerstellung, beide Workerreihenfolgen einer Chunk-übergreifenden Fortsetzung, exakte Aktivlisten-Deduplizierung und Schutz vor deiktischen Leerlisten. |
-| A05 | Automatisiert umgesetzt, Liveabnahme offen | `knowledge_preflight.py` ruft vor Artefaktpromotion und für zurückgestellte Mutationsteile ausschließlich `retrieval.py::search_knowledge` auf und persistiert Kandidaten, Bezugsauswahl, Konfidenz und kontrollierte Gründe über Migration 0045. Exakte eindeutige Identität wird ohne Neuanlage wiederverwendet; `targeted` setzt weder Ziel-ID noch `action_status` um. `m8_knowledge_preflight_test.py` prüft alle fünf Klassen, Idempotenz, öffentliche ID-Abschirmung, identische Wiederverwendung und den mutationsfreien Target-Fall; `m8_capture_contract_test.py` prüft die Einbindung in reine und gemischte Auto-Captures. |
+| A05 | Geschlossen | `knowledge_preflight.py` ruft vor Artefaktpromotion und für zurückgestellte Mutationsteile ausschließlich `retrieval.py::search_knowledge` auf und persistiert Kandidaten, Bezugsauswahl, Konfidenz und kontrollierte Gründe über Migration 0045. Exakte eindeutige Identität wird ohne Neuanlage wiederverwendet; `targeted` setzt weder Ziel-ID noch `action_status` um. `m8_knowledge_preflight_test.py` prüft alle fünf Klassen, Idempotenz, öffentliche ID-Abschirmung, identische Wiederverwendung und den mutationsfreien Target-Fall; `m8_capture_contract_test.py` prüft die Einbindung in reine und gemischte Auto-Captures. Zwei echte Audioaufnahmen liefen nach Worker-Neustart bis zu `new`, `identical` und derselben dauerhaften Note durch. |
 | A06 | Offen | `reference_resolver.py::resolve_internal` ist nicht an allgemeine Sprachänderungen oder `context_ref`-Verarbeitung angeschlossen. |
 | A07 | Offen | Es gibt keinen eingangswegübergreifenden Aktionsplan/Executor; Capture und Artefaktoperationen mutieren über eigene Services. |
 | A08 | Offen | Unsichere Artefakte/Questions können gespeichert werden, aber kein gemeinsamer Plan hält nur abhängige Teilmutationen zurück und setzt sie später fort. |
@@ -1204,7 +1204,7 @@ eine neue reale Audioabnahme schließt A04 fachlich. Die oben beschriebene
 spätere STT-Unsicherheitslogik ist davon getrennt und wird jetzt nicht
 vorweggenommen.
 
-**Codekorrektur 2026-09-10 (A04-Listenstabilisierung, Liveabnahme noch offen):**
+**Codekorrektur 2026-09-10 (A04-Listenstabilisierung, live abgenommen):**
 Die E-Paper-Projektion lässt in der eigenen Listenansicht wie bei Tasks bis zu
 zehn Karten zu; Home bleibt auf drei priorisierte Karten begrenzt. Promotion
 reiner Listenartefakte verwendet unter einem titelgebundenen PostgreSQL-
@@ -1219,10 +1219,10 @@ erzeugte Parent-Listen vor jeder möglichen Assertion beziehungsweise ermittelt
 sie über die Artefaktlinks. Gezielte Tests und das vollständige M8-Release-Gate
 einschließlich logischem Vier-Stunden-Soak sind grün. Der belastete Snapshot mit
 zehn Tasks, zehn Listen und drei Home-Karten misst 11.200 Byte; das Gate erlaubt
-höchstens 12.288 Byte bei realen 16.384-Byte-Puffern. Eine neue echte
-Audio→DB→ESP-Probe steht noch aus.
+höchstens 12.288 Byte bei realen 16.384-Byte-Puffern. Vier echte
+Audio→DB→ESP-Proben bestätigten den stabilisierten Pfad.
 
-**Codeänderung 2026-09-10 (A05, Liveabnahme offen):**
+**Codeänderung 2026-09-10 (A05, geschlossen):**
 `knowledge_preflight.py` bildet die gemeinsame Barriere vor einer vorgesehenen
 Anlage oder späteren Mutation. Der Service fragt Notes, offene Tasks, aktive
 Listen und aktive Listeneinträge über `retrieval.py::search_knowledge` ab und
@@ -1244,3 +1244,11 @@ zeigen nur Klasse, Konfidenz, Kandidatenanzahl und Gründe, nie interne IDs oder
 Kandidateninhalte. Migration `0045_knowledge_preflight` hält die Bewertung pro
 Artefakt beziehungsweise Intentteil idempotent. A06-Referenzauflösung und
 A07-Mutation bleiben ausdrücklich offen.
+
+Die reale Abnahme nach Worker-Neustart verwendete zweimal denselben über BOOT
+aufgenommenen Prüfstein-Satz. Beide Audiodateien wurden dauerhaft bestätigt
+und die Sessions 504/505 abgeschlossen. Die erste Aussage wurde regelbasiert
+als `new` auf Note 86 promoviert; die zweite, von STT mit zusätzlichem
+Bindestrich geschriebene Aussage wurde mit Konfidenz 0,99 als `identical`
+bewertet und auf dieselbe Note 86 geführt. Es entstand kein zweites
+Wissensobjekt.

@@ -830,6 +830,12 @@ static bool upload_chunk(journal_session *session, journal_chunk *chunk) {
         request_ok = upload_request(session, chunk, body, API_RESPONSE_MAX, &http);
         durable = request_ok && http == 201 && ack_matches(body, session, chunk);
     }
+    /* Reconciliation is a JSON request on the shared client. Do not keep the
+     * upload TLS transport alive beside it after a failed upload: the ESP32-S3
+     * has enough PSRAM for bodies, but certificate verification and TLS I/O
+     * also need scarce internal heap. Two simultaneous TLS transports were
+     * observed failing allocation while the ready journal itself stayed safe. */
+    if (!durable && uploader) esp_http_client_close(uploader);
     if (!durable && reconciliation_has(session, chunk)) {
         durable = true;
         status.reconciled++;
@@ -1017,6 +1023,43 @@ static bool memo_name(const char *name) {
 #define SESSION_WINDOW 8
 static unsigned session_offset;
 
+static bool selected_name(char names[][9], unsigned count, const char *name) {
+    for (unsigned i = 0; i < count; i++)
+        if (strcmp(names[i], name) == 0) return true;
+    return false;
+}
+
+/* Delivery beats housekeeping. A rotating directory window kept old sessions
+ * fair, but with 35 journals on the real card it also meant that a newly
+ * recorded ready segment could miss the one wake-up caused by its recording
+ * and wait several four-minute dashboard intervals. Replay local journals only
+ * before the recorder queue's asynchronous boot rescan has necessarily
+ * published its count, and put ready sessions first. No server state is
+ * inferred; the rotating scan below still covers everything. */
+static unsigned collect_ready_sessions(char names[][9], unsigned capacity) {
+    if (recorder_busy()) return 0;
+    DIR *directory = opendir(MEMO_ROOT);
+    if (!directory) return 0;
+    unsigned count = 0;
+    struct dirent *entry;
+    while (count < capacity && (entry = readdir(directory))) {
+        if (!memo_name(entry->d_name)) continue;
+        char path[64];
+        snprintf(path, sizeof(path), "%s/%.8s", MEMO_ROOT, entry->d_name);
+        journal_session *session = heap_caps_malloc(sizeof(journal_session), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!session) break;
+        journal_session_init(session, path);
+        bool ready = journal_replay(session) && session->session_id[0] &&
+                     journal_count_state(session, CHUNK_READY) > 0;
+        free(session);
+        if (!ready) continue;
+        memcpy(names[count], entry->d_name, 8);
+        names[count++][8] = 0;
+    }
+    closedir(directory);
+    return count;
+}
+
 /* Sessions that are finished, whose every segment carries a persisted durable
  * ACK, and whose finish the server accepted in this boot. Without this the pass
  * re-created and re-finished every completed session on the card on every sync:
@@ -1202,19 +1245,22 @@ static void create_local_sessions(void) {
     DIR *directory = opendir(MEMO_ROOT);
     if (!directory) return;
     char names[SESSION_WINDOW][9];
-    unsigned count = 0, matching = 0;
+    unsigned count = collect_ready_sessions(names, SESSION_WINDOW);
+    unsigned matching = 0, examined = 0;
     struct dirent *entry;
     while ((entry = readdir(directory))) {
         if (!memo_name(entry->d_name)) continue;
-        if (matching++ < session_offset) continue;
-        if (count == SESSION_WINDOW) continue;
+        unsigned index = matching++;
+        if (index < session_offset || count == SESSION_WINDOW) continue;
+        examined++;
+        if (selected_name(names, count, entry->d_name)) continue;
         memcpy(names[count], entry->d_name, 8);
         names[count++][8] = 0;
     }
     closedir(directory);
-    if (!count && matching) session_offset = 0; /* Sessions vanished under the offset. */
-    else if (matching > SESSION_WINDOW) {
-        session_offset = (session_offset + count) % matching;
+    if (session_offset >= matching) session_offset = 0; /* Sessions vanished under the offset. */
+    else if (matching > SESSION_WINDOW && examined) {
+        session_offset = (session_offset + examined) % matching;
         ESP_LOGW("api", "session window: %u of %u sessions this pass; next start=%u",
                  count, matching, session_offset);
     } else session_offset = 0;
@@ -1257,7 +1303,17 @@ static void create_local_sessions(void) {
             status.abandoned++;
         } else if (create_session(session)) {
             status.creates_ok++;
-            if (transfer_session(session) && session_complete(session))
+            bool has_ready = false;
+            for (unsigned chunk = 0; chunk < session->chunk_count; chunk++)
+                if (session->chunks[chunk].state == CHUNK_READY) { has_ready = true; break; }
+            /* JSON and streaming use separate long-lived handles, but their
+             * TLS transports must not stay open at once. Keep upload keepalive
+             * across every chunk in this session, then release its transport
+             * before finish/reconciliation returns to the JSON client. */
+            if (has_ready && shared) esp_http_client_close(shared);
+            bool transferred = transfer_session(session);
+            if (has_ready && uploader) esp_http_client_close(uploader);
+            if (transferred && session_complete(session))
                 mark_settled(session->session_id);
             release_audio(session);
         } else {

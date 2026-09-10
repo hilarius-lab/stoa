@@ -54,8 +54,13 @@ with port:
         if line.startswith(b'@ERROR '):
             raise RuntimeError(line.decode('ascii'))
         if line.startswith(b'@MEMO '):
-            _,memo,segments,samples=line.split()
-            print(f'Memo {memo.decode()}: {int(segments)} segments, {int(samples)/48000:.3f} seconds',flush=True)
+            fields=line.split()
+            if len(fields)<4:
+                raise RuntimeError(f'Invalid memo-list frame: {line!r}')
+            _,memo,segments,samples,*state=fields
+            duration=('incomplete' if samples==b'?' else f'{int(samples)/48000:.3f} seconds')
+            suffix=(' '+b' '.join(state).decode()) if state else ''
+            print(f'Memo {memo.decode()}: {int(segments)} segments, {duration}{suffix}',flush=True)
         elif line.startswith(b'@FILE '):
             _,seq,size=line.split()
             size=int(size)
