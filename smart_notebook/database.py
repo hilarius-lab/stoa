@@ -408,7 +408,7 @@ def _bootstrap_schema():
                 CHECK (
                     segment_type IN (
                         'statement', 'note_candidate', 'task_candidate',
-                        'list_item_candidate', 'question', 'other'
+                        'list_candidate', 'list_item_candidate', 'question', 'other'
                     )
                 ),
                 CHECK (status IN ('provisional', 'confirmed', 'superseded')),

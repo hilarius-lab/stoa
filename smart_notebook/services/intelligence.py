@@ -4,6 +4,7 @@ import re
 from ..config import TIMEZONE
 from ..database import get_db_connection
 from .recovery import refresh_session_watermarks
+from .content_types import QUESTION_KINDS
 
 
 def _key(text):
@@ -56,6 +57,7 @@ def list_evidence_quotes(session_id):
 
 
 def create_question(session_id, text, kind, confidence, priority, topic_id=None, segment_ids=None):
+    if kind not in QUESTION_KINDS: raise ValueError("Unknown question kind")
     text = text.strip(); normalized = _key(text); now = datetime.now(TIMEZONE)
     if not normalized: raise ValueError("question_text must not be empty")
     with get_db_connection() as connection:

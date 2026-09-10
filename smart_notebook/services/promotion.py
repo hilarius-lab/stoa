@@ -56,19 +56,22 @@ def _transfer_all_topics(artifact_id,knowledge_type,knowledge_id):
         c.commit()
     return linked
 
-async def promote_session_artifacts(session_id,mode='llm'):
+async def promote_session_artifacts(session_id,mode='llm',artifact_ids=None):
     with get_db_connection() as c:
         session_row=c.execute("SELECT started_at FROM ingestion_sessions WHERE id=%s",(session_id,)).fetchone()
         if session_row is None:return {"session_id":session_id,"outcome":"not_found","promoted":[],"deferred":[]}
         started_at=session_row[0]
+        if artifact_ids==[]:return {"session_id":session_id,"outcome":"completed","promoted":[],"deferred":[]}
+        id_filter=" AND a.id=ANY(%s)" if artifact_ids is not None else ""
+        params=(session_id,artifact_ids) if artifact_ids is not None else (session_id,)
         rows=c.execute("""SELECT a.id,a.artifact_type,a.content,a.confidence,
         (SELECT t.title FROM session_artifact_topics x JOIN session_topics t ON t.id=x.topic_id WHERE x.artifact_id=a.id ORDER BY x.relation='primary_topic' DESC LIMIT 1),
-        c.normalized_data,c.validated
+        c.normalized_data,c.validated,c.reason_codes
         FROM session_artifacts a LEFT JOIN artifact_classifications c ON c.artifact_id=a.id
-        WHERE a.session_id=%s AND a.status='confirmed' ORDER BY a.id""",(session_id,)).fetchall()
+        WHERE a.session_id=%s AND a.status='confirmed'"""+id_filter+" ORDER BY a.id",params).fetchall()
     promoted=[];deferred=[]
     list_cache={}
-    for artifact_id,kind,content,confidence,topic_title,normalized_data,classification_validated in rows:
+    for artifact_id,kind,content,confidence,topic_title,normalized_data,classification_validated,reason_codes in rows:
         old=_linked(artifact_id)
         if old:
             claim_result=materialize_validated_artifact_claims(artifact_id,old[0],old[1])
@@ -81,7 +84,7 @@ async def promote_session_artifacts(session_id,mode='llm'):
                 knowledge_id=save_note(content,embedding);target='note'
             elif kind=='task':
                 data=normalized_data or {}
-                fields=({"can_promote":True,"content":content,"work_start_at":data.get('work_start_at',''),"due_at":data.get('due_at',''),"urgency":data.get('urgency') or 0}
+                fields=({"can_promote":True,"content":data.get('content') or content,"work_start_at":data.get('work_start_at',''),"due_at":data.get('due_at',''),"urgency":data.get('urgency') or 0}
                         if classification_validated and (data.get('due_at') or data.get('urgency') is not None) else await _task_fields(content,mode,started_at))
                 if not fields['can_promote'] or (not fields['due_at'] and fields['urgency']<=0):deferred.append({"artifact_id":artifact_id,"reason":"task_requires_due_or_urgency"});continue
                 due=None
@@ -112,7 +115,10 @@ async def promote_session_artifacts(session_id,mode='llm'):
                         list_cache[key]=existing[0] if existing else await create_list_record(topic_title,embedding_vector=embedding)
                     knowledge_id=await add_list_item_record(list_cache[key],content,embedding_vector=embedding,refresh_embedding=False)
                 else:
-                    result=await process_list_item_candidate(topic_title,content)
+                    explicit_target=bool(classification_validated and set(reason_codes or []) & {
+                        'explicit_list_target','implicit_list_context'
+                    })
+                    result=await process_list_item_candidate(topic_title,content,explicit_target=explicit_target)
                     knowledge_id=result.get('item_id') or result.get('updated_item_id') or result.get('existing_item_id')
                     if not knowledge_id:deferred.append({"artifact_id":artifact_id,"reason":result.get('reason','list_item_rejected')});continue
                 target='list_item'

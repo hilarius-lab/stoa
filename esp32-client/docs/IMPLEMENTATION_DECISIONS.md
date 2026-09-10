@@ -11,9 +11,10 @@ werden, ohne die Architektur neu zu entscheiden.
   Schwarz und Weiß, keine simulierten Farbstufen. Querformat bleibt nur für
   Einrichtung und technische Übergangsbilder zulässig.
 - lokale Statuszeile: 48 Pixel hoch; mit lokaler Uhrzeit und Datum im Format
-  `D.M.YY` sowie langfristig mit Akkuanzeige nach Android-Vorbild, auch während
-  USB-C-Versorgung; Inhalt, Detail oder leeres Dashboard beginnt darunter und
-  bleibt während einer Aufnahme sichtbar.
+  `D.M.YY` und echter Akkuanzeige, auch während USB-C-Versorgung. Bei aktivem
+  Laden steht ein Blitz in der Batteriezelle, die Prozentzahl bleibt sichtbar;
+  Inhalt, Detail oder leeres Dashboard beginnt darunter und bleibt während
+  einer Aufnahme sichtbar.
 - Außenrand: 16 Pixel; Artsymbol 24 × 24 Pixel; Fokusmarker 6 Pixel breit.
 - Kartenschlagzeile: 24-Pixel-Schrift, höchstens zwei Zeilen. Unterzeile:
   16-Pixel-Schrift, höchstens zwei Zeilen. Metadaten: mindestens 14 Pixel.
@@ -27,22 +28,25 @@ werden, ohne die Architektur neu zu entscheiden.
 
 ## Tasten
 
-- GPIO 4: vorherige Karte/Seite; GPIO 6: nächste Karte/Seite; GPIO 5: Auswahl
-  beziehungsweise Aufnahme. BOOT bleibt ausschließlich Einrichtung.
+- GPIO 4: vorherige Karte/Seite; GPIO 6: nächste Karte/Seite; GPIO 5:
+  Auswahl/Zurück. BOOT/GPIO 0 ist im laufenden Betrieb ausschließlich
+  Push-to-record und behält beim Reset seine ESP32-Strapping-/Downloadfunktion.
 - Entprellung: ein Pegel muss 35 ms stabil sein. Wiederholung bei Hoch/Runter:
   Start nach 500 ms, dann alle 180 ms; höchstens ein geplanter Displayrender.
-- Mitteltaste unter 450 ms: Kurzdruck. Ab 450 ms: Aufnahmebeginn. Eine laufende
-  Aufnahme endet beim Loslassen. Die bestehende Fünf-Minuten-Grenze bleibt bis
-  zum Meetingmodus bestehen.
+- BOOT startet beim ersten erkannten niedrigen Pegel ohne zusätzliche
+  Halteschwelle. Loslassen beendet die Aufnahme. Die 1,5-Sekunden-Mindestdauer
+  filtert kurze Fehlbetätigungen erst nach sauberem Abschluss; die bestehende
+  Fünf-Minuten-Grenze bleibt bis zum Meetingmodus bestehen.
 - Gleichzeitige Hoch-/Runterbetätigung wird ignoriert. Während einer Aufnahme
-  ist keine Dashboardnavigation möglich: die Mitteltaste wird gehalten und kann
-  am selben Bedienelement nicht gleichzeitig nach oben oder unten bewegt werden.
-  Hoch/Runter sind deshalb während der Aufnahme wirkungslos, BOOT und weitere
-  Mitteldruckaktionen bleiben gesperrt. Der Mehrstundenbetrieb bekommt in H5 eine
+  ist keine Dashboardnavigation möglich; Hoch/Runter und Mitteldruckaktionen
+  bleiben wirkungslos. Der Mehrstundenbetrieb bekommt in H5 eine
   eigene Tastenkombination, die ohne dauerhaftes Halten auskommt; erst dort
   stellt sich die Frage nach Navigation während laufender Aufnahme erneut.
 - Nach Aufnahmeende bleibt die aktuelle Übersicht oder Detailseite erhalten;
   lediglich die lokale Statuszeile wechselt über `gespeichert` zurück zu Queue.
+- Der frühere BOOT-3-s-Wiederaufruf der Ersteinrichtung entfällt zugunsten des
+  dedizierten Aufnahmetasters. Weitere WLANs werden über die stets lokale
+  Einstellungsansicht hinzugefügt.
 
 ## Fokus und Details
 

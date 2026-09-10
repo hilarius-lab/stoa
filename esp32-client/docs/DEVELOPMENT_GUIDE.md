@@ -10,8 +10,8 @@
 | Mikrofoncodec | ES8311, I2C SDA 41/SCL 42; I2S MCLK 13, BCLK 14, WS 47, DOUT 48, DIN 21 |
 | Verstärker | GPIO 39; für Aufnahme ausgeschaltet |
 | SDMMC | CLK 16, CMD 17, D0 15, D1 7, D2 8, D3 18, 4 Bit |
-| Dreh-/Tastschalter | GPIO 4/5/6; Mitte GPIO 5 ist Memo halten/loslassen |
-| BOOT | GPIO 0; drei Sekunden im Betrieb öffnet WLAN-Einrichtung |
+| Dreh-/Tastschalter | GPIO 4/5/6; Mitte GPIO 5 ist Auswahl/Zurück |
+| BOOT | GPIO 0; im Betrieb Memo direkt halten/loslassen; beim Einschalten weiterhin ROM-Downloadmodus |
 | USB | native USB-Serial/JTAG, Flash und begrenzte Diagnoseprotokolle |
 | Akku | 5000 mAh vorhanden; keine Laufzeitmessung, kein Deep Sleep geplant |
 
@@ -41,10 +41,11 @@
   mit FFprobe/FFmpeg geprüft und vereinfacht Retry, Recovery und Backendassembly.
 - `fsync` plus Rename ist notwendig, aber FAT32 bleibt bei Stromverlust schwächer
   als ein transaktionales Dateisystem. Ein Journal und Boot-Recovery bleiben Pflicht.
-- Hardwaredokumentation und Beispielcode widersprechen sich beim PMIC: aktuelle
-  Dokumentation nennt TG28, ältere Beispiele initialisieren AXP2101. Keine
-  PMU-Spannungs- oder Laderegister übernehmen, bevor der reale TG28 eindeutig
-  dokumentiert und gemessen ist.
+- Hardwaredokumentation und Beispielcode widersprechen sich beim PMIC-Namen:
+  aktuelle Produktprosa nennt TG28, offizieller Schaltplan und Boardbeispiel
+  AXP2101. Die gemeinsame Leseschnittstelle an `0x34` ist real bestätigt; nur
+  Status, VBAT und E-Gauge werden gelesen. PMU-Ausgangs-, Lade- und
+  Konfigurationsregister bleiben unangetastet.
 - WLAN-Ereignisse dürfen den fachlichen Bildschirmzustand nicht überschreiben.
   `verbunden` ist ein Statusindikator, keine eigene Hauptansicht.
 - Der QR-Einrichtungsweg funktioniert praktisch: zuerst WLAN-QR, dann Webseiten-QR.

@@ -754,7 +754,7 @@ ohne solche Fragen ist er leer. Die nächsten Schritte sind daher:
    wenige priorisierte nächste Entitäten; keine redundanten Processingkarten.
 2. Für Systemhinweise entweder einen echten `alert`-Renderer bauen oder eine
    ausdrückliche ESP-Entity-Card-Projektion definieren. `input_prompt` bleibt
-   entbehrlich, solange die physische Mitteltaste die eindeutige lokale
+   entbehrlich, solange eine physische Taste die eindeutige lokale
    Aufnahmeaktion ist.
 3. Fokus über Snapshotrevisionen anhand Komponenten-ID erhalten. Der Vertrag
    garantiert die ID; `screen.c::snapshot_focus_reset` setzt aktuell alle drei
@@ -762,7 +762,7 @@ ohne solche Fragen ist er leer. Die nächsten Schritte sind daher:
 4. Lokale fünfte Ansicht „Einstellungen“ neben Dashboard, Aufgaben, Listen und
    Verlauf bauen. Darin: Netzwerk/Server, Diagnose, SD-Logs und später
    Zeitzone. Netzwerk/Server startet kontrolliert das vorhandene lokale
-   Setupportal mit QR-Code. Der aktuelle BOOT-3-s-Weg setzt nur ein Setupflag,
+   Setupportal mit QR-Code. Der damalige BOOT-3-s-Weg setzte nur ein Setupflag,
    startet neu und hat ohne Speichern keinen sauberen Rückweg.
 5. Vor einer SD-Logansicht zuerst einen begrenzten, rotierten und inhaltsarmen
    Gerätesink implementieren. `MEMOS/*/JOURNAL.LOG` ist ein Zustandsjournal,
@@ -943,3 +943,47 @@ USB-Status bestätigte auf der realen SD-Karte `available=1`, eine beschriebene
 aktuelle Datei und die konfigurierte Grenze 16384 Byte. Die reale Sichtprobe
 bestätigte technischen Inhalt, Scrollen und Rückkehr wie vorgesehen. Firmware:
 `h4-settings-log`.
+
+## Akku-Lesepfad — Arbeitsstand 9. September
+
+Waveshares aktuelle Produktprosa nennt den PMIC TG28; der offizielle Schaltplan
+und der eigene Beispielcode für genau dieses Board nennen AXP2101. Das reale
+Board beantwortet den dokumentierten AXP2101-Teilsatz an Adresse `0x34`
+kohärent. Der Client liest ausschließlich Status `0x00/0x01`, den vorhandenen
+Gauge-Enable-Zustand `0x18`, VBAT `0x34/0x35` und E-Gauge-SOC `0xA4`; er
+beschreibt kein PMIC-Register und behauptet keinen per Software nicht
+unterscheidbaren Gehäuseaufdruck.
+
+Der reale Befund auf COM9 ist `compatible=yes`, Akku und USB vorhanden, Laden
+und Gauge aktiv, zunächst 99 % bei 4179–4180 mV und später 100 % bei 4193 mV.
+Akkusymbol und Prozentzahl wurden auf dem realen Panel als gut lesbar
+abgenommen. Nur ein plausibler, vollständiger Wert setzt `battery_known`;
+Kommunikationsfehler oder unplausible Daten bringen die gerasterte unbekannte
+Zelle zurück. Build und Flash sind grün. Firmware: `h4-battery`.
+
+## Ladeanzeige, Tastenrecherche und direkte BOOT-Aufnahme — 10. September
+
+Der PMIC-Status enthält bereits den real gelesenen Ladeindikator. `battery.c`
+reicht ihn nun alle fünf Sekunden separat an den Bildschirm weiter;
+`status_bar.c` zeichnet bei `battery_known && battery_charging` einen Blitz in
+die Batteriezelle und lässt den Prozenttext bestehen. Ein lokaler Demozustand
+vermeidet die falsche Behauptung, der bei 100 Prozent tatsächlich
+`charging=0` meldende Akku würde gerade laden. `status-test 6` wurde auf COM9
+angezeigt und vom Nutzer als gut lesbar bestätigt.
+
+Die Herstellerdokumentation bezeichnet BOOT und PWR als programmierbar. Der
+Schaltplan ordnet BOOT GPIO0 zu; zur Laufzeit ist er als Eingang nutzbar, beim
+Reset bleibt er Strapping-Pin für den ROM-Downloadmodus. PWR liegt dagegen im
+PWRON-/IRQ-Pfad des AXP2101 und ist kein freier ESP-GPIO. Er eignet sich später
+vor allem für kontrollierte Schlaf-/Ein-/Ausschaltaktionen; eine beliebige
+UI-Belegung setzt eine separat verifizierte PMIC-Ereignisbehandlung voraus.
+Diese Recherche änderte keine PMIC-Konfiguration.
+
+Auf Nutzerentscheidung startet BOOT im normalen Betrieb jetzt unmittelbar beim
+ersten abgetasteten Druck eine Memo und beendet sie beim Loslassen. Die frühere
+500-ms-Unterscheidung auf GPIO5 und der BOOT-3-s-Setupweg sind entfernt; GPIO5
+ist nur noch Auswahl/Zurück, WLAN-Hinzufügen bleibt lokal in den Einstellungen.
+Die vorhandene 1,5-Sekunden-Mindestdauer verwirft kurze Aufnahmen weiterhin.
+ESP-IDF-Build und Flash auf COM9 sind grün. Firmware: `h4-boot-record`; eine
+physische Sprachprobe nach dem Flash ist noch nicht als Nutzerabnahme
+protokolliert.

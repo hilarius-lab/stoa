@@ -240,7 +240,6 @@ def _idle_content(surface="default"):
         FROM lists l JOIN client_entity_identities i ON i.entity_type='list' AND i.internal_id=l.id
         LEFT JOIN list_items li ON li.list_id=l.id WHERE l.archived=FALSE
         GROUP BY i.public_id,l.id,l.title,l.description,l.updated_at
-        HAVING count(li.id) FILTER(WHERE li.archived=FALSE AND li.status='active')>0
         ORDER BY l.updated_at DESC LIMIT 10""").fetchall() if surface=="esp32_epaper" else []
     if failures:
         attention_text="1 Vorgang bitte prüfen." if failures==1 else f"{failures} Vorgänge bitte prüfen."

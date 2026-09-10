@@ -85,10 +85,14 @@ Es wird nichts gezeigt, was nicht gemessen ist:
 
 - Vor einer vertrauenswürdigen Zeitsynchronisation steht `--:--`, keine
   plausible Uhrzeit und kein geratenes Datum.
-- Der Akkustand ist bis zur verifizierten TG28-Auswertung unbekannt. Die Zelle
-  wird dann **gerastert** dargestellt, nicht leer: ein leerer Umriss wäre die
-  Behauptung eines leeren Akkus und damit eine andere Aussage als „nicht
-  gemessen".
+- Der Akkustand kommt ausschließlich vom E-Gauge des real bestätigten
+  AXP2101/TG28-kompatiblen Controllers. Nur bei vorhandenem Akku, aktivem Gauge
+  und plausibler Spannung/Prozentzahl werden Zelle und Prozentwert gezeigt.
+  Meldet der Controller einen laufenden Ladevorgang, ersetzt ein gut lesbarer
+  Blitz die Füllung innerhalb der Zelle; die Prozentzahl bleibt daneben stehen.
+  Andernfalls wird die Zelle **gerastert** dargestellt, nicht leer: ein leerer
+  Umriss wäre die Behauptung eines leeren Akkus und damit eine andere Aussage
+  als „nicht gemessen".
 - Eine blockierte Karte, die keine neue Aufnahme mehr zulässt, erhält ein
   invertiertes Speichersymbol statt eines zweiten Warndreiecks. Das Dreieck ist
   in derselben Leiste bereits mit „Segmente brauchen Aufmerksamkeit" belegt.
@@ -448,6 +452,15 @@ Dashboardsnapshot und ohne erreichbaren Server bedienbar. Der Fokus beginnt auf
 2. Gerätestatus/Diagnose
 3. SD-Logs
 4. Zeitzone, sobald mehr als die fest eingebaute Berlin-Regel unterstützt wird
+5. Neustart
+6. Herunterfahren
+
+„Neustart“ und „Herunterfahren“ sind lokale, ausdrücklich zu bestätigende
+Aktionen. Während einer Aufnahme oder kritischen SD-Schreibphase bleiben sie
+gesperrt. Neustart wartet auf einen sauberen Flush. Herunterfahren darf erst
+nach verifizierter PMIC-Abschaltsequenz aktiv werden; USB-Versorgung und der
+erneute Start über PWR sind Teil der realen Abnahme. Keine der beiden Aktionen
+löscht Queue- oder Aufnahmedaten oder erklärt sie als zugestellt.
 
 „WLAN hinzufügen“ aktiviert einen temporären `Notebook-Setup`-Hotspot und zeigt
 die WLAN-/Portal-QR-Codes. Dieser Bildschirm bleibt bis zum ausdrücklichen
@@ -467,7 +480,7 @@ weiterhin Serveradresse und einmaligen Enrollment-Code übernehmen.
 Netz, Queueklassen, Speicher und Softwareversion. Keine Memo-Texte, WLAN-
 Passwörter, Tokens oder Response-Bodies.
 
-Die Settings-Ansicht zeigt alle vier Zeilen und startet den
+Die derzeit umgesetzte Settings-Ansicht zeigt die ersten vier Zeilen und startet den
 Fokus auf „Zurück“. „Diagnose“ öffnet eine lokale Unteransicht mit
 Softwareversion, Contract-/Gate-Zustand, Netzwerk, `ready`-/`acked`-/
 `attention`-Queueklassen und freiem SD-Speicher. Zurück führt zunächst in die
@@ -555,17 +568,21 @@ Refreshpolitik nicht periodisch gezeichnet. Dashboardupdates dürfen diese lokal
 Wahrheit nicht überschreiben und überschreiben insbesondere keine laufende
 Aufnahme.
 
-## Kurzdruck und Sprachaufnahme
+## Auswahl und Sprachaufnahme
 
-Die mittlere Taste unterscheidet zwei Gesten, ohne beim Kurzdruck Audio zu
-erzeugen:
+Die Mitteltaste ist ausschließlich Auswahl beziehungsweise Zurück. BOOT ist
+der dedizierte Push-to-record-Taster: Der erste erkannte Druck startet die
+Aufnahme ohne 500-ms-Halteerkennung, Loslassen beendet sie. Das Aufnahmesymbol
+ist weiterhin nur die asynchron gezeichnete Rückmeldung und keine
+Startfreigabe. Die ungefähr 100 ms lange Mikrofon-Einschwingphase wird intern
+verworfen; der Nutzer muss nicht auf das Symbol warten.
 
-- Loslassen vor 450 ms: kurzer Druck für Öffnen beziehungsweise Zurück
-- weiterhin gehalten ab 450 ms: Aufnahme beginnt; Loslassen beendet sie
-
-Während `button_candidate` werden Mikrofon, Session und SD-Datei noch nicht
-gestartet. Während einer laufenden Aufnahme findet keine Dashboardnavigation
-statt. BOOT drei Sekunden bleibt der separate Weg zur lokalen Einrichtung.
+Eine Aufnahme unter 1,5 Sekunden wird nach sauberem Abschluss als
+unbeabsichtigter Tastendruck verworfen und niemals angeboten. Während einer
+laufenden Aufnahme findet keine Dashboardnavigation statt. Die erneute
+WLAN-Einrichtung ist über „WLAN hinzufügen“ in der lokalen Einstellungsansicht
+erreichbar; BOOT beim Einschalten behält seine Hardwarefunktion für den
+ROM-Downloadmodus.
 
 ## Zeit
 

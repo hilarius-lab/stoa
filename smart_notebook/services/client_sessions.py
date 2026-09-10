@@ -43,10 +43,11 @@ def get_client_session(client_session_id):
 
 
 def list_client_sessions(limit=None,offset=0,include_closed=False):
+    visible="NOT EXISTS(SELECT 1 FROM client_text_captures captures WHERE captures.client_session_id=client_sessions.client_session_id)"
     if include_closed:
-        with get_db_connection() as c:rows=c.execute(SELECT+" ORDER BY created_at DESC,client_session_id DESC LIMIT %s OFFSET %s",(limit,offset)).fetchall()
+        with get_db_connection() as c:rows=c.execute(SELECT+f" WHERE {visible} ORDER BY created_at DESC,client_session_id DESC LIMIT %s OFFSET %s",(limit,offset)).fetchall()
     else:
-        with get_db_connection() as c:rows=c.execute(SELECT+" WHERE state=ANY(%s) ORDER BY updated_at DESC",(list(ACTIVE_STATES),)).fetchall()
+        with get_db_connection() as c:rows=c.execute(SELECT+f" WHERE state=ANY(%s) AND {visible} ORDER BY updated_at DESC",(list(ACTIVE_STATES),)).fetchall()
     return [_serialize(row) for row in rows]
 
 
@@ -230,7 +231,7 @@ def _release_local_audio(client_session_id):
     return True
 
 
-async def settle_client_session_for_ingestion(ingestion_session_id):
+async def settle_client_session_for_ingestion(ingestion_session_id,mode="llm"):
     """Finalize and promote a ready client session after its last job.
 
     BACKEND_LOGIK.md A09/D02: new validated artifacts were auto-confirmed,
@@ -244,7 +245,11 @@ async def settle_client_session_for_ingestion(ingestion_session_id):
     with get_db_connection() as c:
         row=c.execute("SELECT client_session_id FROM client_sessions WHERE ingestion_session_id=%s AND state IN('processing','attention_required')",(ingestion_session_id,)).fetchone()
     if not row:return None
-    try:return await finalize_client_session_with_knowledge(row[0])
+    try:
+        result=await finalize_client_session_with_knowledge(row[0],promotion_mode=mode)
+        from .client_capture import sync_capture_for_client_session
+        sync_capture_for_client_session(row[0])
+        return result
     except ClientSessionConflict:
         return None
     except Exception as exc:
@@ -254,6 +259,8 @@ async def settle_client_session_for_ingestion(ingestion_session_id):
         # be retried through the idempotent client finalize endpoint.
         from .observability import emit_event
         emit_event("client_session","knowledge_finalization_failed","error",metadata={"error_type":type(exc).__name__})
+        from .client_capture import sync_capture_for_client_session
+        sync_capture_for_client_session(row[0])
         return None
 
 
@@ -267,6 +274,8 @@ async def finalize_client_session_with_knowledge(client_session_id,promotion_mod
         raise ClientSessionConflict("session is not ready to finalize")
     from .intelligence import finalize_session
     from .promotion import promote_session_artifacts
+    from .capture_intent import (MUTATION_INTENTS,ensure_session_intent_decision,
+        ensure_session_intent_parts,promotable_artifact_ids_for_parts)
     try:finalize_session(item["ingestion_session_id"])
     except ValueError as exc:
         if allow_text_only_compatibility:
@@ -279,17 +288,40 @@ async def finalize_client_session_with_knowledge(client_session_id,promotion_mod
             # release and remains the explicit D03 exception.
             if audio_count==0 and job_count==0:return finalize_client_session(client_session_id)
         raise ClientSessionConflict(str(exc)) from exc
-    try:await promote_session_artifacts(item["ingestion_session_id"],promotion_mode)
+    intent_decision=None;intent_parts=[]
+    if item["capture_mode"]=="auto":
+        try:
+            intent_decision=await ensure_session_intent_decision(item["ingestion_session_id"],promotion_mode)
+            intent_parts=await ensure_session_intent_parts(item["ingestion_session_id"],intent_decision,promotion_mode)
+        except Exception as exc:
+            _mark_client_finalization_attention(client_session_id,"capture_intent_failed",exc)
+            raise
+    # A03 permits only artifacts supported exclusively by memo parts through
+    # the ordinary creation path. Query and mutation segments cannot leak into
+    # a new note/task/list; A06/A07 will resolve and execute those mutations.
+    promotion_ids=promotable_artifact_ids_for_parts(item["ingestion_session_id"],intent_parts) if len(intent_parts)>1 else None
+    promotion_deferred=bool(intent_decision and len(intent_parts)==1 and
+                            intent_decision["primary_intent"] in MUTATION_INTENTS)
+    try:
+        if not promotion_deferred and promotion_ids!=[]:
+            if promotion_ids is None:
+                await promote_session_artifacts(item["ingestion_session_id"],promotion_mode)
+            else:
+                await promote_session_artifacts(item["ingestion_session_id"],promotion_mode,artifact_ids=promotion_ids)
     except Exception as exc:
-        now=datetime.now(TIMEZONE);error=f"{type(exc).__name__}: knowledge promotion failed"
-        with get_db_connection() as c:
-            current=c.execute("SELECT state FROM client_sessions WHERE client_session_id=%s FOR UPDATE",(client_session_id,)).fetchone()
-            if current and current[0] in ("processing","attention_required"):
-                c.execute("UPDATE client_sessions SET state='attention_required',last_error=%s,updated_at=%s WHERE client_session_id=%s",(error,now,client_session_id))
-                if current[0]!="attention_required":_audit(c,client_session_id,"state_reconciled",current[0],"attention_required",{"reason":"knowledge_finalization_failed","error_type":type(exc).__name__})
-                c.commit()
+        _mark_client_finalization_attention(client_session_id,"knowledge_finalization_failed",exc)
         raise
     return finalize_client_session(client_session_id)
+
+
+def _mark_client_finalization_attention(client_session_id,reason,exc):
+    now=datetime.now(TIMEZONE);error=f"{type(exc).__name__}: {reason.replace('_',' ')}"
+    with get_db_connection() as c:
+        current=c.execute("SELECT state FROM client_sessions WHERE client_session_id=%s FOR UPDATE",(client_session_id,)).fetchone()
+        if current and current[0] in ("processing","attention_required"):
+            c.execute("UPDATE client_sessions SET state='attention_required',last_error=%s,updated_at=%s WHERE client_session_id=%s",(error,now,client_session_id))
+            if current[0]!="attention_required":_audit(c,client_session_id,"state_reconciled",current[0],"attention_required",{"reason":reason,"error_type":type(exc).__name__})
+            c.commit()
 
 
 def _materialize_capture_result(client_session_id):
@@ -300,16 +332,34 @@ def _materialize_capture_result(client_session_id):
         with get_db_connection() as c:rows=c.execute("SELECT text FROM ingestion_chunks WHERE session_id=%s ORDER BY sequence",(item["ingestion_session_id"],)).fetchall()
         text=" ".join(r[0].strip() for r in rows if r[0].strip()).strip()
         if not text:raise ClientSessionConflict("stabilized transcript is empty; capture cannot be materialized")
-        mode=item["capture_mode"]
+        mode=item["capture_mode"];intent_decision=None;intent_parts=[]
         if mode=="auto":
-            lowered=text.casefold().lstrip();question_words=("wer ","was ","wann ","wo ","warum ","wieso ","wie ","welche ","kann ","können ","ist ","sind ")
-            mode="query" if text.rstrip().endswith("?") or lowered.startswith(question_words) else "memo"
-        if mode=="query":
+            from .capture_intent import (get_session_intent_decision,get_session_intent_parts,
+                public_intent_decision,public_intent_parts)
+            intent_decision=get_session_intent_decision(item["ingestion_session_id"])
+            if intent_decision:
+                mode=intent_decision["primary_intent"]
+                intent_parts=get_session_intent_parts(item["ingestion_session_id"])
+            else:
+                # Compatibility only for old text-only D03 sessions that have
+                # no processing jobs and therefore no semantic intent stage.
+                lowered=text.casefold().lstrip();question_words=("wer ","was ","wann ","wo ","warum ","wieso ","wie ","welche ","kann ","können ","ist ","sind ")
+                mode="query" if text.rstrip().endswith("?") or lowered.startswith(question_words) else "memo"
+        query_text=("\n".join(part["source_text"].strip() for part in intent_parts
+                              if part["primary_intent"]=="query") if intent_parts else
+                    (text if mode=="query" else ""))
+        if query_text:
             from uuid import UUID,uuid5
             from .client_chat import create_conversation
-            namespace=UUID(str(client_session_id));chat=create_conversation(uuid5(namespace,"conversation"),uuid5(namespace,"message:1"),uuid5(namespace,"turn:1"),text)
-            result={"resolved_intent":"query","transcript_text":text,"conversation_id":chat["conversation"]["id"],"turn_id":chat["turn"]["id"]}
-        else:result={"resolved_intent":"memo","transcript_text":text}
+            namespace=UUID(str(client_session_id));chat=create_conversation(uuid5(namespace,"conversation"),uuid5(namespace,"message:1"),uuid5(namespace,"turn:1"),query_text)
+            result={"resolved_intent":mode,"transcript_text":text,"conversation_id":chat["conversation"]["id"],"turn_id":chat["turn"]["id"]}
+        else:result={"resolved_intent":mode,"transcript_text":text}
+        if intent_decision:
+            result["intent"]=public_intent_decision(intent_decision)
+            result["intents"]=public_intent_parts(intent_parts)
+            if any(part["primary_intent"] in ("change","complete","archive") for part in intent_parts):
+                result["action_status"]="pending_resolution"
+            if len(intent_parts)>1:result["interpretation_status"]="split_completed"
     with get_db_connection() as c:c.execute("UPDATE client_sessions SET capture_result=%s,updated_at=%s WHERE client_session_id=%s",(Jsonb(result),datetime.now(TIMEZONE),client_session_id));c.commit()
     return result
 

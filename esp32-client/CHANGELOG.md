@@ -1,5 +1,56 @@
 # Änderungen
 
+## 2026-09-10 – Ladeblitz und BOOT als direkter Aufnahmetaster
+
+Die Statusleiste übernimmt neben dem E-Gauge-Prozentwert nun auch den
+Ladestatus des real bestätigten AXP2101/TG28-kompatiblen Lesepfads. Bei aktivem
+Laden ersetzt ein zweipixelstarker Blitz die Füllung innerhalb der
+Batteriezelle; die Prozentzahl bleibt daneben sichtbar. Der Zustand wird alle
+fünf Sekunden neu gelesen und nur bei tatsächlicher Änderung gezeichnet.
+`status-test 6` zeigt den reproduzierbaren Demo-Zustand 42 Prozent/lädt. Der
+Nutzer bestätigte den Blitz auf dem realen Panel als gut lesbar. Die aktuelle
+volle Batterie meldete anschließend erwartungsgemäß USB vorhanden und
+`charging=0`; es wurden weiterhin keine PMIC-Register beschrieben.
+
+Die Aufnahmegeste wurde auf den seitlichen BOOT-Taster GPIO0 verlegt. Sein
+erster im 100-ms-Haupttakt erkannter niedriger Pegel wird ohne zusätzliche
+500-ms-Halteschwelle an den Recorder gegeben; Loslassen beendet die Aufnahme.
+GPIO5 ist ausschließlich Auswahl/Zurück. Die bewährte Mindestdauer von 1,5
+Sekunden bleibt bestehen und verwirft kurze Fehlbetätigungen erst nach sauberem
+Schließen, ohne sie der Queue anzubieten. Audioformat, Journal, Upload und
+Fünf-Minuten-Grenze wurden nicht verändert. Der frühere BOOT-3-s-Wiederaufruf
+der Einrichtung entfällt; weitere WLANs sind über die lokale Settings-Ansicht
+erreichbar, und beim Einschalten behält GPIO0 seine ROM-Downloadfunktion.
+
+ESP-IDF-Build und Flash auf COM9 sind grün. Der UI-Hosttest bleibt auf diesem
+Windows-Host mangels Host-`cc` nicht ausführbar. Firmware:
+`h4-boot-record`.
+
+## 2026-09-09 – Echte Akkuanzeige über den Board-PMIC
+
+Die Firmware liest den Power-Controller am gemeinsamen I²C-Bus unter Adresse
+`0x34` jetzt ausschließlich lesend aus. Waveshares offizieller Schaltplan und
+das eigene Boardbeispiel benennen AXP2101, während die aktuelle Produktseite
+TG28 nennt. Das reale Board beantwortet den dokumentierten AXP2101-Teilsatz aus
+Status-, VBAT- und E-Gauge-Registern kohärent. Deshalb beschreibt der Treiber
+die physisch bestätigte Schnittstelle ehrlich als AXP2101/TG28-kompatibel,
+ohne einen nicht auslesbaren Gehäuseaufdruck zu behaupten.
+
+Gelesen werden nur PMU-Status, vorhandener Gauge-Enable-Zustand,
+Batteriespannung und Prozentwert. Es werden weder Ausgangsspannungen noch Lade-
+oder sonstige PMIC-Register beschrieben. Nur bei vorhandenem Akku, aktivem
+Gauge und plausibler Spannung/Prozentzahl setzt die Firmware `battery_known`;
+Fehler bleiben als gerasterte unbekannte Zelle sichtbar. `battery-status` gibt
+den letzten zwischengespeicherten technischen Messwert ohne zusätzlichen
+I²C-Zugriff aus.
+
+ESP-IDF-Build und Flash auf COM9 sind grün. Die reale Probe bei angeschlossenem
+USB meldete kompatible Register, Akku und USB vorhanden, aktives Laden und
+Gauge sowie zunächst 99 % bei 4179–4180 mV und später 100 % bei 4193 mV.
+Akkusymbol und Prozentzahl wurden auf dem realen E-Paper als gut lesbar
+abgenommen. Vollständige Lade-/Entladezyklen bleiben eine spätere Genauigkeits-
+und Laufzeitkalibrierung. Firmware: `h4-battery`.
+
 ## 2026-09-09 – Begrenzter SD-Diagnoselog und lokaler Viewer
 
 Ein eigener Diagnoselogsink schreibt ausschließlich fest typisierte technische

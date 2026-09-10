@@ -9,6 +9,9 @@ void screen_memo(screen_state state, unsigned seconds);
 void screen_status(unsigned pending, unsigned attention, bool storage_low);
 void screen_status_storage_block(bool blocked);
 void screen_status_network(bool connected);
+/* Read-only PMIC result. `known=false` deliberately keeps the rastered unknown
+ * battery instead of turning a failed read into a false empty cell. */
+void screen_status_battery(bool known, unsigned percent, bool charging);
 /* The local Settings row hands the actual Wi-Fi transition to app_main, which
  * owns the driver and portal. Taking the request is atomic and edge-like. */
 bool screen_take_network_setup_request(void);

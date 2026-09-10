@@ -7,8 +7,9 @@ from psycopg.types.json import Jsonb
 from ..config import TIMEZONE
 from ..database import get_db_connection
 from .ai_tasks import get_ai_task_profile
+from .content_types import CLASSIFICATION_TYPES
 
-TYPES={"note","fact","decision","task","list","list_item","question"}
+TYPES=CLASSIFICATION_TYPES
 
 async def _llm_only(segments):
     profile=get_ai_task_profile("artifacts.session_memory")

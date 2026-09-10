@@ -7,6 +7,7 @@ from ..config import (EMBEDDING_MODEL,SEMANTIC_EXAMPLE_MIN_MARGIN,
     SEMANTIC_EXAMPLE_MIN_SIMILARITY,TIMEZONE)
 from ..database import get_db_connection
 from .embeddings import embedding_to_pgvector,get_embedding
+from .content_types import CLASSIFICATION_TYPES
 
 CATALOG_PATH=Path(__file__).resolve().parent.parent/"data"/"semantic_signals_v1.json"
 
@@ -17,6 +18,7 @@ def load_curated_catalog():
 async def record_gold_example(text,artifact_type,label="positive",source_kind="user_correction",source_artifact_id=None):
     text=text.strip()
     if not text:return None
+    if artifact_type not in CLASSIFICATION_TYPES:raise ValueError("Unknown artifact classification type")
     vector=await get_embedding(text);now=datetime.now(TIMEZONE)
     with get_db_connection() as c:
         row=c.execute("""INSERT INTO semantic_gold_examples(text,artifact_type,label,source_kind,source_artifact_id,

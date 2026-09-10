@@ -1,9 +1,17 @@
 # Projektstand
 
-Stand: 2026-09-09, abgeschlossener Arbeitsstand vor der TG28-Akkuprüfung
+Stand: 2026-09-10, Ladeanzeige und dedizierte BOOT-Aufnahme implementiert
 
 ## Nachgewiesen am realen Gerät
 
+- Die Statusleiste bezieht den Prozentwert direkt aus dem E-Gauge des
+  AXP2101/TG28-kompatiblen PMIC an `0x34`; es gibt keine lineare
+  Spannungsschätzung und keine Registerschreibzugriffe. Die USB-Probe meldete
+  Akku vorhanden, Laden und Gauge aktiv, zunächst 99 % bei 4179–4180 mV und
+  später 100 % bei 4193 mV. Akkusymbol und Prozentzahl sind am realen Panel gut
+  lesbar bestätigt. Fehlerhafte, fehlende oder unplausible Messwerte bleiben
+  als unbekannt gerastert. Bei aktivem Laden steht ein Blitz in der Zelle;
+  dieser Zustand wurde mit dem lokalen Status-Demo gut lesbar abgenommen.
 - Das lokale Datum neben der Uhrzeit ist im Format `D.M.YY` implementiert;
   ESP-IDF-Build und Flash auf COM9 sind grün. Die reale Sichtprobe bestätigte
   nach Angleichung von Font und Grundlinie eine homogene, gut lesbare
@@ -15,9 +23,11 @@ Stand: 2026-09-09, abgeschlossener Arbeitsstand vor der TG28-Akkuprüfung
   der reguläre Renderpfad überträgt weiterhin den vollen Canvas.
 - SDMMC, `fsync`, Lesen/Bytevergleich und sicherer Speichergrenzwert sind
   nachgewiesen. Die Firmware formatiert nie automatisch.
-- Halten der Mitteltaste nimmt mono AAC-LC in MP4/M4A mit 48 kHz und ungefähr
-  64 kbit/s auf. UUID, Chunkmetadaten, Hash und Finish werden vor den jeweils
-  abhängigen Schritten im checksummierten SD-Journal persistiert.
+- BOOT startet die Aufnahme beim ersten erkannten Druck ohne 500-ms-Haltephase;
+  Loslassen beendet sie. Aufnahmen unter 1,5 Sekunden werden weiterhin sauber
+  verworfen. Die Mitteltaste ist nur noch Auswahl/Zurück. Mono AAC-LC in
+  MP4/M4A mit 48 kHz und ungefähr 64 kbit/s sowie UUID, Chunkmetadaten, Hash und
+  Finish bleiben unverändert journalisiert.
 - Boot-Recovery, Adoption alter Aufnahmen, Uploadunterbrechung,
   Reconciliation verlorener ACKs und bewusstes Verwerfen von
   `attention`-Aufnahmen sind am Gerät gelaufen. Der Hosttest
@@ -45,7 +55,7 @@ Stand: 2026-09-09, abgeschlossener Arbeitsstand vor der TG28-Akkuprüfung
   und erst nach passender `200`-Antwort entfernt. Toggle, Zurücktoggeln,
   Verlassen und das serverseitige Verschwinden von „Hafermilch“ sind physisch
   abgenommen.
-- Der letzte Firmwarebuild (`h4-settings-log`) und Flash auf COM9 waren grün.
+- Der letzte Firmwarebuild (`h4-boot-record`) und Flash auf COM9 waren grün.
   Das vollständige Backend-M8-Release-Gate einschließlich logischem Vier-
   Stunden-Soak lief für die aktuellen Dashboard-Backendänderungen grün.
 
@@ -103,11 +113,10 @@ ohne Session-Detailansicht.
 
 ## Einstellungen: Ziel und Ist-Stand
 
-Die vorhandene Erstinstallation startet per BOOT-Halten einen
-`Notebook-Setup`-Hotspot, zeigt WLAN-/Portal-QR-Codes und speichert genau ein
-WLAN, optionale Serveradresse und Enrollment-Code. Sie startet nach dem
-Speichern neu. Dieser alte Pfad ist noch nicht mit der neuen Einstellungsansicht
-verbunden.
+Die separate Erstinstallation erscheint ohne gespeichertes Profil und darf
+WLAN, optionale Serveradresse und Enrollment-Code setzen. Im normalen Betrieb
+ist BOOT nun der dedizierte Aufnahmetaster; weitere Netze werden über die lokale
+Einstellungsansicht hinzugefügt.
 
 Die lokale fünfte Ansicht mit Fokus auf „Zurück“ und den Zeilen WLAN
 hinzufügen, Diagnose, SD-Logs und Zeitzone ist umgesetzt.
@@ -120,7 +129,9 @@ Enrollment bleiben ausschließlich Teil der separaten Erstinstallation.
 Der SD-Logbrowser nutzt jetzt einen eigenen, begrenzten und rotierten Sink mit
 festem Ereignisvokabular. Drei Generationen zu je höchstens 16 KiB sind von den
 Aufnahmejournalen getrennt; der lokale Viewer liest nur den jüngsten
-bereinigten Ausschnitt und scrollt zeilenweise.
+bereinigten Ausschnitt. Die Scrolllogik existiert, wurde nach einer früheren
+positiven Probe aber später real als wirkungslos gemeldet und ist deshalb
+wieder offen zu reproduzieren.
 
 Symbolatlas, Firmwarebuild und Flash auf COM9 sind grün. Nach dem automatischen
 Verbindungsretry meldete das Gerät `compatible=1`; die Queue war mit
@@ -131,10 +142,9 @@ abgenommen. Hotspot, stabiler QR-Code und unverändertes Altprofil nach Abbruch
 sind ebenfalls real bestätigt. Speichern, wiederholte Auswahl und Rückfall mit
 einem zweiten realen Netz funktionieren; der Live-Wechsel erhält das bereits
 geladene Dashboard. Der Logsink ist gebaut, geflasht und auf der realen
-SD-Karte beschrieben; die reale Sichtprobe bestätigte Inhalt, Scrollen und
-Rückkehr. Der
-Firmwarebezeichner ist `h4-settings-log`, weil diese Arbeit
-weiterhin die H4-Oberfläche erweitert und nicht den H5-Meetingmodus behauptet.
+SD-Karte beschrieben; Inhalt und Rückkehr sind sichtbar, Scrollen bleibt als
+Regression offen. Der Firmwarebezeichner ist `h4-boot-record`; die Akkuanzeige ergänzt
+weiterhin die bestehende Oberfläche und behauptet nicht den H5-Meetingmodus.
 
 ## Noch offen bis zum produktiven Betrieb
 
@@ -142,18 +152,19 @@ weiterhin die H4-Oberfläche erweitert und nicht den H5-Meetingmodus behauptet.
 - automatische Credentialrotation und vollständige persistierte Retry-/Backoff-
   Klassen
 - verschlüsseltes NVS und verschlüsselte Audiodateien
-- verifizierte TG28-Akkumessung
 - reale Stromausfälle an allen Schreib-/Rename-Grenzen
 - Meetingmodus, OTA/signierte Releases, Secure Boot/Flash Encryption und
   Langzeit-/Kältetests
 - Backend: Watchdog für verwaiste `running`-Jobs und die Auto-Modus-Lücken aus
   `BACKEND_LOGIK.md` Abschnitt 18
+- Die eigene ESP-Listenansicht ist noch auf drei Karten begrenzt. Die nächste
+  Backend-/UI-Arbeit stabilisiert außerdem kombinierte Liste-plus-Item-Sätze,
+  Listen-Deduplizierung und leere Fehlklassifikationen vor A05.
 
 Die auswählbare IANA-Zeitzone ist ein späteres Komfortfeature. Bis dahin bleibt
-die verifizierte `Europe/Berlin`-Regel bewusst fest eingebaut. Als nächster
-abgegrenzter Hardwarepunkt folgt die ausschließlich lesende Identifikation und
-verifizierte Auswertung des TG28 für eine echte Akkuanzeige; erst nach dieser
-Gerätearbeit wird der Backend-Auto-Modus ab A01 fortgesetzt.
+die verifizierte `Europe/Berlin`-Regel bewusst fest eingebaut. A01–A03 und der
+strukturelle A04-Typvertrag sind umgesetzt; vor A05 wird die fehlgeschlagene
+reale A04-Listenabnahme stabilisiert.
 
 Historische Messwerte und Fehleranalysen stehen im `CHANGELOG.md` und in
 `CLIENT_SERVER_STATE.md`; diese Datei beschreibt nur den aktuellen Übergabestand.

@@ -126,18 +126,30 @@ alle Segmente genau einmal logisch zustellen und serverseitig vollständig verar
 - **Einstellungsansicht mit Log-Abruf von der SD-Karte.** Scrollbare Ansicht,
   um die lokal auf der SD-Karte gespeicherten Logs direkt am Gerät
   durchzusehen.
+- **Neustart und Herunterfahren in den lokalen Einstellungen.** Beide Aktionen
+  benötigen eine ausdrückliche Bestätigung und sind während Aufnahme oder
+  kritischen SD-Schreibphasen gesperrt. Neustart erfolgt erst nach sauberem
+  Flush. Herunterfahren wird erst mit einer gegen die reale Hardware
+  verifizierten PMIC-Sequenz umgesetzt; Verhalten mit angeschlossenem USB und
+  erneutes Einschalten über PWR werden am Gerät geprüft. Queue- und
+  Aufnahmedaten werden dabei weder gelöscht noch als zugestellt markiert.
 - **Verlauf zeigt den technischen Stand direkt.** Arbeitsstand 9. September:
   Jede Aufnahmezeile trägt ein zustandsabhängiges Symbol, lokale Zeit und einen
   verständlichen Status von Aufnahme/Upload über Verarbeitung bis
   fertig/fehlgeschlagen/abgebrochen. Ein Mitteldruck aktualisiert die Liste,
   statt eine leere Session-Detailansicht zu öffnen. Firmwarebuild und Flash auf
   COM9 sowie die reale Sicht-/Navigationsprobe sind grün.
-- **Akkuanzeige mit echter Messung.** Das Symbol, die massive Füllung und die
-  Prozentanzeige sind gezeichnet und warten nur auf einen Wert; `battery_known`
-  ist dauerhaft falsch. Zu tun ist die verifizierte Auswertung des TG28 —
-  Register gegen die Dokumentation prüfen, bevor gelesen wird, und keine
-  PMIC-Register beschreiben. Bis dahin bleibt die Zelle gerastert, was „nicht
-  gemessen" heißt und nicht „leer".
+- **Akkuanzeige mit echter Messung — umgesetzt und am Gerät gemessen.** Die
+  Firmware liest ausschließlich Status, vorhandenen Gauge-Enable-Zustand, VBAT
+  und E-Gauge-Prozent des AXP2101/TG28-kompatiblen Controllers an `0x34`.
+  Keine PMIC-Register werden beschrieben. Die reale USB-Probe ergab Akku und
+  Laden aktiv, zunächst 99 % bei 4179–4180 mV und später 100 % bei 4193 mV;
+  Symbol und Prozentzahl sind auf dem realen Panel gut lesbar. Bei Fehlern,
+  fehlendem Akku oder unplausiblen Daten bleibt die Zelle gerastert.
+  Aktives Laden ersetzt die Zellfüllung durch einen Blitz; der Demo-Zustand
+  wurde am realen Panel als gut lesbar bestätigt.
+  Vollständige Lade-/Entladezyklen gehören zur späteren Genauigkeits-/
+  Laufzeitkalibrierung.
 
 ## H4 – Idle-Dashboard und Navigation
 
@@ -154,7 +166,9 @@ alle Segmente genau einmal logisch zustellen und serverseitig vollständig verar
   nicht überall mit. Das Tempo regelt stattdessen die Refreshpolitik über die
   Anzahl der Aktualisierungen.
 - Fokusnavigation über GPIO 4/5/6, Detailseiten und Textpaginierung
-- Kurzdruck/450-ms-Halteerkennung ohne unbeabsichtigte Mini-Aufnahme
+- Mitteltaste ausschließlich für Auswahl/Zurück; BOOT als dedizierter
+  Push-to-record-Taster ohne 500-ms-Halteerkennung. Aufnahmen unter 1,5 Sekunden
+  bleiben der nachgelagerte Schutz gegen Fehlbetätigung.
 - lokale Aufnahme-/Queuezeile über Dashboard und Detail statt Vollbildwechsel
 - unveränderlicher offener Detail-Lesesnapshot bei parallelem Dashboardupdate
 - serverseitige Textgrenzen, Cacheablauf und leere `sections` korrekt behandeln
@@ -180,8 +194,19 @@ als lokale fünfte Ansicht samt inhaltsarmer Diagnose implementiert; Build,
 Flash und reale Navigation-/Lesbarkeitsprobe sind grün. Hotspoteinstieg,
 Mehrnetzprofile und Rückfall sind mit zwei realen Netzen bestätigt. Der
 bereinigte, rotierte SD-Logsink samt Viewer ist implementiert, gebaut und
-geflasht; SD-Schreibung, Darstellung, Scrollen und Rückkehr sind real bestätigt.
+geflasht; SD-Schreibung, Darstellung und Rückkehr sind real bestätigt. Eine
+spätere reale Probe meldete die vorhandene Scrollfunktion jedoch als
+wirkungslos; diese UI-Regression ist wieder offen.
 Details stehen in `docs/DASHBOARD_UI.md`.
+
+Vor dem nächsten Auto-Modus-Schritt A05 wird die reale A04-Listenabnahme
+stabilisiert: Die eigene Listenansicht erhält bis zu zehn statt drei Karten,
+reine Listenerstellung wird gegen gleichnamige aktive Listen dedupliziert und
+ein über mehrere STT-Chunks verteilter Satz kann gleichzeitig einen
+Listencontainer und sein Item erzeugen. Leere Listen aus einer fehlgedeuteten
+Aktion dürfen nicht entstehen. Die drei leeren „Nach dem M2“-Listen aus der
+Live-/Testprobe wurden am 10. September auf die älteste echte Liste
+konsolidiert; zwei Duplikate bleiben nachvollziehbar archiviert.
 
 ## H5 – Meetingmodus
 
@@ -211,6 +236,10 @@ Details stehen in `docs/DASHBOARD_UI.md`.
   klären, ob die Innenkompensation des Controllers ohnehin genügt.
 - 48-Stunden-Dauerbetrieb mit 5000-mAh-Akku messen
 - Datenschutz-, Log-, Lizenz-, Dependency- und Bedrohungsreview
+- unmittelbar vor dem produktionsnahen Alpha-Einsatz einen abschließenden
+  Netzwerk-, Transport- und Verschlüsselungsaudit über Gerät, Setup-Hotspot,
+  WLAN-Profile, TLS/Auth, Credentialrotation sowie SD/NVS durchführen und alle
+  kritischen Befunde vor Freigabe schließen
 - reproduzierbares Releasepaket mit Binärdatei, Hash, Toolversionen und Rollback
 
 ## Festgelegte Querschnittsentscheidungen

@@ -11,6 +11,7 @@ from ..config import TIMEZONE,EMBEDDING_MODEL
 from ..database import get_db_connection
 from .ai_tasks import get_ai_task_profile
 from .embeddings import get_embedding
+from .content_types import CLAIM_TYPES
 
 
 def normalize_claim_subject(value: str) -> str:
@@ -50,6 +51,7 @@ source_knowledge_id,derived,metadata,created_at,updated_at FROM claims"""
 
 
 def create_claim_record(data):
+    if data.claim_type not in CLAIM_TYPES: raise ValueError("Unknown claim type")
     statement = data.statement.strip(); subject = data.subject.strip(); predicate = data.predicate.strip()
     if data.valid_from and data.valid_until and data.valid_until < data.valid_from:
         raise ValueError("valid_until must not be before valid_from")

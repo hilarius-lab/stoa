@@ -27,12 +27,12 @@ typedef struct {
     bool storage_low;   /* warn, recording continues */
     bool storage_block; /* refuse to start a new recording */
 
-    /* Battery stays unknown until the TG28 power management chip is read
-     * against verified documentation; see the roadmap. Until then the cell is
-     * rastered rather than left empty: an empty outline would claim an empty
-     * battery, which is a different statement from "not measured". */
+    /* A read-only value from the board's AXP2101/TG28-compatible power
+     * controller. Failed, absent or implausible samples stay unknown: an empty
+     * outline would claim an empty battery, which is a different statement. */
     bool battery_known;
     unsigned battery_percent;
+    bool battery_charging;
 } status_state;
 
 /* Draw the bar across the top of the logical canvas. */

@@ -27,6 +27,20 @@ static int place_text(unsigned char *canvas, const char *utf8, int right) {
     return width;
 }
 
+static void draw_charge_mark(unsigned char *canvas, int left, int top) {
+    /* A two-pixel-weight lightning mark on a white plate. Keeping the percent
+     * beside the cell preserves the measured level while the cell itself now
+     * communicates the changing state. */
+    icon_plate(canvas, left, top, 19, 14);
+    icon_fill(canvas, left + 10, top,      4, 2, STRIP_SOLID);
+    icon_fill(canvas, left + 8,  top + 2,  5, 2, STRIP_SOLID);
+    icon_fill(canvas, left + 6,  top + 4,  9, 2, STRIP_SOLID);
+    icon_fill(canvas, left + 10, top + 6,  5, 2, STRIP_SOLID);
+    icon_fill(canvas, left + 9,  top + 8,  4, 2, STRIP_SOLID);
+    icon_fill(canvas, left + 8,  top + 10, 4, 2, STRIP_SOLID);
+    icon_fill(canvas, left + 7,  top + 12, 3, 2, STRIP_SOLID);
+}
+
 bool status_bar_format_date(char *out, size_t capacity,
                             unsigned day, unsigned month, unsigned year) {
     if (!out || !capacity) return false;
@@ -82,6 +96,12 @@ void status_bar_draw(unsigned char *canvas, const status_state *state) {
              * slot without asserting a level. */
             icon_fill(canvas, inner_left, inner_top, inner_width, inner_height,
                       STRIP_LIGHT);
+        } else if (state->battery_charging) {
+            draw_charge_mark(canvas, inner_left, inner_top);
+            snprintf(buffer, sizeof(buffer), "%u%%", state->battery_percent > 100
+                     ? 100 : state->battery_percent);
+            pen -= 4;
+            pen -= place_text(canvas, buffer, pen);
         } else {
             /* Fill the cell interior to the measured level, solid. The outline
              * alone would make a full and an empty battery look the same. */

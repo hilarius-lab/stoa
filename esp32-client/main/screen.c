@@ -89,6 +89,9 @@ static QueueHandle_t queue;
 static atomic_uint status_pending, status_attention;
 static atomic_bool status_storage_low, status_storage_block;
 static atomic_bool status_network, status_recording;
+static atomic_bool status_battery_known;
+static atomic_uint status_battery_percent;
+static atomic_bool status_battery_charging;
 static atomic_bool network_setup_requested;
 static atomic_bool network_setup_screen_active;
 /* One atomic word keeps minute and calendar date coherent across midnight.
@@ -789,7 +792,9 @@ static void draw_status(unsigned char *buffer) {
         .queue_attention = atomic_load(&status_attention),
         .storage_low = atomic_load(&status_storage_low),
         .storage_block = atomic_load(&status_storage_block),
-        .battery_known = false, /* until the TG28 is read; see the roadmap */
+        .battery_known = atomic_load(&status_battery_known),
+        .battery_percent = atomic_load(&status_battery_percent),
+        .battery_charging = atomic_load(&status_battery_charging),
     };
     status_bar_draw(buffer, &state);
 }
@@ -1075,6 +1080,10 @@ static void screen_task(void *unused) {
                                           .wifi_connected=true,.queue_ready=7,
                                           .storage_low=true,.storage_block=true,
                                           .battery_known=true,.battery_percent=42}; break;
+            case 6: demo = (status_state){.time_valid=true,.hour=12,.minute=34,
+                                          .day=10,.month=9,.year=2026,
+                                          .wifi_connected=true,.battery_known=true,
+                                          .battery_percent=42,.battery_charging=true}; break;
             default:
                 logical_fill(buffer, 0, 0, 480, STATUS_BAR_HEIGHT);
                 draw_status(buffer);
@@ -1294,6 +1303,14 @@ void screen_status(unsigned pending,unsigned attention,bool storage_low) {
 }
 void screen_status_storage_block(bool blocked){atomic_store(&status_storage_block,blocked);queue_redraw();}
 void screen_status_network(bool connected){atomic_store(&status_network,connected);queue_redraw();}
+void screen_status_battery(bool known, unsigned percent, bool charging){
+    unsigned clamped = percent > 100 ? 100 : percent;
+    charging = known && charging;
+    bool changed = atomic_exchange(&status_battery_known, known) != known;
+    changed |= atomic_exchange(&status_battery_percent, clamped) != clamped;
+    changed |= atomic_exchange(&status_battery_charging, charging) != charging;
+    if (changed) queue_redraw();
+}
 void screen_status_time(unsigned minutes_since_midnight, unsigned day,
                         unsigned month, unsigned year){
     unsigned packed = 0;

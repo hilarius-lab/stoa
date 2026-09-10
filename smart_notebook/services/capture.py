@@ -8,11 +8,33 @@ from ..database import get_db_connection
 from ..prompts import CAPTURE_SYSTEM_PROMPT
 from .embeddings import get_embedding
 from .provenance import add_knowledge_source
-from .lists import process_list_item_candidate
+from .lists import create_list_record, process_list_item_candidate
 from .notes import save_note, update_note
 from .tasks import get_task_record, save_task, update_task
 from .dedupe import decide_note_deduplication, decide_task_deduplication
 from .ai_tasks import get_ai_task_profile
+from .content_types import CAPTURE_ACTIONS, CAPTURE_ACTION_TYPE, capture_result_classification, normalize_capture_result
+from .semantic_router import route_artifact, validate_route
+
+
+def _canonicalize_capture_result(text, event_time, result):
+    result = normalize_capture_result(result)
+    candidate = CAPTURE_ACTION_TYPE.get(result["action"])
+    route = route_artifact(text, event_time)
+    valid, _ = validate_route(text, route)
+    if valid and candidate == route["candidate_type"]:
+        data = route["normalized_data"]
+        if candidate == "task":
+            result["content"] = data.get("content") or result["content"]
+            result["work_start_at"] = data.get("work_start_at", "")
+            result["due_at"] = data.get("due_at", "")
+        elif candidate == "list":
+            result["list_title"] = data["list_title"]
+        elif candidate == "list_item" and len(data["items"]) == 1:
+            result["list_title"] = data["target_list"]
+            result["content"] = data["items"][0]
+    capture_result_classification(text, result)
+    return result
 
 def _optional_due_at(value):
     if not value or not value.strip(): return None
@@ -47,12 +69,7 @@ async def classify_capture(text: str, event_time: datetime):
         "properties": {
             "action": {
                 "type": "string",
-                "enum": [
-                    "none",
-                    "save_note",
-                    "save_task",
-                    "save_list_item"
-                ]
+                "enum": sorted(CAPTURE_ACTIONS)
             },
             "content": {
                 "type": "string"
@@ -100,7 +117,7 @@ async def classify_capture(text: str, event_time: datetime):
         }
     }
 
-    async with httpx.AsyncClient(timeout=profile["timeout_seconds"]) as client:
+    async with httpx.AsyncClient(timeout=profile["timeout_seconds"], trust_env=False) as client:
         response = await client.post(
             profile["endpoint"],
             json=payload
@@ -110,7 +127,7 @@ async def classify_capture(text: str, event_time: datetime):
     data = response.json()
     raw_content = data["choices"][0]["message"]["content"]
 
-    result = json.loads(raw_content)
+    result = _canonicalize_capture_result(text, event_time, json.loads(raw_content))
 
     return result
 
@@ -256,6 +273,8 @@ async def process_capture_action(
                 final_due_at,
                 embedding,
                 source_event_id=event_id,
+                urgency=0.4 if final_due_at is None else None,
+                urgency_source="policy_default" if final_due_at is None else None,
                 work_start_at=final_work_start_at,
                 work_start_reference=event_time,
             )
@@ -314,11 +333,23 @@ async def process_capture_action(
                     "supporting"
                 )
 
+    elif action == "save_list":
+        title = list_title or content
+        if not title:
+            saved["action"] = "none"
+            return saved
+        saved["list_id"] = await create_list_record(title)
+        add_knowledge_source("list", saved["list_id"], event_id, "source")
+        saved["list_created"] = True
+        saved["content"] = title
+        saved["list_title"] = title
+
     elif action == "save_list_item":
         list_result = await process_list_item_candidate(
             list_title,
             content,
-            source_event_id=event_id
+            source_event_id=event_id,
+            explicit_target=True,
         )
 
         if list_result["action"] == "invalid":

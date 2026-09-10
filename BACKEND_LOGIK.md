@@ -1,6 +1,6 @@
 # Smart Notebook – Logik der Verarbeitung und des Wissens
 
-Stand der Zusammenführung: **2026-09-08**. Grundlage: lokaler Quellcode, bestehende Projektdokumentation und das Gespräch über einen allgemeinen Auto-Modus.
+Stand der Zusammenführung: **2026-09-10**. Grundlage: lokaler Quellcode, bestehende Projektdokumentation und das Gespräch über einen allgemeinen Auto-Modus.
 
 Fachliche Ergänzung vom **2026-09-08**: Die Produktentscheidungen zu Aufnahmefilter, langfristiger Wissensverdichtung, Facts, Konfliktklärung, Dashboard-Rückfragen und Archivierung wurden vom Nutzer bestätigt. Die entsprechend markierten Abschnitte beschreiben beschlossenes Soll-Verhalten; sie sind kein Nachweis seiner Implementierung.
 
@@ -93,7 +93,7 @@ Durchgezogene Pfeile zeigen vorhandene Aufrufe oder Datenflüsse. Gestrichelte P
 flowchart TB
     IN["Information kommt rein"] --> KIND{"Eingangsweg"}
     KIND -->|Roh-Event| EV[("Event speichern")]
-    KIND -->|Einzeltext-Capture| AUTO["memo / query / auto-Heuristik"]
+    KIND -->|Einzeltext-Capture| AUTO["Capture sichern; gemeinsamer Textpfad"]
     KIND -->|Audio-Session| STT["Audio speichern und transkribieren"]
     KIND -->|Text-Session| CH[("Text-Chunks speichern")]
     STT --> STABLE["Transkript stabilisieren"]
@@ -103,12 +103,12 @@ flowchart TB
     REPAIR --> SEG["Semantisch segmentieren; Themen erkennen"]
     SEG --> AR["Regeln; bei Unsicherheit LLM; lokale Prüfung"]
     AR --> ART[("Session-Artefakte mit Quellen und Klassifizierung")]
-    AUTO -->|Memo| CAP["Capture-Auftrag; Standard-Worker"]
-    CAP --> CLASS["LLM: eine Capture-Aktion klassifizieren"]
-    CLASS --> DD["Typspezifische Ähnlichkeitssuche und Deduplizierung"]
-    DD --> KNOW[("Notes, Tasks, Listen und Einträge")]
-    AUTO -->|Query| CHAT["Chat-Turn; Standard-Worker"]
-    ART -.->|Fachliche Finalisierung / Promotion| KNOW
+    AUTO --> CH
+    AUTO --> REPAIR
+    ART --> INTENT["Auto-Intent und geordnete Teilabsichten"]
+    INTENT -->|Frageanteile| CHAT["Chat-Turn; Standard-Worker"]
+    INTENT -->|reine Memo-Artefakte| KNOW[("Notes, Tasks, Listen und Einträge")]
+    INTENT -->|Ändern / Erledigen / Archivieren| PENDING["Bis Zielauflösung zurückgestellt"]
     KNOW --> SEARCH["Exakt + Volltext + Trigramm; bei Bedarf Vektorsuche"]
     SEARCH --> CHAT
     CHAT --> ANSWER["Antwort und Chat-Ereignisse speichern"]
@@ -132,7 +132,7 @@ Das Backend verwendet FastAPI als API-Schicht und PostgreSQL als autoritativen D
 | Ebene / Entität | Input und Bedeutung | Gespeichertes Ergebnis / Nutzung |
 |---|---|---|
 | `events` | Einzelner Rohtext, Zeit, Herkunft, gegebenenfalls `client_event_id` | Ursprüngliche Mitteilung; Capture-Ergebnis und optional Legacy-Chatantwort. Noch kein geprüftes Wissen. |
-| `client_text_captures` | Capture-ID, Modus, Inhalt, `context_ref` | Routingentscheidung, Event-/Chat-Bezug, Status und Ergebnis. |
+| `client_text_captures` | Capture-ID, Modus, Inhalt, `context_ref` | Routingentscheidung, verknüpfte Client-/Ingestion-Session, Status und Ergebnis. |
 | `client_sessions` | Öffentliche Client-ID, Aufnahmeart, Kontext, Sequenzbasis | Geräte-/Uploadzustand, Verbindung zur Ingestion-Session und sessionsweite Audiofreigabe. |
 | `ingestion_sessions` | Zusammengehörige Aufnahme oder Texteingabe | Fachlicher Container mit Anfang, Ende und Verarbeitungszustand. |
 | `audio_chunks` | Audio-Bytes und Transportmetadaten | Metadaten, relativer Dateischlüssel, Hash, Status, Retention. |
@@ -140,7 +140,9 @@ Das Backend verwendet FastAPI als API-Schicht und PostgreSQL als autoritativen D
 | `ingestion_chunks` | Stabiler Transkripttext oder direkt eingespeister Text | Geordnete Texteingaben für semantische Verarbeitung; nicht identisch mit Audio-Transport-Chunks. |
 | `semantic_segments` | Ein Chunk und vorheriger Kontext | Einzelne Sinneinheiten mit Typ, Konfidenz und Status. |
 | `session_artifacts` | Interpretierte Segmente | Veränderbare Note-/Task-/List-/List-Item-/Fact-/Decision-Kandidaten der Session. |
-| `artifact_classifications` | Regel- oder LLM-Entscheidung | Belegspannen, normalisierte Felder, Gründe, fehlende Felder, `validated`, `abstained`. |
+| `artifact_classifications` | Regel- oder LLM-Entscheidung nach dem gemeinsamen Typvertrag in `content_types.py` | Belegspannen, normalisierte Felder, Gründe, fehlende Felder, `validated`, `abstained`; `question` ist hier eine Klassifikation, aber kein `session_artifact`. |
+| `session_intent_decisions` | Vollständiger stabilisierter Text plus semantischer Kontext bei `auto` | Primäre Absicht, Zielhinweis und Kennzeichen für mehrere unabhängige Absichten. |
+| `session_intent_parts` | Gemischte `auto`-Eingabe | Geordnete Teilabsichten mit exakter Unicode-Zeichenspanne, Intent, Zielhinweis und Konfidenz. |
 | `session_topics` | Expliziter oder semantisch erkannter Kontext | Themen der laufenden Session samt Belegen und Konfidenz. |
 | `session_questions` | Explizite oder gesondert angelegte implizite Frage | Offene/beantwortete Frage mit Priorität, Quellen und Antwort. |
 | `notes` | Dauerhaft gespeicherter Inhalt | Persönliche Notiz mit Embedding, Zeitpunkten und Archivstatus. |
@@ -158,6 +160,7 @@ Das Backend verwendet FastAPI als API-Schicht und PostgreSQL als autoritativen D
 |---|---|
 | `knowledge_sources` | Verknüpft dauerhaftes Wissen mit Events, etwa als ursprüngliche oder unterstützende Quelle. |
 | `session_artifact_sources` | Verbindet ein Artefakt mit den zugrunde liegenden semantischen Segmenten. |
+| `session_intent_part_segments` | Bindet jede Teilabsicht an die tatsächlich gelieferten semantischen Quellsegmente. |
 | `evidence_quotes` | Konkrete Textstelle aus einem Chunk mit Zeichenposition und gegebenenfalls angenähertem Audiozeitbezug. |
 | `artifact_knowledge_links` | Verbindet ein promoviertes Artefakt mit dem dauerhaft gespeicherten Objekt; verhindert erneute reguläre Promotion desselben Artefakts. |
 | `artifact_claim_links`, `claim_evidence` | Ordnen strukturierte Aussagen und unterstützende/widersprechende Belege zu. |
@@ -178,38 +181,40 @@ Eine Quelle, ein Zitat und die daraus extrahierte Aussage sind unterschiedliche 
 | `POST /api/events` und Batch | Eventtext, Herkunft, optionale stabile Client-ID | Speichern / identischen Retry erkennen | Event; weder Extraktion noch Antwort. |
 | `POST /api/capture`, Capture-Batch oder Capture eines vorhandenen Events | Eventdaten / Event-ID | Event → `process_stored_event_capture` → Klassifizierung und Mutation, sofern noch nicht verarbeitet | Event plus persistiertes Capture-Ergebnis. |
 | `POST /api/message` | `text` | Event → Capture → Wissenssuche → Antwort → `events.response` speichern | Antwort, Capture-Ergebnis und Debugdaten im Legacy-Endpunkt. |
-| `POST /api/client/v1/captures` | `client_capture_id`, `mode`, `content`, optional `context_ref` | Idempotenz prüfen; `memo` oder `query` bestimmen | Memo-Auftrag `queued` oder Referenzen auf neu angelegte Conversation/Turn. |
+| `POST /api/client/v1/captures` | `client_capture_id`, `mode`, `content`, optional `context_ref` | Idempotenz prüfen; Event, text-only Client-/Ingestion-Session, Chunk und Textjob anlegen | Capture `processing`; nach gemeinsamer Interpretation inhaltliche Intententscheidung und bei Query Conversation/Turn. |
 | Client-Conversation / weiterer Turn | Stabile Nachrichten-/Turn-IDs und Inhalt | Nachrichten und Turn speichern | Turn `queued`; noch keine generierte Antwort. |
 | Client-Audio-Session | Session-ID, `capture_mode`, Audio-Chunks | Audio-/Session-Pipeline | Transkripte, Segmente, Artefakte, später Capture-Ergebnis. |
 | Direkte Ingestion-Text-Session | Session und geordnete Text-Chunks | Chunks speichern | Für die Weiterverarbeitung ist zusätzlich Jobanlage/Repair nötig. |
 
-### 5.2 Heutiger Auto-Modus bei Einzeltext
+### 5.2 Heutiger Auto-Modus
 
 1. Inhalt trimmen; Hash aus Modus, Inhalt und Kontext bilden.
 2. Existiert die Capture-ID bereits mit identischen Daten, vorhandenes Capture zurückgeben. Abweichende Daten führen zum Konflikt.
-3. Bei `mode != auto` den gewählten Modus übernehmen.
-4. Bei `auto`: endet der Text mit `?` oder beginnt er mit einer hinterlegten Frageform wie „wer“, „was“, „wann“, „wie“, „ist“ oder „kann“, wird er `query`; sonst `memo`.
-5. Bei `memo`: Event mit Herkunft `client_memo` und Capture mit `queued` speichern.
-6. Bei `query`: deterministisch aus der Capture-ID abgeleitete Conversation-/Message-/Turn-IDs verwenden. Das Capture ist bereits `completed`, weil die Weiterleitung abgeschlossen ist; der Chat-Turn ist noch nicht beantwortet.
+3. Bei `mode != auto` bleibt der ausdrücklich gewählte Modus unverändert.
+4. Event mit Herkunft `client_text_capture` und Capture zunächst `queued` speichern. Während `processing` bleibt `resolved_intent` aus Vertragskompatibilität ein vorläufiger Memo-/Query-Hinweis; er ist keine fachliche Entscheidung und wird beim Abschluss ersetzt.
+5. Unter einer deterministisch aus der Capture-ID abgeleiteten internen UUID eine text-only Client-Session samt Ingestion-Session und genau einem idempotenten Chunk anlegen. Diese interne Session wird aus den Client-Sessionlisten und damit aus dem ESP-Verlauf ausgeblendet. Session-Repair erzeugt den Textjob; der geschlossene Uploadhorizont ist mangels Audio `final_sequence=0`.
+6. Das Capture steht während Text- und Artefaktverarbeitung auf `processing`. Fehlerhafte beziehungsweise geparkte Jobs erscheinen bei der Statusabfrage als `attention_required`; nach Repair wieder als `processing`.
+7. Erst nachdem alle Verarbeitungsjobs abgeschlossen sind, erhält `capture_intent.py` den vollständigen stabilisierten Text, die semantischen Segmente und die Session-Artefakte. Ein strikt validierter strukturierter Aufruf bestimmt `memo`, `query`, `change`, `complete` oder `archive`, dazu Zieltyp, exakte Zieltextspanne, Sicherheit, kontrollierte Gründe und das Kennzeichen für mehrere unabhängige Absichten. Die Entscheidung wird genau einmal pro Ingestion-Session in `session_intent_decisions` persistiert.
+8. Bei mehreren unabhängigen Absichten zerlegt ein zweiter strukturierter Schritt den vollständigen Input in höchstens zwölf lückenlos geordnete, nicht überlappende Quellspannen. Jede Spanne wird lokal gegen den Originaltext und ihre vorhandenen semantischen Segment-IDs geprüft und in `session_intent_parts`/`session_intent_part_segments` gespeichert. Bei einer einzelnen Absicht entsteht ohne zusätzlichen LLM-Aufruf genau ein Teil über den gesamten Text.
+9. Nur Artefakte, deren Quellsegmente ausschließlich zu `memo`-Teilen gehören, dürfen in die bestehende Promotion. Frageanteile werden in Quellreihenfolge zu genau einem Query-Turn verbunden; bei einer gemischten Eingabe enthält dieser nicht den Memo- oder Mutationstext. Änderungs-, Erledigungs- und Archivierungsanteile bleiben bis A06/A07 mit `action_status=pending_resolution` unausgeführt. Das Capture meldet die erfolgreiche Zerlegung als `interpretation_status=split_completed`.
 
-**Grenze:** Diese Entscheidung versteht weder mehrere Absichten noch allgemeine Änderungsbefehle. „Ich habe Milch gekauft. Was fehlt noch?“ wird insgesamt zur Query. Die Speicherung der Information vor der Antwort ist im Client-Query-Pfad nicht wie bei `/api/message` eingebaut.
+**Grenze:** A03 zerlegt und leitet sichere Schöpfungs-/Frageanteile getrennt weiter, löst aber noch keine Zielreferenz auf und führt keine Mutation aus. „Hake Milch ab“ bleibt bis A06/A07 als erkannte Erledigungsabsicht bestehen. Unsicherheitsabhängige Teilfreigabe bleibt A08; transaktionale Wiederaufnahme mehrerer tatsächlich ausgeführter Aktionen bleibt A11.
 
-`context_ref` wird gespeichert und gehört zur Capture-Identität. Der Capture-Worker führt daraus derzeit keine allgemeine Zuordnung zu einer offenen Clarification oder zu einem zu ändernden Wissensobjekt aus.
+`context_ref` wird gespeichert und gehört zur Capture-Identität. Die Capture-/Session-Pipeline führt daraus derzeit keine allgemeine Zuordnung zu einer offenen Clarification oder zu einem zu ändernden Wissensobjekt aus.
 
-### 5.3 Verarbeitung eines einzelnen Memos
+### 5.3 Verarbeitung eines direkten Text-Captures
 
-**Auslöser:** `run_capture_once`, erreichbar über `POST /api/workers/client-capture/run-once` und seit dem Re-Audit vom 2026-09-08 Bestandteil von `worker.py all`.
+**Auslöser:** Normalerweise bereits `create_capture`. `run_capture_once`, erreichbar über `POST /api/workers/client-capture/run-once` und Bestandteil von `worker.py all`, ist nur noch der Kompatibilitäts-/Recovery-Einstieg für alte oder zwischen Persistierung und Pipelineanlage unterbrochene `queued`-Captures.
 
 | Reihenfolge | Input | Verarbeitung | Output |
 |---|---|---|---|
-| 1 | Ältestes `queued`-Capture | Mit `FOR UPDATE SKIP LOCKED` beanspruchen; auf `processing` setzen | Exklusiv beanspruchtes Capture. |
-| 2 | Inhalt und Eventzeit | LLM-Profil `capture.classify` mit strukturiertem Ausgabeschema | **Eine** Aktion: `save_note`, `save_task`, `save_list_item` oder `none`; dazu Inhalt, Frist und Listentitel. |
-| 3 | Note-/Task-Kandidat | Typspezifische Vektorsuche nach ähnlichen Einträgen; LLM-Deduplizierung bei Treffern | `save_new`, `update_existing` oder `skip`. |
-| 4 | List-Item-Kandidat | Zielliste suchen/auflösen; Eintrag innerhalb der Liste deduplizieren | Bestehende oder neue Liste; neuer, aktualisierter oder bereits vorhandener Eintrag. |
-| 5 | Geprüfte Aktion | Inhalt speichern/ändern, Embedding erstellen/erneuern, Eventquelle verknüpfen | Dauerhaftes Objekt oder begründetes Nicht-Anlegen. |
-| 6 | Verarbeitungsergebnis | Event als capture-verarbeitet markieren, Capture-Ergebnis speichern | `completed`; bei Ausnahme `failed`. |
+| 1 | Neues oder wiederaufgenommenes Capture | Stabile Capture-Identität und Inhalts-Hash prüfen | Identischer Retry oder Konflikt bei abweichenden Daten. |
+| 2 | Inhalt und Erfassungszeit | Client-/Ingestion-Session und einen geordneten Text-Chunk anlegen | Dieselbe technische Textquelle wie ein stabilisiertes Transkript. |
+| 3 | Text-Chunk | Session-Repair erzeugt idempotent Step und `text_processing`-Job | Persistente, vom Standardworker ausführbare Arbeit. |
+| 4 | Text- und Artefaktworker | Segmentierung, Topics, Regeln/LLM und Artefakte wie im Audio-Sessionpfad | Quellengebundene Session-Artefakte. |
+| 5 | Abschlussbarriere | Fachlich finalisieren und promoten; danach Capture-Ergebnis materialisieren | `completed` oder sichtbarer Aufmerksamkeits-/Fehlerzustand. |
 
-Der deterministische Testmodus speichert eine Note mit Testembedding und bildet nicht die produktive semantische Entscheidung ab. Einzeltext-Memos durchlaufen nicht automatisch die Segmentierungs-, Themen-, Fragen- und Artefaktpipeline.
+Der frühere direkte Ein-Aktionspfad über `capture.py::process_capture_action` wird von Client-Text-Captures nicht mehr benutzt. Der deterministische Regressionstest führt Text und Audioquelle durch dieselben Worker und vergleicht ihre Segmente und Artefakte. Die anschließende inhaltliche Intententscheidung und Mehrfachzerlegung sind ebenfalls quellunabhängig; der allgemeine Vorab-Abgleich bleibt A05.
 
 ## 6. Audio und Session-Verarbeitung
 
@@ -242,7 +247,7 @@ Dateischreiben und Datenbank-Commit sind keine gemeinsame atomare Transaktion. D
 
 Kurze Restfenster werden beim Finish eingeplant. Die Fensterlänge folgt der Chunkanzahl; 30 Sekunden sind keine für alle Clientprofile erzwungene Konstante.
 
-**Direkter Text-Ingest unterscheidet sich hier:** `create_ingestion_chunk_record` speichert den Chunk, legt selbst aber keinen Textjob an. Dafür muss Repair oder eine passende explizite Jobanlage ausgelöst werden. Im Audio-Stabilisierungspfad ist dieser Anschluss bereits vorhanden.
+**Die rohe direkte Ingestion-Text-API unterscheidet sich hier weiterhin:** `create_ingestion_chunk_record` speichert den Chunk, legt selbst aber keinen Textjob an. Dafür muss Repair oder eine passende explizite Jobanlage ausgelöst werden. Der öffentliche Client-Text-Capture ruft diesen Repair seit A01 selbst auf; im Audio-Stabilisierungspfad ist der Anschluss ebenfalls vorhanden.
 
 ### 6.3 Semantische Segmentierung
 
@@ -250,7 +255,7 @@ Kurze Restfenster werden beim Finish eingeplant. Die Fensterlänge folgt der Chu
 
 1. Aktuellen Chunk und den vorherigen Chunk laden; bis zu 750 Zeichen vorherigen Kontexts berücksichtigen.
 2. Im produktiven Modus `segmentation.semantic` aufrufen. Der deterministische Modus ist ein Testpfad.
-3. Maximal 50 Segmente je Chunk, begrenzte Segmentlänge und erlaubte Typen prüfen: `statement`, `note_candidate`, `task_candidate`, `list_item_candidate`, `question`, `other`.
+3. Maximal 50 Segmente je Chunk, begrenzte Segmentlänge und die zentral definierten Typen prüfen: `statement`, `note_candidate`, `task_candidate`, `list_candidate`, `list_item_candidate`, `question`, `other`.
 4. Segmente mit Hash, Konfidenz, Herkunft und Status speichern; unvollständige Grenzen können vorläufig bleiben und später ersetzt werden.
 5. Für bestätigte Segmente Themen erkennen.
 6. Textjob abschließen, Verarbeitungsschritt synchronisieren, Artefaktjob für den Chunk anlegen und Watermarks aktualisieren.
@@ -309,8 +314,11 @@ Die Reihenfolge im Code:
 | Signal | Interpretation / Output |
 |---|---|
 | „auf die …liste“ mit vorangestellten Einträgen | Zielcontainer und einzeln aufzunehmende Items. |
+| „erstelle eine Liste über …“ | Eigenständiger List-Kandidat mit kurzem, aus der Quelle belegtem Titel. |
+| „nach dem M2 will ich Urlaub machen, schreib das auf eine Liste“ | Impliziter Zielcontainer „Nach dem M2“ und Item „Urlaub machen“; ohne belegten Kontext wird kein Titel erfunden. |
 | „muss“, „soll“, „übernimmt“, „kümmert sich“ | Task-Kandidat, sofern nicht klarer Listen- oder Entscheidungskontext vorliegt. |
-| „heute“, „morgen“, „übermorgen“ oder benannter Wochentag, optional Uhrzeit | Absoluter Zeitpunkt relativ zum Sessionstart; beim gleichen benannten Wochentag bedeutet der Parser die nächste Woche, Standarduhrzeit 09:00. `ab …` wird als `work_start_at`, `bis …`/`spätestens …` als `due_at` getrennt. Ohne Marker bleibt der Zeitpunkt die Frist. |
+| „heute“, „morgen“, „übermorgen“ oder benannter Wochentag, optional Uhrzeit | Absoluter Zeitpunkt relativ zum Sessionstart; beim gleichen benannten Wochentag bedeutet der Parser die nächste Woche, Standarduhrzeit ohne Tageszeit 09:00. `ab …` wird als `work_start_at`, `bis …`/`spätestens …` als `due_at` getrennt. Ohne Marker bleibt der Zeitpunkt die Frist. |
+| „heute Nachmittag“ und andere klare Tageszeiten | Persistentes 24-Stunden-Arbeitsfenster; Nachmittag ist aktuell 12:00–18:00. Relative Zeitwörter werden aus dem Tasktitel entfernt. |
 | Explizite Dringlichkeit | Urgency und Herkunft `explicit`. |
 | Task-Signal ohne Datum und ohne explizite Dringlichkeit | Policy-Default `urgency=0.4`, Herkunft `policy_default`. Das ist eine Regelentscheidung, kein aus der Aussage belegter Dringlichkeitsgrad. |
 | Offene / beschlossene Entscheidung | `decision_status=open` oder `decided`. |
@@ -321,11 +329,38 @@ Der Router enthält begrenzte reguläre Ausdrücke, keinen universellen Parser f
 
 ### 7.4 Validierung und Artefaktaktionen
 
-Das LLM kann `create`, `update`, `confirm`, `supersede`, `dismiss` oder `none` vorschlagen. Typen sind Note, Task, List, List Item, Fact und Decision. Quell-IDs müssen zu den geladenen Segmenten gehören; Änderungsziele müssen unter den geladenen Artefakten existieren; Konfidenz muss zwischen 0 und 1 liegen. Belegspannen werden gegen den Quelltext geprüft.
+`content_types.py` ist seit A04 die fachliche Typquelle. Materialisierbare
+Session-Artefakte sind `note`, `task`, `list`, `list_item`, `fact` und
+`decision`. `question` darf klassifiziert werden, wird aber ausschließlich in
+`session_questions` gespeichert. Fact und Decision gehören fachlich zur
+Claim-Familie; ein Artefakt ist weiterhin noch kein aktiver Claim. Die
+API-Typen für Artefakte, Claims und Questions sowie Segmentierung, Regelrouter,
+Shadowpfad, direkter Capture und Tageskonsolidierung beziehen ihre Definitionen
+beziehungsweise Guards aus diesem Vertrag.
+
+Das LLM kann `create`, `update`, `confirm`, `supersede`, `dismiss` oder `none` vorschlagen. Quell-IDs müssen zu den geladenen Segmenten gehören; Änderungsziele müssen unter den geladenen Artefakten existieren; Konfidenz muss zwischen 0 und 1 liegen. Belegspannen werden gegen den Quelltext geprüft. Typabhängig verlangt der gemeinsame Validator außerdem unter anderem Taskzeit/Dringlichkeit, Listentitel, Listenitemziel/-inhalt oder Entscheidungsstatus. Relative Zeitangaben im normalisierten Tasktitel sind ungültig. Nicht valide LLM-Operationen werden zu `none` und erzeugen kein Artefakt.
 
 `validated` wird aus fehlenden Feldern, Enthaltung und vorhandenen gültigen Belegspannen abgeleitet. Das ist eine lokale Plausibilitätsprüfung und keine umfassende Wahrheitsprüfung.
 
-**Präzisierung:** `_create_llm_artifact` setzt neue validierte Artefakte bereits auf `confirmed`, andere auf `active`. Automatische Bestätigung ist also vorhanden. Automatische dauerhafte Promotion im Standard-Worker ist damit nicht verbunden. Außerdem werden nicht alle nichtvalidierten Operationen pauschal verworfen: die Anwendung und die gespeicherte Validierungskennzeichnung sind zu unterscheiden. Eine universelle Mutationssperre für jede unvalidierte Änderung darf aus dem Zielprinzip nicht abgeleitet werden.
+**Präzisierung:** `_create_llm_artifact` setzt neue validierte Artefakte auf `confirmed`. Der Standard-Clientabschluss schließt ihre dauerhafte Promotion vor technischem `completed` und Audiofreigabe an. Seit A04 werden lokal nicht valide neue LLM-Operationen nicht mehr als aktive Artefakte angelegt; explizite spätere Nutzerkorrekturen an bereits vorhandenen Artefakten bleiben ein eigener API-Pfad.
+
+### 7.5 Auto-Intent und mehrere Teilabsichten
+
+Nach dem letzten Artefaktjob klassifiziert A02 die gesamte `auto`-Eingabe. Nur
+wenn sie mehrere unabhängige Absichten trägt, ruft A03 das Profil
+`capture.intent_split` auf. Output sind höchstens zwölf Teile mit lückenloser
+Ordinalzahl, exaktem `source_text`, Intent, Zielhinweis, Konfidenz,
+kontrollierten Gründen und vorhandenen Segment-IDs. Der lokale Validator
+ermittelt `source_start/source_end` selbst aus dem Originaltext, verwirft
+inhaltliche Lücken, Überlappungen, unbekannte Segment-IDs und unbelegte Zuordnungen und
+exportiert keine internen Segment-IDs an Clients.
+
+Ein Artefakt ist für die gewöhnliche Promotion nur freigegeben, wenn sämtliche
+seiner Quellsegmente ausschließlich an Memo-Teile gebunden sind. Ein Segment,
+das zugleich einen Frage- oder Mutationsanteil belegt, wird konservativ nicht
+promotet. Query-Teile werden in ihrer Reihenfolge als ein einzelner Chatinput
+weitergegeben. Diese Stufe ist noch kein allgemeiner Aktionsplan und keine
+Zielauflösung.
 
 ## 8. Abschluss: Technische Session-Freigabe und fachliche Promotion
 
@@ -337,12 +372,12 @@ Das LLM kann `create`, `update`, `confirm`, `supersede`, `dismiss` oder `none` v
 2. Reconciliation prüft, ob der Upload-Horizont vollständig ist.
 3. Bei Vollständigkeit Ingestion-Finish ausführen, finale STT-Fenster einplanen und Clientzustand `processing` setzen. Ein wiederholtes Finish während `processing` führt nicht zurück zu `draining`.
 4. Finalisierung verlangt `processing` oder einen nach reparierten Jobs wiederaufnehmbaren Zustand `attention_required` sowie vollständige Uploads. Jeder Jobzustand ungleich `done` blockiert; `failed`, `parked` und `attention_required` ergeben den Completion-Status `attention_required`.
-5. Der gemeinsame Finalize-Pfad führt zuerst die fachliche Finalisierung und Promotion aus (8.2/8.3). Schlägt die Promotion fehl, bleibt die Client-Session `attention_required` und die Audiofreigabe gesperrt; derselbe idempotente Client-Finalize-Endpunkt kann den Versuch wiederholen.
+5. Der gemeinsame Finalize-Pfad führt zuerst fachliche Finalisierung, bei `auto` die persistierte Intententscheidung und Teilzerlegung und danach die vollständige beziehungsweise memo-selektiv gefilterte Promotion aus (7.5/8.2/8.3). Schlägt Intentverarbeitung oder Promotion fehl, bleibt die Client-Session `attention_required` und die Audiofreigabe gesperrt; derselbe idempotente Client-Finalize-Endpunkt kann den Versuch wiederholen.
 6. Capture-Ergebnis materialisieren, bevor der technische Abschluss gesetzt wird:
    - `meeting`: Ergebnis mit `resolved_intent=meeting`;
    - `memo`: zusammengefügter stabiler Transkripttext;
    - `query`: aus diesem Text Conversation und Turn anlegen;
-   - `auto`: erst jetzt dieselbe Memo-/Query-Heuristik auf den gesamten Text anwenden.
+   - `auto`: autoritative primäre Intententscheidung und öffentlich sichere `intents`-Liste verwenden; vorhandene Frageanteile erzeugen einen Query-Turn nur aus ihren Quellspannen, Mutationsanteile bleiben `pending_resolution`.
 7. Client- und Ingestion-Session auf `completed` setzen.
 8. Monotone sessionsweite `local_audio_release_allowed`-Freigabe und Zeitpunkt setzen.
 
@@ -350,7 +385,7 @@ Das LLM kann `create`, `update`, `confirm`, `supersede`, `dismiss` oder `none` v
 
 **Ergänzt 2026-09-08, Re-Audit:** `settle_client_session_for_ingestion` und der öffentliche Client-Finalize-Endpunkt verwenden jetzt denselben wissenssicheren Abschlussweg. Fachliche Finalisierung und Promotion liegen vor `completed` und Audiofreigabe; eine bereits als `done` gespeicherte Worker-Arbeit wird bei einem nachgelagerten Promotionsfehler nicht rückwirkend auf `failed` gesetzt. Der frühere Happy-Path-Nachweis bleibt gültig (Session 401: automatische Promotion eines Fact- und eines Task-Artefakts). Neu regressionsgeprüft sind außerdem die Sperre durch einen `parked`-Job, gesperrte Audiofreigabe bei simuliertem Promotionsfehler und die anschließende idempotente Wiederaufnahme. Eine allgemeine autonome Retry-Queue für eine fehlgeschlagene Promotion existiert weiterhin nicht; Wiederaufnahme erfolgt über den Client-Finalize-Retry oder einen späteren Settlement-Aufruf.
 
-**Eng begrenzte D03-Kompatibilitätsausnahme:** Eine Client-Session, in die ausschließlich über die direkte Ingestion-Text-API Chunks geschrieben wurden, besitzt historisch weder Audio noch automatisch angelegte Processing-Jobs. Der öffentliche Client-Finalize-Endpunkt darf nur in genau diesem Fall weiterhin das Capture-Ergebnis technisch materialisieren, obwohl die fachlichen Watermarks nicht deckungsgleich sind. Es gibt dabei kein lokales Audio freizugeben. Audio-Sessions oder Sessions mit irgendeinem Processing-Job erhalten diesen Bypass nicht.
+**Eng begrenzte D03-Kompatibilitätsausnahme:** Eine Client-Session, in die ausschließlich über die rohe direkte Ingestion-Text-API Chunks geschrieben wurden, besitzt historisch weder Audio noch automatisch angelegte Processing-Jobs. Der öffentliche Client-Finalize-Endpunkt darf nur in genau diesem Fall weiterhin das Capture-Ergebnis technisch materialisieren, obwohl die fachlichen Watermarks nicht deckungsgleich sind. Der Client-Text-Capture verwendet diese Ausnahme seit A01 nicht mehr. Es gibt dabei kein lokales Audio freizugeben. Audio-Sessions oder Sessions mit irgendeinem Processing-Job erhalten diesen Bypass nicht.
 
 ### 8.2 Fachliche Finalisierung
 
@@ -708,7 +743,7 @@ Die Verarbeitung muss den Archivierungsgrund aus Abschnitt 14.3 beachten. Automa
 | `worker.py audio` | Audio-Transkriptionsjobs | Client-Text-Capture und Chat. |
 | `worker.py text` | Textsegmentierung, Topics, Artefakt-Folgejob | Allgemeine Frageauflösung und dauerhafte Promotion. |
 | `worker.py artifacts` | Regeln/LLM für Session-Artefakte | Automatische vollständige Auto-Orchestrierung. |
-| `worker.py all` | Audio, Text, Artefakte, Einzeltext-Captures und Chat-Turns pro Schleifenrunde nacheinander; erfolgreiche Sessionjobs versuchen den wissenssicheren Abschluss aus 8.1/8.3 | Allgemeiner permanenter Reconciler und autonome Wiederholung fehlgeschlagener Promotionsversuche. |
+| `worker.py all` | Audio, Text, Artefakte, Capture-Recovery und Chat-Turns pro Schleifenrunde nacheinander; erfolgreiche Sessionjobs versuchen den wissenssicheren Abschluss aus 8.1/8.3 | Allgemeiner permanenter Reconciler und autonome Wiederholung fehlgeschlagener Promotionsversuche. |
 | `scheduler.py` | Täglicher Wartungslauf | Automatische externe Recherche. |
 | `caldav_worker.py` | Periodische CalDAV-Synchronisation | Verarbeitung unmarkierter Fremdobjekte. |
 | `background.py` | Startet Queue-Worker, CalDAV und Scheduler als Unterprozesse | Kein eigenständiger fachlicher Entscheidungsmechanismus. |
@@ -748,6 +783,7 @@ Sie bilden aber noch kein gemeinsames Transaktionsprotokoll für „eine Eingabe
 - Die Auswahl relevanten Wissens im Live-Feed erfolgt über passende Themen und Konfidenzschwellen. Sie ist nicht gleichbedeutend mit automatischer Fragenbeantwortung oder beliebiger Suche zu jedem gesprochenen Satz.
 - Client-Dashboards projizieren gespeicherte Zustände in einen geschlossenen Komponenten-/Aktionskatalog. Surface-spezifische Darstellung und stabile öffentliche IDs gehören zur Projektion, nicht zur Wissensextraktion.
 - Die Projektion `esp32_epaper` komponiert Home aus offenen Rückfragen, handlungsrelevanten Processing-Hinweisen und höchstens drei nächsten Entitäten. Aus der bereits fachlich gefilterten und sortierten Taskmenge kommen zunächst höchstens zwei Tasks, dazu eine aktive Liste; freie Plätze füllt die verbleibende Art. Vollständige Task-/Listenbereiche bleiben eigene Geräteansichten. `alert` wird auf dem ESP als nicht fokussierbarer Hinweis gerendert; weiterhin nicht gezeichnete Komponenten und danach leere Sektionen werden entfernt. Technische offene Sessions bleiben dem paginierten Verlauf vorbehalten. Kopierte Home-Karten besitzen eigene stabile Komponenten-IDs und dieselbe `entity_ref`; die Firmware hält Fokus über neue Snapshots zuerst per Komponenten-ID, dann per Entity-Referenz und Positionsfallback. Listen tragen in Übersicht und Detail die Anzahl offener Einträge; die Detailantwort enthält nur aktive Items mit stabiler öffentlicher UUID sowie eine lesbare `content`-Fassung. `PUT /api/client/v1/entities/list-item/{id}/status` setzt `active|done` idempotent; erledigte Items fehlen in späteren Details. Die Default-Surface bleibt davon unberührt.
+- Eine ausdrücklich neu angelegte, noch leere Liste bleibt in der ESP-Listenansicht als `0 offen` sichtbar. Home berücksichtigt für „Als Nächstes“ weiterhin nur Listen mit mindestens einem offenen Item.
 - SSE signalisiert Zustandsänderungen; Snapshots bleiben für den Clientabgleich relevant.
 
 ### 17.2 Offline-Wissen
@@ -773,7 +809,7 @@ Technische Logs und Worker-Heartbeats dienen der Diagnose. Normativ sollen sie k
 
 ### 17.5 Strukturierte LLM-Aufrufe und aktueller `llama.cpp`-Befund
 
-Der Re-Audit vom 2026-09-08 findet **zwölf** aktive `response_format.type='json_schema'`-Aufrufe in **zehn** Services: `capture.py`, `claims.py`, `consolidation.py`, `dedupe.py` (zweimal), `lists.py` (zweimal), `maintenance.py`, `nightly_consolidation.py`, `promotion.py`, `segmentation.py` und `shadow.py`. `chat.py` gehört entgegen der älteren Aufzählung nicht dazu. `artifacts.py::_propose_artifact_operations` bleibt der einzige bewusst unstrukturierte Workaround: Formatvorgabe im Prompt, JSON-Extraktion und lokale Validierung.
+Mit A03 existieren **vierzehn** aktive `response_format.type='json_schema'`-Aufrufe in **elf** Services: `capture.py`, `capture_intent.py` (zweimal), `claims.py`, `consolidation.py`, `dedupe.py` (zweimal), `lists.py` (zweimal), `maintenance.py`, `nightly_consolidation.py`, `promotion.py`, `segmentation.py` und `shadow.py`. `chat.py` gehört entgegen einer älteren Aufzählung nicht dazu. `artifacts.py::_propose_artifact_operations` bleibt der einzige bewusst unstrukturierte Workaround: Formatvorgabe im Prompt, JSON-Extraktion und lokale Validierung.
 
 Der aktuelle Code besitzt keinen gemeinsamen Adapter für diese Aufrufe; Schema, HTTP-Client, Parsing und Fehlerbehandlung liegen jeweils im Fachservice. Auch `trust_env=False` wird nicht einheitlich gesetzt. Das ist eine Wartungsinkonsistenz, aber kein Nachweis, dass projektweit auf textbasierte Ausgabe umgestellt werden sollte. Der nächtliche strukturierte Review wurde im Re-Audit live erfolgreich ausgeführt. Der kombinierte Alpha-Test für Artefakt, Shadow und Claims war wegen eines parallel laufenden Workers nicht aussagekräftig: Dieser beanspruchte den Testjob vor dem Test-Endpoint. **AD-012 entscheidet deshalb gegen eine pauschale Umstellung:** funktionierende kleine Schemas bleiben constrained; weitere freie Textpfade benötigen einen reproduzierbaren Taskfehler und gleichwertige lokale Validierung. Ein gemeinsamer Transport-/Parsing-Adapter bleibt technische Folgearbeit, ohne die taskweise Modusentscheidung zu verwischen.
 
@@ -785,10 +821,10 @@ Die folgende Liste konsolidiert das Gespräch und den tatsächlichen Integration
 
 | ID | Fehlende Verbindung | Erwarteter Input → Output |
 |---|---|---|
-| A01 | Gemeinsamer fachlicher Pfad für Text und Audio | Text oder stabilisiertes Transkript → dieselbe Interpretation und Aktionslogik. |
-| A02 | Inhaltliche Intent-Erkennung statt Frageheuristik | Beliebiger Inhalt → Mitteilung, Merkauftrag, Änderungsauftrag, Erledigung, Frage oder Kombination. |
-| A03 | Mehrere Absichten pro Eingabe | Gemischter Absatz → geordnete, quellengebundene Teilinformationen und Aktionen. |
-| A04 | Einheitliche Typdefinitionen und Validierung | Kandidat → konsistente Note-/Task-/List-/Claim-/Question-Einordnung in allen Pfaden. |
+| A01 | Gemeinsamer fachlicher Pfad für Text und Audio — **seit 2026-09-09 geschlossen:** Client-Text-Captures materialisieren einen Ingestion-Chunk, legen per Repair den Textjob an und laufen durch dieselbe Segmentierungs-, Artefakt-, Finalisierungs- und Promotionskette wie stabilisierte Audiotranskripte. | Text oder stabilisiertes Transkript → dieselbe Interpretation und Aktionslogik. |
+| A02 | Inhaltliche Intent-Erkennung statt Frageheuristik — **seit 2026-09-10 geschlossen:** Nach gemeinsamer semantischer Verarbeitung wird eine validierte, persistierte Entscheidung aus `memo|query|change|complete|archive` samt Zielhinweis und Mehrfachkennzeichen getroffen. Mutationsabsichten werden bis A06/A07 nicht ausgeführt und nicht als neues Wissen promotet. | Beliebiger Inhalt → Mitteilung, Merkauftrag, Änderungsauftrag, Erledigung, Frage oder gekennzeichnete Kombination. |
+| A03 | Mehrere Absichten pro Eingabe — **seit 2026-09-10 geschlossen:** Gemischte `auto`-Eingaben werden in höchstens zwölf geordnete, vollständige und segmentgebundene Quellspannen zerlegt. Reine Memo-Artefakte dürfen selektiv weiterlaufen, Frageanteile bilden einen eigenen Query-Input und Mutationen bleiben bis A06/A07 zurückgestellt. | Gemischter Absatz → geordnete, quellengebundene Teilinformationen und erkannte, noch nicht ausgeführte Aktionen. |
+| A04 | Einheitliche Typdefinitionen und Validierung — **strukturell seit 2026-09-10 umgesetzt, Liveabnahme wieder offen:** `content_types.py` definiert Artefakt-, Claim-, Question- und Segmenttypen sowie gemeinsame lokale Guards. Die reale Audioabnahme zeigte danach noch Chunk-übergreifende Liste-plus-Item-Verluste, doppelte gleichnamige Listen und eine leere Fehlklassifikation; diese Stabilisierungsarbeit geht A05 voraus. | Kandidat → konsistente Note-/Task-/List-/Claim-/Question-Einordnung in allen Pfaden, einschließlich kombinierter Liste-plus-Item-Aussagen über Chunkgrenzen. |
 | A05 | Wissen und Ziele vor Mutationen abgleichen | Neuer Inhalt + passende Suche → neu, identisch, ergänzend, widersprechend oder auf ein Objekt bezogen. |
 | A06 | Referenzen aus Sprache und Gespräch auflösen | „Das ist erledigt“, „dort noch Brot“ → eindeutige Objekt-ID oder offene Rückfrage. |
 | A07 | Gemeinsamer Aktionsplan und Executor | Validierte Interpretation → anlegen, ergänzen, ändern, abhaken, wieder öffnen oder archivieren. |
@@ -818,11 +854,21 @@ Die folgende Liste konsolidiert das Gespräch und den tatsächlichen Integration
 
 Importance gezielt für Kontextauswahl und Darstellung verwenden; automatische implizite Fragen über die Minimalrückfrage hinaus ausbauen; externe Referenzquellen und volatile Fakten kontrolliert anschließen; semantische Nachtvorschläge nach belastbarer Prüfung aktivieren. Diese Schritte sind keine Voraussetzung dafür, dass ein erster Auto-Modus Texte zuverlässig in Notes, Tasks und Listen überführt.
 
+Ein späterer STT-Unsicherheitsblock kombiniert zwei voneinander unabhängige
+Signale: die bereits in der Whisper-kompatiblen Rohantwort vorhandenen lokalen
+Wortwahrscheinlichkeiten und eine inhaltliche Satzplausibilitätsprüfung durch
+das LLM. Eine hohe Durchschnittskonfidenz darf einzelne sehr schwache Wörter
+nicht verdecken. Nur wenn beide Signale materiell auseinanderlaufen, darf ein
+zweiter STT-Lauf mit gezielt anderen Parametern die Unsicherheit bestätigen
+oder auflösen. Bleibt eine handlungsrelevante Mehrdeutigkeit bestehen, entsteht
+eine konkrete Rückfrage; das System korrigiert das Transkript nicht still und
+führt keinen pauschalen Zweitlauf für jede Aufnahme aus.
+
 ### 18.4 Abnahmeszenarien für die spätere Implementierung
 
 **Gemischte Eingabe:** „Ich vertrage keine Erdnüsse. Setz Hafermilch auf die Einkaufsliste. Den Anruf bei Paul habe ich erledigt. Was wollte ich sonst noch besorgen?“
 
-Erwarteter Ablauf: Eingabe sichern → vier Absichten trennen → bestehende Aussage/Liste/Paul-Aufgabe suchen → persönliche Angabe quellengebunden speichern → Listeneintrag idempotent ergänzen → eindeutige Aufgabe abhaken oder gezielt nachfragen → Frage aus dem aktualisierten Listenbestand beantworten. Dieses Szenario ist ein Zieltest, kein als bestanden behaupteter aktueller Test.
+Seit A03 belegt: Eingabe sichern → vier Absichten als geordnete Quellspannen trennen → ausschließlich Memo-Artefakte zur Promotion freigeben → Frageinput getrennt anlegen → Erledigung zurückstellen. Weiterhin Ziel: bestehende Aussage/Liste/Paul-Aufgabe suchen → persönliche Angabe quellengebunden speichern → Listeneintrag idempotent ergänzen → eindeutige Aufgabe abhaken oder gezielt nachfragen → Frage aus dem aktualisierten Listenbestand beantworten.
 
 Weitere notwendige Fälle:
 
@@ -851,7 +897,7 @@ Diese Übersicht dokumentiert die Abweichungen, ohne ältere normative Dateien s
 |---|---|---|---|
 | D01 | Handoff vom 24.08.: A2/Queue/Streaming vielfach geplant | Heutige Services enthalten Audio, Jobs, Segmente, Artefakte und Client-v1 | Handoff ist historische Baseline, kein aktueller Funktionsstatus. |
 | D02 | Roadmap M1: vollständige Artefakte automatisch bestätigen **und promoten** | War: neue validierte Artefakte werden bestätigt, Worker ruft Promotion nicht auf. Seit 2026-09-08 behoben; der Re-Audit ordnet Promotion zusätzlich vor technischen Abschluss und Audiofreigabe. | Automatische Bestätigung war schon vorhanden; automatische Promotion und Fehlerbarriere sind ergänzt. Widerspruch aufgelöst. |
-| D03 | Chatdiagramme: Text-Chunk → Textjob | Direkte Chunk-Erzeugung speichert nur; Audio-Stabilisierung ruft Repair auf | Direkter Text-Ingest braucht explizite Jobanlage/Repair. |
+| D03 | Chatdiagramme: Text-Chunk → Textjob | Rohe direkte Chunk-Erzeugung speichert weiterhin nur; Audio-Stabilisierung und Client-Text-Capture rufen Repair auf | A01 für den öffentlichen Capture geschlossen; Kompatibilitätsausnahme bleibt ausschließlich für rohe direkte Text-Ingestion. |
 | D04 | Effizienzleiter als allgemeiner Weg sämtlicher Suchen | Capture-Deduplizierung nutzt separate Vektorsuchen; allgemeiner Retriever fragt mehrere SQL-Kanäle vor Vektor ab | Unterschiedliche Suchpfade ausdrücklich getrennt. |
 | D05 | „Alle Inhalte → Wissen/Fragen/Antwort“ | Einzelmemo, Query und Session besitzen unterschiedliche Aufrufketten | Keine bereits einheitliche Auto-Orchestrierung. |
 | D06 | Questions/implicit Questions als eingebauter Gesamtmechanismus | Explizite Detection separat; impliziter Typ vorhanden; kein automatischer Ableitungs-/Antwortkreislauf | Datenmodell und Integration getrennt. |
@@ -896,7 +942,7 @@ Diese Übersicht dokumentiert die Abweichungen, ohne ältere normative Dateien s
 | App und Speicherung | [app.py](smart_notebook/app.py), [database.py](smart_notebook/database.py), [migrations.py](smart_notebook/migrations.py), [config.py](smart_notebook/config.py) |
 | Eingang / Capture | [routers/events.py](smart_notebook/routers/events.py), [services/events.py](smart_notebook/services/events.py), [client_capture.py](smart_notebook/services/client_capture.py), [capture.py](smart_notebook/services/capture.py) |
 | Session / Audio | [client_sessions.py](smart_notebook/services/client_sessions.py), [ingestion.py](smart_notebook/services/ingestion.py), [audio.py](smart_notebook/services/audio.py) |
-| Interpretation | [segmentation.py](smart_notebook/services/segmentation.py), [semantic_router.py](smart_notebook/services/semantic_router.py), [artifacts.py](smart_notebook/services/artifacts.py) |
+| Interpretation | [content_types.py](smart_notebook/services/content_types.py), [segmentation.py](smart_notebook/services/segmentation.py), [semantic_router.py](smart_notebook/services/semantic_router.py), [artifacts.py](smart_notebook/services/artifacts.py), [capture_intent.py](smart_notebook/services/capture_intent.py) |
 | Themen / Beispiele | [topic_detection.py](smart_notebook/services/topic_detection.py), [topics.py](smart_notebook/services/topics.py), [semantic_examples.py](smart_notebook/services/semantic_examples.py) |
 | Suche / Deduplizierung | [retrieval.py](smart_notebook/services/retrieval.py), [dedupe.py](smart_notebook/services/dedupe.py), [lists.py](smart_notebook/services/lists.py), [embeddings.py](smart_notebook/services/embeddings.py) |
 | Wissen / Quellen | [promotion.py](smart_notebook/services/promotion.py), [provenance.py](smart_notebook/services/provenance.py), [claims.py](smart_notebook/services/claims.py), [note_fact.py](smart_notebook/services/note_fact.py) |
@@ -915,10 +961,10 @@ Diese Übersicht dokumentiert die Abweichungen, ohne ältere normative Dateien s
 
 | ID | Aktueller Integrationsstatus | Erneut geprüfter Codebezug |
 |---|---|---|
-| A01 | Offen | `client_capture.py::create_capture/run_capture_once` und `segmentation.py::run_text_processing_once` bleiben getrennte Interpretationspfade. |
-| A02 | Offen | `client_capture.py::_intent` und `client_sessions.py::_materialize_capture_result` verwenden weiterhin die Memo-/Query-Frageheuristik. |
-| A03 | Offen | `capture.py::classify_capture` liefert genau eine Aktion; mehrere Artefaktoperationen existieren nur im Sessionpfad `artifacts.py`. |
-| A04 | Offen | Capture-Schema, `semantic_router.py` und Artefaktvalidator besitzen weiterhin unterschiedliche Typmengen und Guards. |
+| A01 | Geschlossen | `client_capture.py::create_capture` erzeugt Client-/Ingestion-Session, Chunk und Repair-Job; `segmentation.py::run_text_processing_once`, Artefaktworker und gemeinsamer wissenssicherer Abschluss sind danach für Text und stabilisiertes Audiotranskript identisch. `m8_capture_contract_test.py` vergleicht beide Quellen deterministisch und prüft Status/Recovery; das vollständige M8-Gate ist grün. |
+| A02 | Geschlossen | `capture_intent.py::ensure_session_intent_decision` klassifiziert nach Text-/Artefaktverarbeitung strukturiert und persistiert die Entscheidung. `client_sessions.py` materialisiert daraus das autoritative Ergebnis; Mutation und gemischte Eingabe sperren die gewöhnliche Promotion. Der verbleibende Memo-/Query-Hinweis während `processing` ist ausdrücklich nur Vertragskompatibilität. Der deterministische Regressionstest deckt Frage, Memo, Ändern, Erledigen/Listenpunktstreichen und Archivieren ab. |
+| A03 | Geschlossen | `capture_intent.py::ensure_session_intent_parts` persistiert geordnete Quellspannen und Segmentbindungen. Der Abschluss promotet nur ausschließlich memo-gebundene Artefakte, bildet den Query-Turn nur aus Frageanteilen und hält Mutationsteile zurück. `m8_capture_contract_test.py` prüft Reihenfolge, exakte Spannen, interne-ID-Abschirmung, selektive Promotion und Querytext. |
+| A04 | Strukturell umgesetzt, Liveabnahme offen | `content_types.py` trennt Artefakte, Claims und separat gespeicherte Questions und liefert die gemeinsamen Guards für Segmentierung, Router, Shadow, API-Schemas, Capture, Konsolidierung und LLM-Artefaktoperationen. Migration 0044 ergänzt `list_candidate`. Die Tests prüfen kurze zeitfreie Tasktitel, Tageszeitfenster sowie explizite und implizite Listenerstellung, deckten aber die später real beobachtete Chunkgrenze und eine frühe Cleanup-Assertion nicht ab. |
 | A05 | Offen | Capture-Deduplizierung (`dedupe.py`, `lists.py`) und Session-Promotion (`promotion.py`) besitzen keinen gemeinsamen Vorab-Abgleich. |
 | A06 | Offen | `reference_resolver.py::resolve_internal` ist nicht an allgemeine Sprachänderungen oder `context_ref`-Verarbeitung angeschlossen. |
 | A07 | Offen | Es gibt keinen eingangswegübergreifenden Aktionsplan/Executor; Capture und Artefaktoperationen mutieren über eigene Services. |
@@ -1007,3 +1053,151 @@ diesem Windows-Host mangels Host-`cc` nicht wiederholbar. Die physische Probe
 zeigte zwei Aufgaben und die Einkaufsliste unter „Als Nächstes“; der Fokus blieb
 beim erzwungenen Snapshotabruf erhalten. Der Nutzer nahm das Home-Zielbild ab.
 Verarbeitung, Promotion und A01–A13/W01–W10 werden dadurch nicht verändert.
+
+**Codeänderung 2026-09-09 (A01, gemeinsamer Text-/Audiopfad):** Auslöser ist
+`POST /api/client/v1/captures`; Input sind stabile Capture-UUID, Modus, Text und
+optionaler Kontext. `client_capture.py::create_capture` sichert zunächst Event
+und Capture, legt dann unter einer verknüpften text-only Client-Session mit
+eigener deterministisch abgeleiteter UUID genau einen Ingestion-Chunk an und
+ruft Session-Repair zur idempotenten Textjobanlage
+auf. Text- und Artefaktworker, fachliche Finalisierung und Promotion sind danach
+dieselben Funktionen wie für stabilisierte Audiotranskripte. Erst nach dieser
+Barriere wird das Capture `completed` und bei Query eine deterministische
+Conversation samt Turn angelegt. `GET .../captures/{id}` spiegelt einen
+problematischen Processing-Job als `attention_required` und nach Repair wieder
+als `processing`; der Capture-Recovery-Worker bleibt nur für alte oder bei der
+Pipelineanlage unterbrochene `queued`-Datensätze. Migration
+`0041_unified_text_capture_pipeline` speichert die Sessionverknüpfung und
+erweitert den Statusguard. Interne Textsessions bleiben aus den öffentlichen
+Sessionlisten und damit aus dem ESP-Aufnahmeverlauf ausgeschlossen. Der
+Regressionstest vergleicht für denselben Text
+Segmente, Artefakte und Ergebnis aus direkter Text- und audioförmiger Session,
+prüft Idempotenz sowie Failure/Repair und lief zusammen mit dem vollständigen
+M8-Gate einschließlich logischem Vier-Stunden-Soak grün. Zu diesem A01-Stand
+blieben A03/A05 und die rohe D03-Ingestion-Kompatibilitätsausnahme offen.
+
+**Codeänderung 2026-09-10 (A02, inhaltliche Intententscheidung):** Auslöser ist
+der gemeinsame Abschluss einer `auto`-Session nach dem letzten
+Artefaktverarbeitungsjob. Input sind der vollständige stabilisierte Text, seine
+semantischen Segmente und die noch sessiongebundenen Artefakte. Der neue Service
+`capture_intent.py` fordert per strengem JSON-Schema genau eine primäre
+Entscheidung aus `memo`, `query`, `change`, `complete` oder `archive` sowie
+Zieltyp, exakte Zieltextspanne, Sicherheit, kontrollierte Gründe und ein
+Mehrfachkennzeichen an. Migration `0042_session_content_intent` persistiert die
+Entscheidung idempotent pro Ingestion-Session und erweitert den Capture-Guard.
+Erst danach materialisiert `client_sessions.py` das autoritative
+`resolved_intent`. Memo und Query behalten den bestehenden Promotionspfad;
+Query legt erst anschließend die Conversation an. Änderung, Erledigung und
+Archivierung werden ohne Ausführung als `pending_resolution` abgeschlossen und
+nicht als neue Note/Task/Listeneintrag promotet. Gemischte Eingaben wurden bis
+zur Umsetzung von A03 als `pending_split` ebenfalls nicht teilpromotet. Fehler im Intentaufruf
+setzen die Client-Session nachvollziehbar auf `attention_required`; eine bereits
+persistierte Entscheidung wird beim Retry wiederverwendet. Der gezielte
+Regressionstest belegt die fünf Intentklassen, insbesondere „Hake/Streiche …“
+für Listenitems, die persistierte Entscheidung, das Unterlassen der Promotion
+und den weiter funktionierenden Query-Conversationpfad. Ein echter Aufruf des
+konfigurierten LLM erkannte „Hake Milch auf der Einkaufsliste ab.“ als
+`complete/list_item` mit der exakten Zielspanne „Milch“; anschließend lief das
+vollständige M8-Release-Gate einschließlich logischem Vier-Stunden-Soak grün.
+
+**Codeänderung 2026-09-10 (A03, quellengebundene Mehrfachzerlegung):** Auslöser
+ist eine durch A02 als mehrfach erkannte `auto`-Session. Input bleiben der
+vollständige stabilisierte Text, die semantischen Segmente und die
+sessiongebundenen Artefakte. `capture_intent.py` fordert über ein eigenes
+strenges JSON-Schema höchstens zwölf fortlaufend nummerierte Teile an. Jeder
+Teil trägt eine exakte Quellspanne, die zugehörigen Segment-IDs, genau einen
+Intent, Zielangaben, Sicherheit und kontrollierte Gründe. Die lokale
+Validierung erzwingt Quellreihenfolge, Überschneidungsfreiheit, vollständige
+Abdeckung aller Nicht-Leerraumzeichen, vorhandene Segmentbindungen und das
+Vorkommen der zuvor persistierten Primärentscheidung. Migration
+`0043_session_intent_parts` speichert Teile und Segmentrelationen atomar und
+idempotent; ein Retry verwendet die persistierte Zerlegung. Bei einer
+Einzelabsicht wird ohne zweiten LLM-Aufruf genau ein Teil über den ganzen Text
+gespeichert.
+
+Beim fachlichen Abschluss ermittelt `client_sessions.py` aus diesen Relationen
+eine konservative Promotionsfreigabe: Nur Artefakte, deren Quellsegmente
+ausschließlich Memo-Teilen zugeordnet sind, dürfen den bestehenden
+Erstellungspfad durchlaufen. Frageanteile werden in Quellreihenfolge zum Inhalt
+genau eines Query-Turns; Änderungs-, Erledigungs- und Archivierungsanteile
+bleiben bis A06/A07 ohne Ausführung `pending_resolution`. Das öffentliche
+Capture-Ergebnis meldet `split_completed`, die geordneten Intents und deren
+Unicode-Zeichenbereiche, gibt aber keine internen Segment-IDs preis. Fehler bei
+Zerlegung oder Validierung führen nachvollziehbar zu `attention_required`.
+`m8_capture_contract_test.py` belegt an einer gemischten Memo-/Erledigungs-/
+Frageeingabe exakte Spannen, Reihenfolge, persistierte Segmentbindungen,
+selektive Promotion, abgeschirmte interne IDs und den ausschließlich aus der
+Frage gebildeten Querytext. Ein echter strukturierter LLM-Aufruf lieferte für
+dieselbe Eingabe die drei erwarteten Teile und bestand sämtliche lokale
+Validierung; anschließend lief das vollständige M8-Release-Gate einschließlich
+logischem Vier-Stunden-Soak grün. A03 löst bewusst noch keine Mutationsziele auf und führt keine
+Objektänderung aus; das bleibt A06/A07, unsicherheitsabhängige Teilfreigabe A08
+und transaktionale Mehraktions-Wiederaufnahme A11.
+
+**Codeänderung 2026-09-10 (A04, gemeinsamer Typvertrag und normalisierte
+Objektbildung):** `content_types.py` definiert die sechs materialisierbaren
+Session-Artefakttypen, `question` als ausschließlich klassifizierbaren und
+separat gespeicherten Typ, die Claim- und Question-Enums, Segmenttypen,
+Familienzuordnung und einen gemeinsamen lokalen Validator. Dieser prüft neben
+Typ, Konfidenz, Enthaltung, fehlenden Feldern und exakten Belegspannen auch die
+typabhängigen normalisierten Daten. Tasks benötigen Frist oder begründete
+Dringlichkeit und ein gültiges Zeitfenster; relative Zeitwörter dürfen nicht im
+normalisierten Titel verbleiben. Lists benötigen einen Titel, List Items Ziel
+und Inhalte, Decisions einen Status. Schema-Aliasse, Segmentierung,
+Regelrouter, Shadow, Goldbeispiele, direkter Capture, Tageskonsolidierung,
+Claims, Questions und freie LLM-Artefaktoperationen greifen auf diesen Vertrag
+zurück. Eine ungültige generative Artefaktoperation wird zu `none` und erzeugt
+kein Session-Artefakt. Migration `0044_unified_content_types` ergänzt
+`list_candidate` im persistierten Segmentvertrag.
+
+Als konkrete A04-Abnahme normalisiert der Router „heute Nachmittag“ relativ zum
+Sessionstart auf `work_start_at=12:00` und `due_at=18:00`; das gespeicherte
+Taskobjekt heißt dabei „Listenerstellung im Smart Notebook reparieren“ statt
+des gesprochenen Satzes. „Erstelle eine Liste über, was ich nach dem M2 alles
+machen will“ erzeugt die Liste „Nach dem M2“. „Nach dem M2 will ich Urlaub
+machen, schreib das auf eine Liste“ erzeugt beziehungsweise verwendet denselben
+Container und fügt „Urlaub machen“ hinzu. Der bestehende Weg „setze … auf die
+Einkaufsliste“ bleibt unverändert. Ein durch die Klassifikation bereits
+belegtes explizites oder implizites Listenziel wird bei der Promotion nicht
+noch einmal vom LLM grundsätzlich zugelassen oder verworfen; nur die
+Item-Deduplizierung bleibt nachgelagert. `semantic_router_test.py` prüft Typvertrag
+und Normalisierung; `m8_content_type_pipeline_test.py` führt die drei Fälle ohne
+Queue-Rennen durch Router, Artefaktspeicherung und echte PostgreSQL-Promotion
+und räumt alle Testobjekte wieder auf. Der Test sichert außerdem ab, dass der
+explizit erstellte Container bereits vor dem ersten Item in der
+ESP-Listenprojektion als `0 offen` sichtbar ist. Die erweiterten strukturierten Schemas
+für Segmentierung, direkten Capture und Tageskonsolidierung wurden zusätzlich
+gegen das konfigurierte LLM ausgeführt; anschließend lief das vollständige
+M8-Release-Gate einschließlich logischem Vier-Stunden-Soak grün. A04 führt
+noch keinen allgemeinen Vorab-Abgleich mit vorhandenem Wissen durch; das ist
+A05. Referenzauflösung und Mutation bleiben A06/A07.
+
+**Live-Nachtrag 2026-09-10 (A04-Abnahme wieder geöffnet):** Die reale
+Geräteprobe bestätigte nur den Packlistenfall vollständig. Der erwartete Task
+erschien nicht. Zwei getrennte Audio-Sessions erzeugten jeweils eine leere
+aktive Liste „Nach dem M2“; zusätzlich hinterließ
+`m8_content_type_pipeline_test.py` wegen einer Assertion vor seiner
+Cleanup-Buchführung eine dritte leere Liste. Nach ausdrücklicher Freigabe
+bleibt die älteste echte Liste aktiv, die zweite echte Leerliste und die
+Testfixture wurden über den normalen Listenservice archiviert. Die
+ESP-Listenansicht projiziert derzeit wie allgemeine Sektionen höchstens drei
+Karten und kann dadurch etwa die Einkaufsliste nur verdrängen, nicht löschen.
+
+Die Aufnahme „Nach dem Urlaub will ich Fotos sortieren. Schreib das auf eine
+Liste.“ belegte die eigentliche Integrationslücke: STT/Segmentierung trennte den
+Inhalt in einen Taskkandidaten und einen anschließenden Listenkandidaten. Der
+Artefaktjob durfte jeweils nur seine aktuellen Chunk-Quell-IDs verwenden; der
+vorhandene Session-Topic „Fotos sortieren“ lieferte zwar den Listentitel, aber
+nicht mehr die Itemsemantik. Ergebnis war eine leere Liste. Die lokalen
+Wort-/Listenregeln funktionieren für Container und Item im selben Chunk, nicht
+für diese verteilte Kombination. Semantisches Nudging und Goldbeispiele laufen
+hier weiterhin nur im Shadow-Modus und waren nicht die unmittelbare Ursache.
+
+Vor A05 sind deshalb vier eng begrenzte Korrekturen fällig: Listenansicht bis
+zehn Karten bei unverändert höchstens drei Home-Karten; Deduplizierung reiner
+Listenerstellung gegen aktive gleichnamige Container; gemeinsame Auswertung
+benachbarter Quellchunks für eine kombinierte Liste-plus-Item-Aussage; und
+Cleanup-Registrierung vor jeder potenziell fehlschlagenden Testassertion. Erst
+eine neue reale Audioabnahme schließt A04 fachlich. Die oben beschriebene
+spätere STT-Unsicherheitslogik ist davon getrennt und wird jetzt nicht
+vorweggenommen.

@@ -543,6 +543,46 @@ MIGRATIONS=[
         "ALTER TABLE client_entity_identities DROP CONSTRAINT client_entity_identities_entity_type_check",
         "ALTER TABLE client_entity_identities ADD CONSTRAINT client_entity_identities_entity_type_check CHECK(entity_type IN('session_artifact','session_topic','question','task','list','list_item'))",
     ]),
+    ("0041_unified_text_capture_pipeline","Route direct client text through the ingestion session pipeline",[
+        "ALTER TABLE client_text_captures ADD COLUMN client_session_id UUID REFERENCES client_sessions(client_session_id) ON DELETE SET NULL",
+        "CREATE UNIQUE INDEX client_text_captures_client_session_idx ON client_text_captures(client_session_id) WHERE client_session_id IS NOT NULL",
+        "ALTER TABLE client_text_captures DROP CONSTRAINT client_text_captures_status_check",
+        "ALTER TABLE client_text_captures ADD CONSTRAINT client_text_captures_status_check CHECK(status IN('queued','processing','completed','failed','attention_required'))",
+    ]),
+    ("0042_session_content_intent","Persist content-based intent decisions for completed auto captures",[
+        """CREATE TABLE session_intent_decisions(
+        session_id BIGINT PRIMARY KEY REFERENCES ingestion_sessions(id) ON DELETE CASCADE,
+        primary_intent TEXT NOT NULL,target_type TEXT NOT NULL,target_text TEXT NOT NULL DEFAULT '',
+        confidence DOUBLE PRECISION NOT NULL,multiple_intents_detected BOOLEAN NOT NULL DEFAULT FALSE,
+        reason_codes JSONB NOT NULL DEFAULT '[]'::jsonb,decision_source TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL,updated_at TIMESTAMPTZ NOT NULL,
+        CHECK(primary_intent IN('memo','query','change','complete','archive')),
+        CHECK(target_type IN('none','unknown','note','task','list','list_item')),
+        CHECK(confidence BETWEEN 0 AND 1))""",
+        "ALTER TABLE client_text_captures DROP CONSTRAINT client_text_captures_resolved_intent_check",
+        "ALTER TABLE client_text_captures ADD CONSTRAINT client_text_captures_resolved_intent_check CHECK(resolved_intent IN('memo','query','change','complete','archive'))",
+    ]),
+    ("0043_session_intent_parts","Persist ordered source-bound intent parts for auto captures",[
+        """CREATE TABLE session_intent_parts(
+        id BIGSERIAL PRIMARY KEY,session_id BIGINT NOT NULL REFERENCES session_intent_decisions(session_id) ON DELETE CASCADE,
+        ordinal INTEGER NOT NULL,primary_intent TEXT NOT NULL,target_type TEXT NOT NULL,target_text TEXT NOT NULL DEFAULT '',
+        source_text TEXT NOT NULL,source_start INTEGER NOT NULL,source_end INTEGER NOT NULL,confidence DOUBLE PRECISION NOT NULL,
+        reason_codes JSONB NOT NULL DEFAULT '[]'::jsonb,decision_source TEXT NOT NULL,created_at TIMESTAMPTZ NOT NULL,
+        UNIQUE(session_id,ordinal),CHECK(ordinal BETWEEN 1 AND 12),
+        CHECK(primary_intent IN('memo','query','change','complete','archive')),
+        CHECK(target_type IN('none','unknown','note','task','list','list_item')),
+        CHECK(source_text<>''),CHECK(source_start>=0 AND source_end>source_start),CHECK(confidence BETWEEN 0 AND 1))""",
+        """CREATE TABLE session_intent_part_segments(
+        part_id BIGINT NOT NULL REFERENCES session_intent_parts(id) ON DELETE CASCADE,
+        segment_id BIGINT NOT NULL REFERENCES semantic_segments(id) ON DELETE CASCADE,
+        PRIMARY KEY(part_id,segment_id))""",
+        "CREATE INDEX session_intent_part_segments_segment_idx ON session_intent_part_segments(segment_id)",
+    ]),
+    ("0044_unified_content_types","Add the canonical list segment candidate",[
+        "ALTER TABLE semantic_segments DROP CONSTRAINT semantic_segments_segment_type_check",
+        """ALTER TABLE semantic_segments ADD CONSTRAINT semantic_segments_segment_type_check CHECK(
+        segment_type IN('statement','note_candidate','task_candidate','list_candidate','list_item_candidate','question','other'))""",
+    ]),
 ]
 
 

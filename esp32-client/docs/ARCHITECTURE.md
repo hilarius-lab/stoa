@@ -9,7 +9,7 @@ und Tasklogik bleiben vollständig im Backend.
 
 ```text
 Mensch
-  │ halten / sprechen / loslassen
+  │ BOOT drücken / sprechen / loslassen
   ▼
 Capture Controller ──► M4A-Segmenter ──► SD-Journal ──► Upload Worker
        │                     │                 │              │
@@ -21,12 +21,13 @@ E-Paper Renderer ◄── lokaler Snapshotcache ◄── REST/SSE ────
 
 ## Firmwaremodule
 
-1. **Board Support** kapselt Pins, ES8311, SDMMC, E-Paper, Tasten, RTC und später
-   TG28. Nur diese Schicht kennt das konkrete Waveshare-Board.
-2. **Capture** besitzt den Zustandsautomaten `idle → button_candidate → preparing
-   → recording → draining → saved/error`. Ein Loslassen in `button_candidate`
-   wird als UI-Kurzdruck behandelt und startet keine Aufnahme. Display und Netzwerk dürfen den Audiopfad nicht
-   blockieren.
+1. **Board Support** kapselt Pins, ES8311, SDMMC, E-Paper, Tasten, RTC und die
+   ausschließlich lesende AXP2101/TG28-kompatible Akkutelemetrie. Nur diese
+   Schicht kennt das konkrete Waveshare-Board.
+2. **Capture** besitzt den Zustandsautomaten `idle → preparing → recording →
+   draining → saved/error`. BOOT wird beim ersten erkannten Tastendruck direkt
+   an den Recorder gegeben; eine zu kurze Aufnahme wird erst beim Abschluss
+   verworfen. Display und Netzwerk dürfen den Audiopfad nicht blockieren.
 3. **Storage/Queue** schreibt unveränderliche Segmente und ein append-only
    Journal. Eine Datei wird erst nach Close, `fsync`, Rename und Metadatensatz
    uploadfähig.
@@ -74,7 +75,7 @@ Risiko, ersetzen aber kein Recovery-Journal und keine anschließende Prüfung.
 
 ## Bedienmodell
 
-- **Bereit:** mittlere Taste halten startet `quick_memo`.
+- **Bereit:** BOOT drücken startet `quick_memo` ohne vorgelagerte Haltegeste.
 - **Aufnahme:** loslassen beendet. Eine kompakte lokale Statuszeile bleibt über
   Dashboard oder Detail sichtbar; Sekundenanzeige ist rein lokal und monoton.
 - **Gesichert:** bedeutet nur, dass die Memo lokal dauerhaft abgeschlossen ist.
@@ -84,9 +85,10 @@ Risiko, ersetzen aber kein Recovery-Journal und keine anschließende Prüfung.
   wechselt bei Bedarf seitenweise; ein kurzer Mitteldruck öffnet die Karte.
 - **Kartendetail:** Hoch/Runter blättert durch Detailseiten; ein kurzer
   Mitteldruck kehrt zur vorher fokussierten Karte der Übersicht zurück.
-- **Mitteltaste:** Kurzdruck wird beim Loslassen vor 450 ms erkannt. Erst
-  fortgesetztes Halten ab 450 ms startet die Aufnahme, damit ein Kartenaufruf
-  keine kurze Audiodatei erzeugt.
+- **Mitteltaste:** Auswahl beziehungsweise Zurück; sie startet kein Audio mehr.
+- **BOOT:** Aufnahme beginnt mit dem ersten erkannten Druck und endet beim
+  Loslassen. Aufnahmen unter 1,5 Sekunden werden sauber geschlossen und als
+  unbeabsichtigt verworfen.
 - **Monochrom:** Serverseitige Farbrollen werden durch feste Art-/Statussymbole,
   Rahmen und Text ersetzt. Die vollständige Abbildung steht in
   `docs/DASHBOARD_UI.md`.
@@ -97,4 +99,5 @@ Risiko, ersetzen aber kein Recovery-Journal und keine anschließende Prüfung.
   der Inhaltsbereich leer; lokale Statuszeile und Aufnahme funktionieren weiter.
 - **Zeit:** Standard `Europe/Berlin`, lokal einstellbar und per SNTP/NTP
   synchronisiert. Der Server entscheidet fachlich, was zu „Heute“ gehört.
-- **BOOT drei Sekunden:** öffnet Einrichtung, solange keine Aufnahme läuft.
+- **Einrichtung:** Wiederaufruf über die lokale Einstellungsansicht. BOOT bleibt
+  beim Einschalten zusätzlich der hardwareseitige ROM-Downloadtaster.

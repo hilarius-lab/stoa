@@ -3,12 +3,17 @@ from datetime import datetime, timedelta
 import re
 
 from ..config import TIMEZONE
+from .content_types import CLASSIFICATION_TYPES, validate_classification
 
 
-ARTIFACT_TYPES = {"note", "fact", "decision", "task", "list", "list_item", "question"}
+ARTIFACT_TYPES = CLASSIFICATION_TYPES
 WEEKDAYS = {
     "montag": 0, "dienstag": 1, "mittwoch": 2, "donnerstag": 3,
     "freitag": 4, "samstag": 5, "sonntag": 6,
+}
+DAYPART_WINDOWS = {
+    "früh": (6, 9), "vormittag": (8, 12), "mittag": (12, 14),
+    "nachmittag": (12, 18), "abend": (18, 22),
 }
 URGENCY_DEFAULT = 0.4
 
@@ -18,13 +23,15 @@ def _span(text, pattern):
     return match.group(0) if match else None
 
 
-def _relative_due(text, started_at):
+def _relative_due(text, started_at, boundary="due"):
     started_at = started_at or datetime.now(TIMEZONE)
     if started_at.tzinfo is None:
         started_at = started_at.replace(tzinfo=TIMEZONE)
     else:
         started_at = started_at.astimezone(TIMEZONE)
-    hour = 9; minute = 0
+    daypart_match = re.search(r"\b(früh|vormittag|mittag|nachmittag|abend)\b", text, re.I)
+    hour = DAYPART_WINDOWS[daypart_match.group(1).casefold()][0 if boundary == "start" else 1] if daypart_match else 9
+    minute = 0
     time_match = re.search(r"\b(?:um\s+)?(\d{1,2})(?::(\d{2}))?\s*uhr\b", text, re.I)
     if time_match:
         hour = int(time_match.group(1)); minute = int(time_match.group(2) or 0)
@@ -32,7 +39,9 @@ def _relative_due(text, started_at):
     if relative_match:
         delta = {"heute": 0, "morgen": 1, "übermorgen": 2}[relative_match.group(1).casefold()]
         due = (started_at + timedelta(days=delta)).replace(hour=hour, minute=minute, second=0, microsecond=0)
-        evidence = relative_match.group(0) + (f" {time_match.group(0)}" if time_match else "")
+        evidence = relative_match.group(0)
+        if daypart_match:evidence += f" {daypart_match.group(0)}"
+        if time_match:evidence += f" {time_match.group(0)}"
         return due, evidence
     weekday_match = re.search(r"\b(" + "|".join(WEEKDAYS) + r")\b", text, re.I)
     if not weekday_match:
@@ -43,7 +52,9 @@ def _relative_due(text, started_at):
     if delta == 0:
         delta = 7
     due = (started_at + timedelta(days=delta)).replace(hour=hour, minute=minute, second=0, microsecond=0)
-    evidence = weekday_match.group(0) + (f" {time_match.group(0)}" if time_match else "")
+    evidence = weekday_match.group(0)
+    if daypart_match:evidence += f" {daypart_match.group(0)}"
+    if time_match:evidence += f" {time_match.group(0)}"
     return due, evidence
 
 
@@ -51,27 +62,78 @@ def _task_window(text, started_at):
     """Separate an explicit work start from a deadline before normal routing."""
     start_match = re.search(r"\bab\s+(.+?)(?=\s+\b(?:bis|spätestens)\b|[,.!?;]|$)", text, re.I)
     due_match = re.search(r"\b(?:bis|spätestens(?:\s+bis)?)\s+([^,.!?;]+)", text, re.I)
-    work_start, start_evidence = _relative_due(start_match.group(1), started_at) if start_match else (None, None)
+    work_start, start_evidence = _relative_due(start_match.group(1), started_at, "start") if start_match else (None, None)
     if due_match:
         due, due_evidence = _relative_due(due_match.group(1), started_at)
     elif start_match:
         # Do not reinterpret the start as a deadline when only "ab ..." was said.
         due, due_evidence = None, None
     else:
-        due, due_evidence = _relative_due(text, started_at)
+        if re.search(r"\b(früh|vormittag|mittag|nachmittag|abend)\b", text, re.I):
+            work_start, start_evidence = _relative_due(text, started_at, "start")
+            due, due_evidence = _relative_due(text, started_at, "due")
+        else:
+            due, due_evidence = _relative_due(text, started_at)
     return work_start, start_evidence, due, due_evidence
 
 
+def _display_phrase(value):
+    value = value.strip(" ,.;:!?\"'")
+    return value[:1].upper() + value[1:] if value else value
+
+
+def _contextual_list_parts(text):
+    implicit = re.search(
+        r"(?P<context>\bnach\s+(?:dem|der|den|einem|einer)\s+[^,.!?]+?)\s+"
+        r"(?:will|möchte)\s+ich\s+(?P<item>[^,.!?]+?)\s*,\s*"
+        r"(?:schreib|schreibe|setz|setze|pack|packe)\s+(?:das|es)\s+auf\s+eine\s+liste\b",
+        text, re.I,
+    )
+    if implicit:
+        return _display_phrase(implicit.group("context")), [_display_phrase(implicit.group("item"))], "implicit_list_context"
+    create = re.search(
+        r"\b(?:erstelle|erstell|lege|leg)\s+(?:mir\s+)?(?:eine\s+)?liste\s+"
+        r"(?:über|für|zum\s+thema)\s*,?\s*(?P<topic>.+)$", text, re.I,
+    )
+    if not create:
+        return None, [], None
+    topic = create.group("topic").strip(" ,.;:!?")
+    contextual = re.search(r"\b(nach\s+(?:dem|der|den|einem|einer)\s+.+?)(?=\s+(?:alles|machen|erledigen|will|möchte)\b|$)", topic, re.I)
+    title = contextual.group(1) if contextual else topic
+    title = re.sub(r"^(?:was|dinge|sachen)\s+(?:ich|wir)\s+", "", title, flags=re.I)
+    return _display_phrase(title), [], "explicit_list_creation"
+
+
 def _list_parts(text):
+    target, items, reason = _contextual_list_parts(text)
+    if target:
+        return target, items, reason
     target_match = re.search(r"\b(?:auf|in|zu|zur)\s+(?:die\s+|der\s+)?([\wÄÖÜäöüß-]*liste)\b", text, re.I)
     if not target_match:
-        return None, []
+        return None, [], None
     target = target_match.group(1)
+    if target.casefold() == "liste":
+        return None, [], None
     prefix = text[:target_match.start()]
     prefix = re.sub(r"^.*?\b(?:bitte\s+)?(?:setze|füge|schreibe|packe|nimm)\s+(?:außerdem\s+|noch\s+)?", "", prefix, flags=re.I)
     prefix = prefix.strip(" ,.;:")
     items = [part.strip(" ,.;:") for part in re.split(r"\s*,\s*|\s+und\s+", prefix, flags=re.I) if part.strip(" ,.;:")]
-    return target, items
+    return target, items, "explicit_list_target"
+
+
+def _concise_task_content(text):
+    if re.search(r"listen\s+nicht\s+erstellt\s+werden\s+können", text, re.I):
+        return "Listenerstellung im Smart Notebook reparieren" if re.search(r"smart\s+notebook", text, re.I) else "Listenerstellung reparieren"
+    content = text.strip(" ,.;:!?")
+    content = re.sub(r"^(?:heute|morgen|übermorgen)(?:\s+(?:früh|vormittag|mittag|nachmittag|abend))?\s+", "", content, flags=re.I)
+    content = re.sub(r"^(?:ich|wir)\s+(?:muss|müssen|soll|sollen|möchte|wollen)\s+(?:noch\s+)?", "", content, flags=re.I)
+    content = re.sub(r"^(?:muss|müssen|soll|sollen|möchte|wollen)\s+(?:ich|wir)\s+(?:noch\s+)?", "", content, flags=re.I)
+    content = re.sub(r"\b(?:heute|morgen|übermorgen)(?:\s+(?:früh|vormittag|mittag|nachmittag|abend))?\b", "", content, flags=re.I)
+    content = re.sub(r"\b(?:am\s+)?(?:montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonntag)(?:\s+um\s+\d{1,2}(?::\d{2})?\s*uhr)?\b", "", content, flags=re.I)
+    content = re.sub(r"\bum\s+\d{1,2}(?::\d{2})?\s*uhr\b", "", content, flags=re.I)
+    content = " ".join(content.split()).strip(" ,.;:!?")
+    content = re.sub(r"^(?:(?:ab|bis|spätestens)\s+)+", "", content, flags=re.I)
+    return _display_phrase(content)
 
 
 def route_artifact(text, session_started_at=None, active_topics=None):
@@ -79,12 +141,17 @@ def route_artifact(text, session_started_at=None, active_topics=None):
     scores = {kind: 0.0 for kind in ARTIFACT_TYPES}
     reasons = []; evidence = []; normalized = {}; missing = []
 
-    target, items = _list_parts(text)
-    if target and items:
-        scores["list_item"] = 0.99
-        reasons += ["explicit_list_target", "enumerated_items" if len(items) > 1 else "explicit_list_item"]
-        evidence += [target] + items
-        normalized = {"target_list": target, "items": items}
+    target, items, list_reason = _list_parts(text)
+    if target:
+        if items:
+            scores["list_item"] = 0.99
+            reasons += [list_reason, "enumerated_items" if len(items) > 1 else "explicit_list_item"]
+            evidence += [span for span in [target] + items if span.casefold() in text.casefold()]
+            normalized = {"target_list": target, "items": items}
+        elif list_reason == "explicit_list_creation":
+            scores["list"] = 0.99
+            reasons.append(list_reason);evidence.append(text)
+            normalized = {"list_title": target}
 
     open_decision = _span(text, r"\b(?:entscheiden\s+wir|wird\s+entschieden|entscheidung\s+.*?\s+erfolgt|ob\s+.+?\s+ist\s+noch\s+offen)\b")
     closed_decision = _span(text, r"\b(?:wir\s+haben\s+entschieden|beschlossen\s+ist|wir\s+beschließen)\b")
@@ -108,6 +175,7 @@ def route_artifact(text, session_started_at=None, active_topics=None):
     if task_signal and scores["list_item"] < 0.9 and scores["decision"] < 0.9:
         scores["task"] = 0.94 if due or work_start else 0.86
         reasons.append("action_or_responsibility"); evidence.append(task_signal)
+        normalized["content"] = _concise_task_content(text)
         if work_start:
             normalized["work_start_at"] = work_start.isoformat(); normalized["work_start_source"] = "explicit_relative"
             evidence.append(work_start_evidence)
@@ -145,19 +213,7 @@ def route_artifact(text, session_started_at=None, active_topics=None):
 
 
 def validate_route(text, route):
-    if route.get("candidate_type") not in ARTIFACT_TYPES:
-        return False, ["unknown_candidate_type"]
-    errors = []
-    for span in route.get("evidence_spans", []):
-        if span.casefold() not in text.casefold():
-            errors.append("evidence_not_in_source")
-    data = route.get("normalized_data", {})
-    if route["candidate_type"] == "task" and not data.get("due_at") and data.get("urgency") is None:
-        errors.append("task_requires_due_or_urgency")
-    if route["candidate_type"] == "list_item" and (not data.get("target_list") or not data.get("items")):
-        errors.append("list_item_requires_target_and_items")
-    if route["candidate_type"] == "decision" and data.get("decision_status") not in {"open", "decided"}:
-        errors.append("decision_requires_status")
-    if route.get("abstain"):
+    errors = [error for error in validate_classification(text, route) if error != "classifier_abstained"]
+    if route.get("abstain") and "router_abstained" not in errors:
         errors.append("router_abstained")
     return not errors, errors

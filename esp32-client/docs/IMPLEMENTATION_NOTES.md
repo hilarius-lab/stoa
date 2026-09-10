@@ -68,8 +68,8 @@ Captive-Portal-Erkennung erforderlich. WLAN-Name und Passwort eingeben;
 die Serveradresse ist optional und darf fuer den WLAN-Test leer bleiben.
 HTTP ist fuer lokale Backendtests erlaubt, HTTPS wird ebenfalls akzeptiert.
 Nach Speichern neu starten. Der Server wird noch nicht kontaktiert.
-BOOT im laufenden Betrieb drei Sekunden gedrückt halten, um die Einrichtung erneut
-zu öffnen. BOOT während Einschalten/Reset gehört zum ROM-Downloadmodus.
+Weitere WLANs werden über „WLAN hinzufügen“ in der lokalen Einstellungsansicht
+ergänzt. BOOT während Einschalten/Reset gehört weiterhin zum ROM-Downloadmodus.
 WLAN-Verbindungsfehler löschen keine gespeicherten Zugangsdaten.
 
 Zugangsdaten liegen im Prototyp in NVS, noch ohne Flashverschlüsselung.
@@ -88,10 +88,11 @@ Keine erfundenen Akkuwerte.
 
 Nach dem Start werden SD-Karte und ES8311 initialisiert. Danach erscheint
 `Platz für deinen Gedanken.` unabhaengig vom WLAN-Verbindungsstatus.
-Mittlere Taste (GPIO5) halten: aufnehmen. Loslassen: Datei abschliessen,
+BOOT (GPIO0) halten: ohne Haltegesten-Verzögerung aufnehmen. Loslassen: Datei abschliessen,
 auf SD synchronisieren und Speicherung anzeigen. Die erste Version begrenzt
 eine Memo auf fuenf Minuten; bei erreichtem Limit muss die Taste erst losgelassen
-werden. BOOT oeffnet waehrend einer Aufnahme keine Einrichtung.
+werden. Aufnahmen unter 1,5 Sekunden werden weiterhin verworfen. Die Mitteltaste
+(GPIO5) ist nur noch Auswahl/Zurueck.
 
 ES8311 ueber I2C 41/42, I2S MCLK13/BCLK14/WS47/DOUT48/DIN21. ADC-only,
 Speaker-Verstaerker aus; keine PMU-/Ladeparameter veraendert. Stereo-I2S mit
@@ -164,5 +165,7 @@ Flash sichern. Keine eFuses oder Ladeparameter während dieses Prototyps ändern
 Waveshare-Beispiele, Commit `9b12d40731a80213b927ee8a421cae4082952819`:
 https://github.com/waveshareteam/ESP32-S3-ePaper-3.97
 
-Tasten GPIO 4/5/6 und BOOT GPIO 0. Vor Übernahme der PMU-Initialisierung die
-Abweichung TG28 in der Dokumentation / AXP2101 im Beispiel klären.
+Tasten GPIO 4/5/6 und BOOT GPIO 0. Produktprosa nennt den PMIC TG28, offizieller
+Schaltplan und Boardbeispiel AXP2101. Die gemeinsame Leseschnittstelle an
+`0x34` ist am Gerät bestätigt; keine PMU-Initialisierungs- oder Ladewerte aus
+Beispielen übernehmen.

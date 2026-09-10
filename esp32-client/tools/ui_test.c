@@ -494,6 +494,19 @@ static void compact_dates(void) {
           "an invalid date is not displayed");
 }
 
+static void charging_changes_battery_symbol(void) {
+    status_state state = {.battery_known = true, .battery_percent = 100};
+    clear();
+    status_bar_draw(canvas, &state);
+    check(ink_at(443, 17), "full battery fills the cell corner");
+
+    state.battery_charging = true;
+    clear();
+    status_bar_draw(canvas, &state);
+    check(!ink_at(443, 17), "charging clears a plate inside the battery");
+    check(ink_at(453, 18), "charging draws the lightning mark");
+}
+
 int main(void) {
     titles();
     heights();
@@ -512,6 +525,7 @@ int main(void) {
     history();
     bar_stays_in_its_row();
     compact_dates();
+    charging_changes_battery_symbol();
     if (failures) { printf("%d check(s) failed\n", failures); return 1; }
     printf("ui: all checks passed\n");
     return 0;

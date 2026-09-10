@@ -31,6 +31,7 @@
 #include "memo_queue.h"
 #include "api_client.h"
 #include "diagnostic_log.h"
+#include "battery.h"
 
 static atomic_bool held, busy, test_requested, queue_rescan_requested;
 static atomic_bool export_requested;
@@ -398,7 +399,13 @@ static bool init_mic(void) {
     if(!chip) return false;
     esp_codec_dev_cfg_t device={.dev_type=ESP_CODEC_DEV_TYPE_IN,.codec_if=chip,.data_if=stream};
     mic=esp_codec_dev_new(&device);
-    return mic && esp_codec_dev_set_in_gain(mic,36.0)==ESP_CODEC_DEV_OK;
+    bool ready = mic && esp_codec_dev_set_in_gain(mic,36.0)==ESP_CODEC_DEV_OK;
+    /* Battery telemetry shares the board bus but is never allowed to make the
+     * microphone unavailable. A missing or incompatible PMIC stays visibly
+     * unknown and is inspectable with `battery-status`. */
+    if (ready && !battery_start(bus))
+        ESP_LOGW("memo", "battery telemetry unavailable; recording remains ready");
+    return ready;
 }
 // Every journal write is durable before the audio it describes is relied upon.
 // A failed append is a hard stop: recording without a record would be exactly
@@ -410,9 +417,9 @@ static bool note(journal_session *session,const char *payload,int length) {
     }
     return true;
 }
-// Below this, a hold is treated as an unintended button touch rather than a
-// memo. Chosen as comfortably above the ~500 ms gesture debounce in main.c
-// while still well under what anyone would deliberately hold for.
+// Below this, a BOOT-key hold is treated as an unintended button touch rather
+// than a memo. Recording now starts on the first sampled press, so this guard
+// remains the sole filter for stray or accidental captures.
 #define MEMO_MIN_DURATION_MS 1500
 static bool record_memo(bool diagnostic) {
     char dir[40],partial[64],final[64];
@@ -555,7 +562,7 @@ static bool record_memo(bool diagnostic) {
     }
     if(opened && esp_codec_dev_close(mic)!=ESP_CODEC_DEV_OK) ok=false;
     esp_aac_enc_close(encoder); free(stereo); free(mono); free(encoded);
-    /* A touch that only briefly triggered the hold gesture still reaches here
+    /* A touch that only briefly pressed the BOOT key still reaches here
      * with a cleanly closed, possibly zero-segment recording — the directory
      * and its session record were already written before the microphone ever
      * opened. Below this duration it is treated as an unintended press, not a
@@ -655,7 +662,7 @@ static void recorder_task(void *unused) {
     screen_status(queued.ready,queued.attention,queued.space_low);
     screen_status_storage_block(queued.space_block);
     screen_memo(SCREEN_READY,0);
-    ESP_LOGI("memo","READY; hold middle button GPIO5 to record");
+    ESP_LOGI("memo","READY; hold BOOT button GPIO0 to record");
     while(true) {
         /* Upload state is journal truth, while the status bar uses a small RAM
          * cache. Rebuild that cache after a completed state-changing upload

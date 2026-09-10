@@ -14,10 +14,12 @@ from ..database import get_db_connection
 from ..prompts import CONSOLIDATION_SYSTEM_PROMPT
 from .embeddings import get_embedding
 from .provenance import add_knowledge_sources, normalize_candidate_source_ids
-from .lists import process_list_item_candidate
+from .lists import create_list_record, process_list_item_candidate
 from .notes import save_note, update_note
 from .tasks import save_task, update_task
 from .dedupe import decide_note_deduplication, decide_task_deduplication
+from .content_types import validate_classification
+from .semantic_router import route_artifact, validate_route
 
 def get_today_unarchived_events():
     now = datetime.now(TIMEZONE)
@@ -45,6 +47,46 @@ def get_today_unarchived_events():
         }
         for row in rows
     ]
+
+
+def _canonicalize_daily_candidates(events, candidates):
+    event_by_id = {event['id']: event for event in events}
+    validated = []
+    for candidate in candidates:
+        candidate = dict(candidate); source_ids = candidate['source_event_ids']
+        if not source_ids or any(source_id not in event_by_id for source_id in source_ids):
+            continue
+        source_text = "\n".join(event_by_id[source_id]['text'] for source_id in source_ids)
+        kind = candidate['kind']; data = {}
+        if len(source_ids) == 1:
+            event_time = datetime.fromisoformat(event_by_id[source_ids[0]]['created_at'].replace('Z', '+00:00'))
+            route = route_artifact(source_text, event_time); route_valid, _ = validate_route(source_text, route)
+            if route_valid and route['candidate_type'] == kind:
+                route_data = route['normalized_data']
+                if kind == 'task':
+                    candidate['content'] = route_data.get('content') or candidate['content']
+                    candidate['work_start_at'] = route_data.get('work_start_at', '')
+                    candidate['due_at'] = route_data.get('due_at', '')
+                elif kind == 'list':
+                    candidate['content'] = route_data['list_title']
+                elif kind == 'list_item' and len(route_data['items']) == 1:
+                    candidate['list_title'] = route_data['target_list']
+                    candidate['content'] = route_data['items'][0]
+        if kind == 'task':
+            data = {"content": candidate['content'], "work_start_at": candidate['work_start_at'],
+                    "due_at": candidate['due_at']}
+            if not candidate['due_at']:
+                data.update({"urgency": 0.4, "urgency_source": "policy_default"})
+        elif kind == 'list':
+            data = {"list_title": candidate['content']}
+        elif kind == 'list_item':
+            data = {"target_list": candidate['list_title'], "items": [candidate['content']]}
+        classification = {"candidate_type": kind, "alternative_type": None, "normalized_data": data,
+            "evidence_spans": [source_text], "reason_codes": ["daily_consolidation"], "missing_fields": [],
+            "confidence": 1.0, "decision_source": "llm", "abstain": False}
+        if not validate_classification(source_text, classification, candidate['content']):
+            validated.append(candidate)
+    return validated
 
 async def extract_daily_candidates(events: list[dict]):
     profile = get_ai_task_profile("consolidation.daily")
@@ -90,6 +132,23 @@ async def extract_daily_candidates(events: list[dict]):
                     'additionalProperties': False
                 }
             },
+            'lists': {
+                'type': 'array',
+                'items': {
+                    'type': 'object',
+                    'properties': {
+                        'title': {'type': 'string'},
+                        'source_event_ids': {
+                            'type': 'array',
+                            'items': {'type': 'integer'},
+                            'minItems': 1,
+                            'uniqueItems': True
+                        }
+                    },
+                    'required': ['title', 'source_event_ids'],
+                    'additionalProperties': False
+                }
+            },
             'list_items': {
                 'type': 'array',
                 'items': {
@@ -109,7 +168,7 @@ async def extract_daily_candidates(events: list[dict]):
                 }
             }
         },
-        'required': ['notes', 'tasks', 'list_items'],
+        'required': ['notes', 'tasks', 'lists', 'list_items'],
         'additionalProperties': False
     }
 
@@ -127,8 +186,8 @@ async def extract_daily_candidates(events: list[dict]):
                 'content': (
                     'Konsolidiere die folgenden Events des Tages. '
                     'Gib dauerhafte Informationen ausschließlich unter notes aus, '
-                    'Aufgaben mit belastbarer Frist unter tasks und fortlaufende '
-                    'Sammlungs-/Listenpunkte unter list_items. '
+                    'Aufgaben unter tasks und fortlaufende '
+                    'Sammlungen unter lists sowie Listenpunkte unter list_items. '
                     'Bei Tasks bedeutet work_start_at "bearbeiten ab" und due_at "erledigen bis"; '
                     'ein ausdrücklich genannter Beginn darf nicht als Frist ausgegeben werden. '
                     'Ist nur eine Frist belegt, bleibt work_start_at leer und wird später auf den Erfassungstag gesetzt. '
@@ -173,6 +232,13 @@ async def extract_daily_candidates(events: list[dict]):
             'source_event_ids': task['source_event_ids']
         })
 
+    for item in result['lists']:
+        candidates.append({
+            'kind': 'list',
+            'content': item['title'],
+            'source_event_ids': item['source_event_ids']
+        })
+
     for item in result['list_items']:
         candidates.append({
             'kind': 'list_item',
@@ -181,7 +247,7 @@ async def extract_daily_candidates(events: list[dict]):
             'source_event_ids': item['source_event_ids']
         })
 
-    return candidates
+    return _canonicalize_daily_candidates(events, candidates)
 
 def archive_events(event_ids: list[int]):
     if not event_ids:
@@ -316,6 +382,8 @@ async def consolidate_today():
                     final_due_at,
                     embedding,
                     source_event_id=source_event_id,
+                    urgency=0.4 if final_due_at is None else None,
+                    urgency_source="policy_default" if final_due_at is None else None,
                     work_start_at=final_work_start_at,
                 )
                 add_knowledge_sources(
@@ -353,12 +421,24 @@ async def consolidate_today():
 
             results.append(result)
 
+        elif kind == 'list':
+            list_id = await create_list_record(content)
+            add_knowledge_sources("list", list_id, source_event_ids, "source")
+            results.append({
+                'kind': 'list',
+                'candidate': content,
+                'source_event_id': source_event_id,
+                'source_event_ids': source_event_ids,
+                'saved_id': list_id
+            })
+
         elif kind == 'list_item':
             list_result = await process_list_item_candidate(
                 candidate['list_title'],
                 content,
                 source_event_id=source_event_id,
-                source_event_ids=source_event_ids
+                source_event_ids=source_event_ids,
+                explicit_target=True,
             )
 
             results.append({

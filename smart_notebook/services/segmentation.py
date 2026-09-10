@@ -17,15 +17,13 @@ from .recovery import (
     refresh_session_watermarks, synchronize_processing_step_for_job
 )
 from .ai_tasks import get_ai_task_profile
+from .content_types import SEGMENT_TYPES
 
 DETERMINISTIC_PROCESSOR = "deterministic_test"
 CONTEXT_OVERLAP_CHARACTERS = 750
 MAX_SEGMENTS_PER_CHUNK = 50
 MAX_SEGMENT_TEXT_CHARACTERS = 4000
-ALLOWED_SEGMENT_TYPES = {
-    "statement", "note_candidate", "task_candidate",
-    "list_item_candidate", "question", "other"
-}
+ALLOWED_SEGMENT_TYPES = SEGMENT_TYPES
 
 
 class SemanticSegmentConflictError(Exception):

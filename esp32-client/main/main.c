@@ -23,6 +23,7 @@
 #include "clock.h"
 #include "network_config.h"
 #include "diagnostic_log.h"
+#include "battery.h"
 #include <fcntl.h>
 #include <unistd.h>
 #include "driver/usb_serial_jtag.h"
@@ -408,8 +409,7 @@ void app_main(void) {
     }
     if(!setup) recorder_start();
     static char command[300]; size_t command_len=0;
-    unsigned held = 0, ticks = 0, middle_ticks = 0;
-    bool recording_gesture = false;
+    unsigned ticks = 0, middle_ticks = 0;
     /* Edge state of the two focus keys. They are read here and nowhere else, so
      * the previous level lives with the loop that samples it. */
     bool up_was_down = false, down_was_down = false;
@@ -488,6 +488,8 @@ void app_main(void) {
                     report_network_status();
                 if(!setup && strcmp(command,"diaglog-status")==0)
                     diagnostic_log_report();
+                if(!setup && strcmp(command,"battery-status")==0)
+                    battery_report();
                 if(!setup && strncmp(command,"server-set ",11)==0) {
                     if (save_server(command+11)) {
                         printf("@SERVER saved; restarting\n");
@@ -558,8 +560,8 @@ void app_main(void) {
                 if(!setup && strcmp(command,"status-test")==0) screen_status_test(0);
                 if(!setup && strncmp(command,"status-test ",12)==0) {
                     unsigned demo;
-                    if(sscanf(command+12,"%u",&demo)==1 && demo>=1 && demo<=5) screen_status_test(demo);
-                    else printf("@ERROR usage: status-test <1..5>\n");
+                    if(sscanf(command+12,"%u",&demo)==1 && demo>=1 && demo<=6) screen_status_test(demo);
+                    else printf("@ERROR usage: status-test <1..6>\n");
                 }
                 if(!setup && strcmp(command,"header-test")==0) screen_header_test(0);
                 if(!setup && strncmp(command,"header-test ",12)==0) {
@@ -571,7 +573,7 @@ void app_main(void) {
                 command_len=0;
             } else if(command_len<sizeof(command)-1) command[command_len++]=ch;
         }
-        held = gpio_get_level(GPIO_NUM_0) == 0 ? held + 1 : 0;
+        bool boot_down = gpio_get_level(GPIO_NUM_0) == 0;
         bool middle_down=gpio_get_level(GPIO_NUM_5)==0;
         /* The temporary portal owns the middle key: a short press is the
          * always-visible, device-local escape path and can never start audio. */
@@ -582,46 +584,41 @@ void app_main(void) {
                     atomic_store(&portal_cancel_requested, true);
                 middle_ticks = 0;
             }
-            recording_gesture = false;
             if (!setup) recorder_hold(false);
-        // A short middle press is reserved for dashboard selection. Audio starts
-        // only after 450 ms, so opening a card cannot create a mini recording.
         } else if(!setup) {
+            /* BOOT owns push-to-record in normal operation. Its first sampled
+             * low level reaches the recorder immediately; release ends the
+             * memo. The recorder still discards captures below its established
+             * minimum duration, so a stray touch cannot become user data. */
+            recorder_hold(boot_down);
+
+            /* The middle key is now selection only. Trigger on release so one
+             * physical press produces one activation even when an E-Paper
+             * refresh takes longer than the polling interval. */
             if(middle_down) {
                 middle_ticks++;
-                if(middle_ticks>=5) recording_gesture=true;
             } else {
-                if(middle_ticks>0 && !recording_gesture) {
+                if(middle_ticks>0 && !recorder_busy()) {
                     printf("@UI select dashboard\n");
                     screen_focus_activate();
                 }
                 middle_ticks=0;
-                recording_gesture=false;
             }
-            recorder_hold(recording_gesture && middle_down);
 
             /* Up and down move the focus. Deliberately edge triggered: a
              * refresh takes about half a second, so repeating while a key is
-             * held would only pile up work the panel cannot show. While the
-             * middle key is held the panel belongs to the recorder, so the
-             * focus keys stay inert — their level is still tracked, or the
-             * release after a recording would read as a fresh press. */
+             * held would only pile up work the panel cannot show. While BOOT
+             * is held the panel belongs to the recorder, so the focus keys stay
+             * inert — their level is still tracked, or their release after a
+             * recording would read as a fresh press. */
             bool up_down = gpio_get_level(GPIO_NUM_4) == 0;
             bool down_down = gpio_get_level(GPIO_NUM_6) == 0;
-            if (!recording_gesture && !recorder_busy()) {
+            if (!recorder_busy()) {
                 if (up_down && !up_was_down) screen_focus_move(-1);
                 if (down_down && !down_was_down) screen_focus_move(1);
             }
             up_was_down = up_down;
             down_was_down = down_down;
-        }
-        if (!setup && !portal_active && held == 30 && !recorder_busy()) {
-            if (nvs_open("notebook", NVS_READWRITE, &n) == ESP_OK) {
-                esp_err_t err = nvs_set_u8(n, "setup", 1);
-                if (err == ESP_OK) err = nvs_commit(n);
-                nvs_close(n);
-                if (err == ESP_OK) esp_restart();
-            }
         }
         /* Ten second link check. It also corrects the status bar downwards: a
          * lost WIFI_EVENT_STA_DISCONNECTED would otherwise leave the connected

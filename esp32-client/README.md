@@ -29,8 +29,9 @@ klassifiziert Inhalte nicht selbst und bildet keine Backend-Fachlogik nach.
 ## Aktuell bedienbar
 
 1. Gerät einschalten und die Bereitschaftsanzeige abwarten.
-2. Mittlere Taste halten und sprechen.
-3. Taste loslassen. Die Memo wird als eigenständig decodierbare M4A-Segmente
+2. BOOT-Taste drücken, halten und sprechen. Die Aufnahme beginnt ohne
+   Haltegesten-Wartezeit.
+3. BOOT loslassen. Die Memo wird als eigenständig decodierbare M4A-Segmente
    auf der FAT32-SD-Karte gespeichert.
 4. WLAN kann über den Geräte-Hotspot `Notebook-Setup` und zwei QR-Codes
    eingerichtet werden. Eine Backendadresse ist für lokale Aufnahmen optional.
@@ -38,9 +39,9 @@ klassifiziert Inhalte nicht selbst und bildet keine Backend-Fachlogik nach.
 Upload, persistente ACK-Queue, Reconciliation, Finish, Enrollment und die
 servergesteuerte E-Paper-Dashboarddarstellung sind implementiert und am realen
 Gerät gegen Mock sowie echtes FastAPI-Backend erprobt. Vor der produktiven
-Freigabe bleiben insbesondere die neue sessionsweite Audiofreigabe in der
-Firmware, automatische Credentialrotation, das HTTPS-Deployment sowie die
-gezielten Stromausfall-/Dauertests offen. Der genaue Backend-/Firmware-Schnitt
+Freigabe bleiben insbesondere automatische Credentialrotation, vollständige
+persistierte Retryklassen, lokale Verschlüsselung sowie die gezielten
+Stromausfall-/Dauertests offen. Der genaue Backend-/Firmware-Schnitt
 steht in [Backendanforderungen](docs/BACKEND_REQUIREMENTS.md).
 
 Für die Uploadentwicklung ohne vollständiges Backend steht ein persistenter,

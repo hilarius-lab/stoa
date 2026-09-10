@@ -765,7 +765,8 @@ async def process_list_item_candidate(
     list_title: str,
     content: str,
     source_event_id: int | None = None,
-    source_event_ids: list[int] | None = None
+    source_event_ids: list[int] | None = None,
+    explicit_target: bool = False,
 ):
     list_title = list_title.strip()
     content = content.strip()
@@ -800,10 +801,24 @@ async def process_list_item_candidate(
             "deduplication": None
         }
 
-    target = await resolve_list_target(
-        list_title,
-        content
-    )
+    if explicit_target:
+        with get_db_connection() as connection:
+            existing = connection.execute(
+                """SELECT id, title FROM lists
+                WHERE lower(title)=lower(%s) AND archived=FALSE
+                ORDER BY id LIMIT 1""",
+                (list_title,),
+            ).fetchone()
+        target = ({"action":"use_existing", "target_id":existing[0],
+                   "title":existing[1], "confidence":1.0}
+                  if existing else
+                  {"action":"create_new", "target_id":0,
+                   "title":list_title, "confidence":1.0})
+    else:
+        target = await resolve_list_target(
+            list_title,
+            content
+        )
 
     if target["action"] == "reject":
         return {"action":"rejected","reason":"list_target_not_confident","confidence":target["confidence"],"list_id":None,"list_created":False,"item_id":None,"updated_item_id":None,"deduplication":None}

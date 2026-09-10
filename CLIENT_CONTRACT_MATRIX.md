@@ -58,8 +58,8 @@ konfigurierbaren Server-Base-URL. Interne numerische PostgreSQL-IDs sind niemals
 | Sync | `GET .../knowledge/delta` | `upsert`, `delete`, `redirect` in Change-Reihenfolge | Cursor opak; abgelaufen `SYNC_CURSOR_EXPIRED` → Vollsync |
 | Detail | `GET .../knowledge/entities/{uuid}` | letzter Synczustand derselben öffentlichen ID | kann `delete` oder `redirect` liefern; `KNOWLEDGE_NOT_FOUND` |
 | Nutzung | `POST .../knowledge/usage` | aggregierte lokale Aufrufe | `batch_id` idempotent; Änderung `USAGE_BATCH_CONFLICT`; niemals Evidence |
-| Capture | `POST /api/client/v1/captures` | UUID, `memo|query|auto`, Text, optionaler Kontext | UUID idempotent; Änderung `CAPTURE_IDEMPOTENCY_CONFLICT` |
-| Capture | `GET .../captures/{uuid}` | serverseitige Klassifikation/Verarbeitung und Ergebnis | `CAPTURE_NOT_FOUND` |
+| Capture | `POST /api/client/v1/captures` | UUID, `memo|query|auto`, Text, optionaler Kontext | UUID idempotent; legt die gemeinsame Text-/Audio-Interpretationspipeline an; Änderung `CAPTURE_IDEMPOTENCY_CONFLICT`; `resolved_intent` ist während `processing` bei `auto` nur ein vorläufiger Kompatibilitätshinweis |
+| Capture | `GET .../captures/{uuid}` | `processing`, `attention_required`, `failed` oder `completed` samt serverseitigem Ergebnis | `CAPTURE_NOT_FOUND`; nach Abschluss autoritatives `memo|query|change|complete|archive` samt geordneter `intents`-Liste mit exakten Unicode-Zeichenbereichen; Mutation bis Zielauflösung `pending_resolution`, erfolgreiche Mehrfachzerlegung `split_completed`; Query-Conversation entsteht nur aus den Frageanteilen nach fachlichem Abschluss; interne Segment-IDs werden nicht ausgegeben |
 | Chat | `POST /api/client/v1/conversations` | initiale Message und Turn mit drei Client-UUIDs | UUIDs idempotent; Änderung `CHAT_IDEMPOTENCY_CONFLICT` |
 | Chat | `GET .../conversations` | dashboardfähige Conversations, letzte Aktivität zuerst | read-only; stale reine Chats fehlen nach Retention |
 | Chat | `GET .../conversations/{uuid}` | Conversation plus Messages in Erstellreihenfolge | `CONVERSATION_NOT_FOUND` |

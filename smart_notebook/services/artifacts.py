@@ -15,6 +15,7 @@ from .recovery import refresh_session_watermarks, synchronize_processing_step_fo
 from .topics import create_session_topic_record, link_artifact_topic_record
 from .ai_tasks import get_ai_task_profile
 from .semantic_router import route_artifact, validate_route
+from .content_types import ARTIFACT_TYPES, SEGMENT_TO_CLASSIFICATION, validate_classification
 from .semantic_examples import evaluate_semantic_examples
 from .observability import emit_event
 
@@ -126,13 +127,8 @@ def enqueue_artifact_processing_for_chunk(session_id, chunk_id, sequence):
 
 
 def _artifact_type_for_segment(segment_type):
-    return {
-        "note_candidate": "note",
-        "task_candidate": "task",
-        "list_item_candidate": "list_item",
-        "statement": "fact",
-        "other": "fact"
-    }.get(segment_type)
+    candidate = SEGMENT_TO_CLASSIFICATION.get(segment_type)
+    return candidate if candidate in ARTIFACT_TYPES else None
 
 
 def _create_artifact_for_segment(connection, session_id, segment, now):
@@ -200,6 +196,7 @@ def _save_classification(artifact_id,classification):
          classification.get('validated',False),now,now));connection.commit()
 
 def _create_llm_artifact(session_id,chunk_id,op_index,operation):
+    if operation.get('artifact_type') not in ARTIFACT_TYPES:raise ValueError("Unknown artifact type")
     now=datetime.now(TIMEZONE)
     status='confirmed' if operation.get('validated') else 'active'
     with get_db_connection() as connection:
@@ -267,7 +264,9 @@ def _router_overrides(session_id,segments,topics,started_at):
                 operations.append({"action":"create","target_artifact_id":0,"artifact_type":"list_item","content":item,
                     "confidence":route['confidence'],"source_segment_ids":[segment_id],"topic_titles":[target],"validated":True,"classification":item_route})
         else:
-            operations.append({"action":"create","target_artifact_id":0,"artifact_type":route['candidate_type'],"content":text,
+            content=(route['normalized_data'].get('content') if route['candidate_type']=='task' else
+                     route['normalized_data'].get('list_title') if route['candidate_type']=='list' else text) or text
+            operations.append({"action":"create","target_artifact_id":0,"artifact_type":route['candidate_type'],"content":content,
                 # Never attach the first active topic merely because it exists.
                 # Direct topic links require explicit evidence; inherited links
                 # are derived later by the topic hierarchy/retrieval layer.
@@ -307,7 +306,7 @@ async def _propose_artifact_operations(session_id,chunk_id):
         '"target_artifact_id":integer,"artifact_type":"note|task|list|list_item|fact|decision",'
         '"content":string,"confidence":0..1,"source_segment_ids":[integer],'
         '"topic_titles":[string],"evidence_spans":[string],"reason_codes":[string],'
-        '"missing_fields":[string],"abstain":boolean}]}'
+        '"missing_fields":[string],"normalized_data":object,"abstain":boolean}]}'
     )
     routing=[route_artifact(r[1],started_at,[t[1] for t in topics]) for r in unresolved]
     context=json.dumps({"new_segments":[{"id":r[0],"text":r[1],"type":r[2],"confidence":r[3],"router":routing[i]} for i,r in enumerate(unresolved)],"active_artifacts":[{"id":r[0],"type":r[1],"content":r[2],"status":r[3],"confidence":r[4]} for r in artifacts],"active_topics":[{"id":r[0],"title":r[1],"description":r[2]} for r in topics]},ensure_ascii=False)
@@ -329,18 +328,22 @@ async def _propose_artifact_operations(session_id,chunk_id):
     for op in proposal.get('operations',[]):
         for key in ('source_segment_ids','topic_titles','evidence_spans','reason_codes','missing_fields'):
             op[key]=_as_list(op.get(key))
-        op.setdefault('abstain',False);op.setdefault('target_artifact_id',0)
+        op.setdefault('abstain',False);op.setdefault('target_artifact_id',0);op.setdefault('normalized_data',{})
+        if op.get('action') not in {'create','update','confirm','supersede','dismiss','none'}:raise ValueError('Unknown artifact action')
+        if op.get('artifact_type') not in ARTIFACT_TYPES:raise ValueError('Unknown artifact type')
         if not set(op['source_segment_ids']).issubset(valid_segments):raise ValueError('LLM proposed unknown source segment')
         if op['action'] in {'update','confirm','supersede','dismiss'} and op['target_artifact_id'] not in valid_artifacts:raise ValueError('LLM proposed unknown target artifact')
         if op['action'] in {'create','none'} and op['target_artifact_id']!=0:raise ValueError('create/none target_artifact_id must be 0')
         if not 0<=op['confidence']<=1:raise ValueError('Artifact confidence must be between 0 and 1')
         source_text=" ".join(r[1] for r in unresolved if r[0] in op['source_segment_ids'])
-        spans_valid=all(span.casefold() in source_text.casefold() for span in op['evidence_spans'])
-        op['validated']=bool(not op['abstain'] and not op['missing_fields'] and spans_valid and op['evidence_spans'])
-        op['classification']={"candidate_type":op['artifact_type'],"alternative_type":None,"normalized_data":{},
+        classification={"candidate_type":op['artifact_type'],"alternative_type":None,"normalized_data":op['normalized_data'],
             "evidence_spans":op['evidence_spans'],"reason_codes":op['reason_codes'],"missing_fields":op['missing_fields'],
-            "confidence":op['confidence'],"decision_source":"llm","abstain":op['abstain'],"validated":op['validated']}
-        if op['abstain']:op['action']='none';op['target_artifact_id']=0
+            "confidence":op['confidence'],"decision_source":"llm","abstain":op['abstain']}
+        errors=validate_classification(source_text,classification,op.get('content'))
+        op['validated']=not errors;classification['validated']=op['validated'];op['classification']=classification
+        if errors:
+            classification['missing_fields']=list(dict.fromkeys(op['missing_fields']+errors))
+            op['action']='none';op['target_artifact_id']=0
     proposal['topics']=proposal.get('topics',[])+router_topics;proposal['operations']=proposal.get('operations',[])+overrides
     return proposal
 
@@ -401,7 +404,7 @@ async def run_session_artifact_worker_once(worker_id,mode="llm",ingestion_sessio
         synchronize_processing_step_for_job(job["id"])
         refresh_session_watermarks(job["ingestion_session_id"])
         from .client_sessions import settle_client_session_for_ingestion
-        await settle_client_session_for_ingestion(job["ingestion_session_id"])
+        await settle_client_session_for_ingestion(job["ingestion_session_id"],mode=mode)
         return {
             "outcome": "completed", "job": completed,
             "artifacts": [get_session_artifact_record(i) for i in artifact_ids]
@@ -466,6 +469,8 @@ def set_session_artifact_status(artifact_id, status):
 def supersede_session_artifact_record(
     artifact_id, artifact_type, content, confidence
 ):
+    if artifact_type not in ARTIFACT_TYPES:
+        raise ValueError("Unknown artifact type")
     content = content.strip()
     if not content:
         raise ValueError("content must not be empty")

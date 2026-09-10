@@ -7,6 +7,7 @@ from .config import (
     KNOWLEDGE_RETRIEVAL_LIMIT, KNOWLEDGE_RETRIEVAL_MIN_SIMILARITY,
     NOTE_CLEANUP_CANDIDATE_SIMILARITY, NOTE_CLEANUP_MAX_GROUPS
 )
+from .services.content_types import ArtifactType, ClaimType, QuestionKind
 
 class Message(BaseModel):
     text: str
@@ -81,7 +82,7 @@ class SessionArtifactUpdate(BaseModel):
     confidence: float | None = Field(default=None, ge=0, le=1)
 
 class SessionArtifactSupersede(BaseModel):
-    artifact_type: Literal["note", "task", "list", "list_item", "fact", "decision"]
+    artifact_type: ArtifactType
     content: str = Field(min_length=1)
     confidence: float = Field(ge=0, le=1)
 
@@ -102,7 +103,7 @@ class SessionArtifactTopicLink(BaseModel):
 
 class SessionQuestionCreate(BaseModel):
     question_text: str = Field(min_length=1)
-    question_kind: Literal["explicit", "implicit"] = "explicit"
+    question_kind: QuestionKind = "explicit"
     confidence: float = Field(default=1.0, ge=0, le=1)
     priority: float = Field(default=0.5, ge=0, le=1)
     topic_id: int | None = Field(default=None, ge=1)
@@ -208,7 +209,7 @@ class ListItemUpdate(BaseModel):
     content: str
 
 class ClaimCreate(BaseModel):
-    claim_type: Literal["fact","opinion","prediction","requirement","decision"]
+    claim_type: ClaimType
     statement: str = Field(min_length=1)
     subject: str = Field(min_length=1)
     predicate: str = Field(min_length=1)
