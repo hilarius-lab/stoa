@@ -101,6 +101,13 @@ Der Serverwert ist über `CLIENT_DASHBOARD_CACHE_MAX_AGE_SECONDS` konfigurierbar
 (300 bis 604800 Sekunden). Die Capability ist autoritativ; eine Änderung wird
 vom ESP beim nächsten Abruf ohne Firmwareänderung übernommen.
 
+Das Cachealter ist keine Pollfrequenz. Der ESP startet bei erreichbarem Server
+spätestens nach vier Minuten erneut und reserviert damit eine Minute für DNS,
+TLS und Validierung innerhalb des Fünf-Minuten-Erfolgsziels. Ein kürzeres
+angekündigtes Fenster zieht den Abruf auf dessen halbe Dauer vor. Ein
+unveränderter, aber erfolgreich validierter Snapshot setzt dadurch sein
+Abrufalter zurück.
+
 Kein Bestandteil des Capabilities-Gates — ein Server ohne Angabe bleibt gültig.
 
 ## 7. Stabile Fokusidentität über Revisionen — umgesetzt und physisch bestätigt
@@ -229,6 +236,9 @@ bis zu zwei Tasks aus der bereits gefilterten/sortierten Aufgabenmenge und eine
 aktive Liste, danach Auffüllen aus der verbleibenden Art. Die vollständigen
 `today`-/`lists`-Sektionen bleiben für ihre eigenen Ansichten erhalten. Home-
 Kopien besitzen eine eigene stabile Komponenten-ID und dieselbe `entity_ref`.
+`today` und `lists` dürfen jeweils bis zu zehn Karten liefern; andere kompakte
+Sektionen bleiben auf drei begrenzt. Der automatisierte HTTP-Grenzwert beträgt
+12.288 Byte bei 16.384 Byte großen Geräte- und Snapshotpuffern.
 
 Listenkarten liefern einen verständlichen Status `<n> offen`. Die
 Entity-Detailantwort für `type=list` enthält das strukturierte `items`-Array mit

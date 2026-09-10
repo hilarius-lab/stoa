@@ -6,7 +6,8 @@ from ..config import EMBEDDING_DIMENSIONS,TIMEZONE
 from ..database import get_db_connection
 from .ai_tasks import get_ai_task_profile
 from .embeddings import get_embedding
-from .lists import add_list_item_record,create_list_record,process_list_item_candidate
+from .lists import (add_list_item_record,create_list_record,
+                    get_or_create_active_list_record,process_list_item_candidate)
 from .notes import save_note
 from .tasks import save_task
 from .claims import materialize_validated_artifact_claims
@@ -31,12 +32,24 @@ async def _task_fields(content,mode,started_at=None):
     r.raise_for_status();return json.loads(r.json()['choices'][0]['message']['content'])
 
 def _linked(artifact_id):
-    with get_db_connection() as c:return c.execute("SELECT knowledge_type,knowledge_id FROM artifact_knowledge_links WHERE artifact_id=%s",(artifact_id,)).fetchone()
+    with get_db_connection() as c:
+        return c.execute("""SELECT COALESCE(l.knowledge_type,a.promoted_knowledge_type),
+            COALESCE(l.knowledge_id,a.promoted_knowledge_id)
+            FROM session_artifacts a
+            LEFT JOIN artifact_knowledge_links l ON l.artifact_id=a.id
+            WHERE a.id=%s AND (l.artifact_id IS NOT NULL OR
+                (a.promoted_knowledge_type IS NOT NULL AND a.promoted_knowledge_id IS NOT NULL))""",
+            (artifact_id,)).fetchone()
 
 def _record(artifact_id,kind,knowledge_id):
     now=datetime.now(TIMEZONE)
     with get_db_connection() as c:
-        c.execute("INSERT INTO artifact_knowledge_links(artifact_id,knowledge_type,knowledge_id,created_at) VALUES(%s,%s,%s,%s) ON CONFLICT(artifact_id) DO NOTHING",(artifact_id,kind,knowledge_id,now));c.execute("UPDATE session_artifacts SET promoted_knowledge_type=%s,promoted_knowledge_id=%s,promoted_at=%s,promotion_error=NULL WHERE id=%s",(kind,knowledge_id,now,artifact_id));c.commit()
+        # The original schema intentionally permits only one canonical
+        # artifact_knowledge_link per knowledge object.  A later exact
+        # duplicate still records its durable reuse on session_artifacts; the
+        # conflict-free insert preserves the canonical link instead of turning
+        # successful deduplication into a promotion error.
+        c.execute("INSERT INTO artifact_knowledge_links(artifact_id,knowledge_type,knowledge_id,created_at) VALUES(%s,%s,%s,%s) ON CONFLICT DO NOTHING",(artifact_id,kind,knowledge_id,now));c.execute("UPDATE session_artifacts SET promoted_knowledge_type=%s,promoted_knowledge_id=%s,promoted_at=%s,promotion_error=NULL WHERE id=%s",(kind,knowledge_id,now,artifact_id));c.commit()
 
 def _transfer_all_topics(artifact_id,knowledge_type,knowledge_id):
     now=datetime.now(TIMEZONE);linked=[]
@@ -103,7 +116,7 @@ async def promote_session_artifacts(session_id,mode='llm',artifact_ids=None):
             elif kind=='list':
                 if confidence<0.85:deferred.append({"artifact_id":artifact_id,"reason":"list_confidence_below_0.85"});continue
                 embedding=[0.0]*EMBEDDING_DIMENSIONS if mode=='deterministic' else None
-                knowledge_id=await create_list_record(content,embedding_vector=embedding);target='list'
+                knowledge_id,_=await get_or_create_active_list_record(content,embedding_vector=embedding);target='list'
             elif kind=='list_item':
                 if confidence<0.85 or not topic_title:deferred.append({"artifact_id":artifact_id,"reason":"list_target_not_confident"});continue
                 if mode=='deterministic':

@@ -149,6 +149,8 @@ Plätze werden mit der verbleibenden Art gefüllt. Die vollständigen Task- und
 Listenbereiche bleiben in ihren eigenen Ansichten. Kopierte Home-Karten haben
 eine eigene stabile Komponenten-ID, behalten aber dieselbe `entity_ref`.
 Firmwareseitige Dringlichkeits- oder Wissensauswahl findet nicht statt.
+Die eigenen Task- und Listenansichten erhalten jeweils bis zu zehn Karten;
+diese Zehnergrenze erweitert nicht „Als Nächstes“ auf Home.
 
 Ein `alert` wird als vollbreite, nicht fokussierbare Hinweisfläche mit Titel,
 Text, Symbol, Severity, Farb- und Rahmenrolle gezeichnet. Er ist keine
@@ -161,6 +163,9 @@ weiter dem Contract-Gate.
 Eine `entity_card` ist eine Bubble mit abgerundeten Ecken. Aufbau von links:
 Symbolstreifen mit Artsymbol, dann Textfläche mit Titel, darunter gegebenenfalls
 die Vorschau; oben rechts, falls vorhanden, `status` als kurze Markierung.
+Offene Tasks tragen in der ESP-Übersicht keinen `open`-Text: Die Projektion
+enthält dort ohnehin ausschließlich offene Tasks. Im Detail bleibt der echte
+Status erhalten.
 
 **Breite.** Eine Karte wird halbbreit, wenn ihr Titel höchstens 28 Zeichen hat
 **und** die unmittelbar folgende Karte dieselbe Bedingung erfüllt. Andernfalls
@@ -494,7 +499,8 @@ muss ein eigener begrenzter, rotierter und bereinigter Diagnoselog-Sink auf SD
 existieren. Dieser Sink ist umgesetzt: Er akzeptiert nur fest definierte
 Ereignistypen und Zahlenwerte, rotiert drei Generationen zu je höchstens 16 KiB
 und zeigt im Viewer den jüngsten Ausschnitt. Der Viewer startet am neuesten
-Ende, Hoch/Runter scrollt zeilenweise und Mitteldruck führt zurück. Er darf
+Ende, zeigt das sichtbare Fenster als `erste–letzte / gesamt`, Hoch/Runter
+scrollt zeilenweise und Mitteldruck führt zurück. Er darf
 keine Nutzerinhalte oder Geheimnisse persistieren.
 
 ## Leerer Zustand und Cache
@@ -511,6 +517,11 @@ Kontaktverlust lässt ihn altern. Die Grenze nennt der Server selbst in
 fehlt, `0`, negativ oder unplausibel groß —, gelten lokal **zwei Stunden**. Der
 Rückfallwert ist bewusst großzügig: der Server aktualisiert weit häufiger, und
 vor korrekten Daten zu warnen wäre eine Falschaussage in die andere Richtung.
+Unabhängig von dieser Veraltungsgrenze startet ein gesundes, untätiges Gerät
+spätestens nach vier Minuten einen neuen Abruf. Die verbleibende Minute ist
+Transport- und Validierungsreserve für das Ziel, spätestens alle fünf Minuten
+einen erfolgreichen Snapshot zu besitzen. Kürzere Serverfenster ziehen den
+Poll vor; manueller Sync bleibt zusätzlich möglich.
 
 Nach Ablauf markiert die Kopfzeile den Snapshot als `veraltet · …`. Der Körper
 zeigt die Karten weiter. Das ist eine bewusste Abweichung von der früheren

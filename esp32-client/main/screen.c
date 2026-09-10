@@ -606,12 +606,10 @@ static void move_settings_focus(int delta) {
 }
 
 static void move_settings_logs(int delta) {
-    int visible = settings_log_visible_capacity(BODY_TOP, BODY_BOTTOM);
-    int limit = settings_log_lines > visible ? settings_log_lines - visible : 0;
-    int next = settings_log_first + delta;
-    if (next < 0) next = 0;
-    if (next > limit) next = limit;
-    settings_log_first = next;
+    settings_log_first = settings_log_scroll_for(
+        settings_log_text, BODY_TOP, BODY_BOTTOM, settings_log_first, delta);
+    ESP_LOGI("settings", "SD log window first=%d lines=%d",
+             settings_log_first, settings_log_lines);
 }
 
 static void leave_settings(void) {

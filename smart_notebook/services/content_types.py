@@ -50,6 +50,17 @@ SEGMENT_TO_CLASSIFICATION = {
 }
 
 
+DEICTIC_LIST_INSTRUCTION = re.compile(
+    r"^\s*(?:und\s+)?(?:bitte\s+)?(?:schreib|schreibe|setz|setze|pack|packe)"
+    r"\s+(?:mir\s+)?(?:das|es)\s+(?:bitte\s+)?auf\s+eine\s+liste\b",
+    re.I,
+)
+
+
+def is_deictic_list_instruction(text):
+    return isinstance(text, str) and bool(DEICTIC_LIST_INSTRUCTION.search(text))
+
+
 def _iso_datetime(value):
     if not isinstance(value, str) or not value.strip():
         return None
@@ -123,6 +134,8 @@ def validate_classification(source_text, classification, artifact_content=None):
         title = data.get("list_title") or content
         if not isinstance(title, str) or not title.strip():
             errors.append("list_requires_title")
+        if is_deictic_list_instruction(source_text):
+            errors.append("list_requires_explicit_content")
     elif candidate == "list_item":
         items = data.get("items")
         if not isinstance(data.get("target_list"), str) or not data["target_list"].strip():

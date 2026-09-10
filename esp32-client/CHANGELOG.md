@@ -1,5 +1,50 @@
 # Änderungen
 
+## 2026-09-10 – ESP-Sichtkorrekturen und begrenzter Dashboardpoll
+
+Die E-Paper-Projektion lässt bei offenen Taskkarten das redundante `open` weg;
+Taskdetails behalten den fachlichen Status. Der SD-Logviewer berechnet
+Zeilenzahl, Scrollgrenze und dargestelltes Fenster nun aus demselben Text und
+zeigt `erste–letzte / gesamt`, damit ein Ein-Zeilen-Schritt auch zwischen
+ähnlichen technischen Einträgen sichtbar bleibt. Hoch/Runter bleibt
+zeilenweise, Mitteldruck bleibt Zurück.
+
+Der gesunde Idle-Abruf startet spätestens nach vier Minuten. Damit bleibt eine
+Minute für DNS, TLS und Snapshotvalidierung innerhalb des Fünf-Minuten-
+Erfolgsziels; kürzere Serverfenster ziehen den Start vor, eine lokale
+30-Sekunden-Untergrenze verhindert ungebremste Requests. Manueller Sync bleibt
+unverändert. Nur ein vollständig angenommener Snapshot erneuert die
+Kopfzeilenzeit. Die erste reale Probe mit 300 Sekunden Startgrenze zeigte den
+Grund für die Reserve: Der Snapshot war wegen Transport und Nachlauf erst nach
+rund 306 Sekunden erneut validiert. Mit der finalen Vier-Minuten-Grenze wurde
+der nächste reale Snapshot nach rund 244 Sekunden vollständig angenommen.
+
+Die ESP-Projektionsregression und das vollständige M8-Gate samt logischem
+Vier-Stunden-Soak sind grün. ESP-IDF-Build und Flash auf COM9 sind grün; das
+Gerät kam mit kompatiblem Gate und sauberer Queue zurück. Der
+UI-Hosttest bleibt auf diesem Windows-Host ausschließlich wegen fehlendem
+Host-`cc` nicht ausführbar. Firmware: `h4-ui-refresh`.
+
+## 2026-09-10 – A04-Listenstabilisierung automatisiert grün
+
+Die eigene Listenansicht erhält nun wie die Aufgabenansicht bis zu zehn Karten;
+Home bleibt bei höchstens drei priorisierten Task-/Listenkarten. Der belastete
+HTTP-Test misst mit zehn Tasks, zehn Listen und drei Home-Karten 11.200 Byte und
+bleibt unter dem neuen 12.288-Byte-Gate bei 16.384 Byte großen Geräte- und
+Snapshotpuffern.
+
+Backendseitig verwendet reine Listenerstellung eine aktive Liste mit exakt
+gleichem Titel wieder; der Check-and-create-Pfad ist über einen
+PostgreSQL-Advisory-Lock gegen Parallelität gesichert. Ein deiktischer Satz wie
+„Schreib das auf eine Liste“ ist allein kein gültiger Listenkandidat. Über eine
+unmittelbare STT-Chunkgrenze wird er gemeinsam mit dem vorherigen Inhalt als
+Listeneintrag ausgewertet; eine schon entstandene Task-/Listen-
+Fehlinterpretation wird verworfen, und die umgekehrte Workerreihenfolge erzeugt
+kein zweites Artefakt. Das A04-Testcleanup erfasst nun auch den neu erzeugten
+Parent-Container eines verlinkten Listeneintrags. Gezielte Tests, leere
+Fixture-Nachkontrolle und vollständiges M8 samt logischem Vier-Stunden-Soak sind
+grün. Offen bleibt die echte Audio→DB→ESP-Abnahme nach Worker-Neustart.
+
 ## 2026-09-10 – Ladeblitz und BOOT als direkter Aufnahmetaster
 
 Die Statusleiste übernimmt neben dem E-Gauge-Prozentwert nun auch den

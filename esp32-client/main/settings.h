@@ -38,6 +38,8 @@ void settings_diagnostics_draw(unsigned char *canvas, int top, int bottom,
  * from diagnostic_log. It has one focused Back action; up/down scroll lines. */
 int settings_log_line_count(const char *text);
 int settings_log_visible_capacity(int top, int bottom);
+int settings_log_scroll_for(const char *text, int top, int bottom,
+                            int first_line, int delta);
 void settings_logs_draw(unsigned char *canvas, int top, int bottom,
                         const char *text, int first_line);
 

@@ -50,12 +50,13 @@ ESP_DROP_SECTIONS=("recent-knowledge","topic-trends","open-chats","active-sessio
 # on this client and are removed together with any section they leave empty.
 ESP_RENDERED_COMPONENTS=("entity_card","alert")
 # 3. Counts and lengths. General sections stay at a handful of cards with a
-#    two-line preview. The dedicated Tasks view scrolls and must not silently
-#    drop an actionable task merely because three others sort ahead of it, so
-#    that one section may use the full ten rows already selected by the query.
+#    two-line preview. The dedicated Tasks and Lists views scroll and must not
+#    silently drop an actionable entity merely because three others sort ahead
+#    of it, so those sections may use the full ten rows selected by the query.
 #    Sending less than `limits` announces is allowed — they are maxima.
 ESP_ITEMS_PER_SECTION=3
 ESP_TASK_ITEMS_PER_SECTION=10
+ESP_LIST_ITEMS_PER_SECTION=10
 ESP_HOME_ITEMS=3
 ESP_TITLE_MAX=80
 ESP_PREVIEW_MAX=120
@@ -86,6 +87,15 @@ def _task_window_preview(work_start_at,due_at,urgency,now):
 def _project_component(item):
     """One component, reduced to what the e-paper client actually renders."""
     result={key:value for key,value in item.items() if key not in ESP_DROP_KEYS}
+    # Every ESP task query already selects only open tasks. Repeating that
+    # implementation token on every overview card consumes the card's scarce
+    # status corner without telling the reader anything. Keep the state in the
+    # entity detail and on other card kinds where it remains meaningful.
+    entity_ref=result.get("entity_ref")
+    if (result.get("component")=="entity_card" and
+        isinstance(entity_ref,dict) and entity_ref.get("type")=="task" and
+        result.get("status")=="open"):
+        result.pop("status",None)
     result["title"]=_clip(result.get("title"),ESP_TITLE_MAX)
     result["preview"]=_clip(result.get("preview"),ESP_PREVIEW_MAX)
     result["text"]=_clip(result.get("text"),ESP_PREVIEW_MAX)
@@ -94,7 +104,9 @@ def _project_component(item):
     for key in ("title","preview","text"):
         if result[key] is None and key not in item:del result[key]
     if isinstance(result.get("items"),list):
-        item_limit=ESP_TASK_ITEMS_PER_SECTION if item.get("id")=="today" else ESP_ITEMS_PER_SECTION
+        item_limit=(ESP_TASK_ITEMS_PER_SECTION if item.get("id")=="today" else
+                    ESP_LIST_ITEMS_PER_SECTION if item.get("id")=="lists" else
+                    ESP_ITEMS_PER_SECTION)
         visible=[child for child in result["items"] if child.get("component") in ESP_RENDERED_COMPONENTS]
         result["items"]=[_project_component(child) for child in visible[:item_limit]]
     return result

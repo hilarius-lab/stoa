@@ -11,6 +11,7 @@
 #include "header.h"
 #include "history.h"
 #include "settings.h"
+#include "refresh_policy.h"
 #include "status_bar.h"
 #include "text.h"
 #include "dashboard_map.h"
@@ -425,6 +426,17 @@ static void settings_view(void) {
           "settings log counts a final unterminated line");
     check(settings_log_visible_capacity(100, 792) > 0,
           "settings log has a visible viewport");
+    const char *many_logs =
+        "00\n01\n02\n03\n04\n05\n06\n07\n08\n09\n10\n11\n"
+        "12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n";
+    int visible = settings_log_visible_capacity(100, 792);
+    int newest = settings_log_scroll_for(many_logs, 100, 792, 99, 0);
+    check(newest == 24 - visible,
+          "settings log clamps the initial window to the newest lines");
+    check(settings_log_scroll_for(many_logs, 100, 792, newest, -1) == newest - 1,
+          "settings log moves one line toward older records");
+    check(settings_log_scroll_for(many_logs, 100, 792, newest - 1, 1) == newest,
+          "settings log moves one line back toward newer records");
     settings_draw(canvas, 100, 792, 0, 0, true, true);
     settings_diagnostics_draw(canvas, 100, 792, &state);
     settings_logs_draw(canvas, 100, 792,
@@ -435,6 +447,15 @@ static void settings_view(void) {
         for (int x = 0; x < 480; x++)
             if (ink_at(x, y) && (y < 100 || y >= 792)) outside++;
     check(outside == 0, "settings renderer stays inside its body");
+
+    check(dashboard_refresh_interval_s(0) == 240,
+          "dashboard fallback leaves a minute for the five-minute success target");
+    check(dashboard_refresh_interval_s(7200) == 240,
+          "a long server cache window cannot consume the transport reserve");
+    check(dashboard_refresh_interval_s(300) == 150,
+          "a short server cache window advances the poll");
+    check(dashboard_refresh_interval_s(10) == 30,
+          "the server cannot force an unbounded dashboard request rate");
 }
 
 static void staleness(void) {

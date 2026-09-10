@@ -9,20 +9,21 @@ from smart_notebook.app import app
 from smart_notebook.config import CLIENT_DASHBOARD_CACHE_MAX_AGE_SECONDS,EMBEDDING_DIMENSIONS,TIMEZONE
 from smart_notebook.database import get_db_connection,init_db
 from smart_notebook.services.client_dashboard import (ESP_DROP_KEYS,ESP_HOME_ITEMS,ESP_ITEMS_PER_SECTION,
-    ESP_PREVIEW_MAX,ESP_RENDERED_COMPONENTS,ESP_SURFACE,ESP_TASK_ITEMS_PER_SECTION,ESP_TITLE_MAX,
-    _idle_content,_project_for_epaper,get_dashboard_entity)
+    ESP_LIST_ITEMS_PER_SECTION,ESP_PREVIEW_MAX,ESP_RENDERED_COMPONENTS,ESP_SURFACE,
+    ESP_TASK_ITEMS_PER_SECTION,ESP_TITLE_MAX,_idle_content,_project_for_epaper,get_dashboard_entity)
 from smart_notebook.routers.client import _capabilities
 
-# The receive buffer the device shipped with when the surface first overflowed.
-# The firmware has since been given twice that, and this bound stays at the old
-# value on purpose: it is the budget the projection is supposed to respect, and
-# the headroom on the device is insurance, not an allowance to spend.
-ESP_RESPONSE_BUDGET_BYTES=8192
+# The device now has a 16384-byte response/snapshot buffer.  Ten independently
+# scrollable task cards plus ten list cards cannot fit the historical 8192-byte
+# bound, so the gate permits at most 75% of the real buffer and preserves 4096
+# bytes of headroom for alerts, questions and envelope growth.
+ESP_RESPONSE_BUFFER_BYTES=16384
+ESP_RESPONSE_BUDGET_BYTES=ESP_RESPONSE_BUFFER_BYTES*3//4
 # Every key esp32-client/main/dashboard.c reads off an entity_card. If one of
 # these stops being sent the panel keeps drawing, just wrong — an icon becomes
 # generic, an urgent card loses its strip. That is the failure this list exists
 # to make loud.
-ESP_RENDERED_KEYS=("component","title","preview","status","icon","color_role","border_role","entity_ref")
+ESP_RENDERED_KEYS=("component","title","preview","icon","color_role","border_role","entity_ref")
 
 
 def check_epaper_projection():
@@ -52,7 +53,9 @@ def check_epaper_projection():
         assert section.get("id") not in ("recent-knowledge","topic-trends","open-chats","active-sessions")
         items=section.get("items") or []
         assert items,"the e-paper projection must not leave empty section headings"
-        item_limit=ESP_TASK_ITEMS_PER_SECTION if section.get("id")=="today" else ESP_ITEMS_PER_SECTION
+        item_limit=(ESP_TASK_ITEMS_PER_SECTION if section.get("id")=="today" else
+                    ESP_LIST_ITEMS_PER_SECTION if section.get("id")=="lists" else
+                    ESP_ITEMS_PER_SECTION)
         assert len(items)<=item_limit,f"{section.get('id')} carries {len(items)} items"
         for item in items:
             assert item["component"] in ESP_RENDERED_COMPONENTS,item
@@ -63,6 +66,9 @@ def check_epaper_projection():
             if item["component"]=="entity_card":
                 missing=[key for key in ESP_RENDERED_KEYS if key not in item]
                 assert not missing,f"the renderer reads {missing} and they were dropped"
+                if item.get("entity_ref",{}).get("type")=="task":
+                    assert item.get("status")!="open",(
+                        "the ESP overview must not repeat the implicit open task state")
                 # Focus identity and the action verb are contract, not decoration:
                 # the firmware holds focus by id and will need open_clarification
                 # told apart from open_entity.
@@ -89,6 +95,7 @@ def main():
     assert limits["dashboard_cache_max_age_seconds"]==CLIENT_DASHBOARD_CACHE_MAX_AGE_SECONDS
     token=uuid4().hex
     now=datetime.now(TIMEZONE);task_id=list_id=item_id=other_task_id=future_low_id=future_moderate_id=None
+    extra_list_ids=[]
     try:
         with get_db_connection() as db:
             task_id=db.execute("""INSERT INTO tasks(content,created_at,updated_at,work_start_at,due_at,status,archived,priority,urgency,percent_complete,urgency_source)
@@ -103,13 +110,22 @@ def main():
             list_id=db.execute("INSERT INTO lists(title,description,created_at,updated_at,archived) VALUES(%s,%s,%s,%s,FALSE) RETURNING id",
                 (f"ESP list {token}","Projection test",now,now)).fetchone()[0]
             item_id=db.execute("INSERT INTO list_items(list_id,content,created_at,updated_at,status,archived) VALUES(%s,%s,%s,%s,'active',FALSE) RETURNING id",
-                (list_id,f"ESP item {token}",now,now)).fetchone()[0];db.commit()
+                (list_id,f"ESP item {token}",now,now)).fetchone()[0]
+            for index in range(1,ESP_LIST_ITEMS_PER_SECTION):
+                updated_at=now+timedelta(seconds=index)
+                extra_list_ids.append(db.execute(
+                    "INSERT INTO lists(title,description,created_at,updated_at,archived) VALUES(%s,%s,%s,%s,FALSE) RETURNING id",
+                    (f"ESP list {token} {index}","Projection test",now,updated_at),
+                ).fetchone()[0])
+            db.commit()
 
         default=_idle_content();assert all(x["id"] not in ("today","lists") for x in default["sections"])
         esp=_idle_content("esp32_epaper");sections={x["id"]:x for x in esp["sections"]}
         assert any(token in x["title"] for x in sections["today"]["items"])
         assert not any(f"future low {token}" in x["title"] for x in sections["today"]["items"])
         assert any(f"future moderate {token}" in x["title"] for x in sections["today"]["items"])
+        assert len(sections["lists"]["items"])==ESP_LIST_ITEMS_PER_SECTION,sections["lists"]
+        assert sum(token in x["title"] for x in sections["lists"]["items"])==ESP_LIST_ITEMS_PER_SECTION
         home=sections["home-next"]["items"]
         assert 0<len(home)<=ESP_HOME_ITEMS
         assert all(x["id"]==f"home:{x['entity_ref']['type']}:{x['entity_ref']['id']}" for x in home)
@@ -118,10 +134,16 @@ def main():
             assert any(x["entity_ref"]["type"]=="list" for x in home)
         projected_tasks=next(x for x in _project_for_epaper(esp)["sections"] if x["id"]=="today")
         assert any(f"future moderate {token}" in x["title"] for x in projected_tasks["items"])
+        assert all("status" not in x for x in projected_tasks["items"]),projected_tasks
         assert any(token in x["title"] for x in sections["lists"]["items"])
         task=next(x for x in sections["today"]["items"] if token in x["title"])
+        projected_home=next(
+            x for x in _project_for_epaper(esp)["sections"]
+            if x["id"]=="home-next")["items"]
+        assert all("status" not in x for x in projected_home
+                   if x["entity_ref"]["type"]=="task"),projected_home
         assert task["preview"].startswith("Ab heute · bis "),task
-        listing=next(x for x in sections["lists"]["items"] if token in x["title"])
+        listing=next(x for x in sections["lists"]["items"] if x["title"]==f"ESP list {token}")
         assert listing["status"]=="1 offen",listing
         assert task["id"]==f"task:{task['entity_ref']['id']}"
         assert listing["id"]==f"list:{listing['entity_ref']['id']}"
@@ -183,9 +205,12 @@ def main():
         with get_db_connection() as db:
             if task_id is not None:db.execute("DELETE FROM client_entity_identities WHERE entity_type='task' AND internal_id=%s",(task_id,))
             if list_id is not None:db.execute("DELETE FROM client_entity_identities WHERE entity_type='list' AND internal_id=%s",(list_id,))
+            if extra_list_ids:
+                db.execute("DELETE FROM client_entity_identities WHERE entity_type='list' AND internal_id=ANY(%s)",(extra_list_ids,))
             if item_id is not None:db.execute("DELETE FROM client_entity_identities WHERE entity_type='list_item' AND internal_id=%s",(item_id,))
             if item_id is not None:db.execute("DELETE FROM list_items WHERE id=%s",(item_id,))
             if list_id is not None:db.execute("DELETE FROM lists WHERE id=%s",(list_id,))
+            if extra_list_ids:db.execute("DELETE FROM lists WHERE id=ANY(%s)",(extra_list_ids,))
             if other_task_id is not None:
                 db.execute("DELETE FROM client_entity_identities WHERE entity_type='task' AND internal_id=%s",(other_task_id,))
                 db.execute("DELETE FROM tasks WHERE id=%s",(other_task_id,))

@@ -15,7 +15,8 @@ from .recovery import refresh_session_watermarks, synchronize_processing_step_fo
 from .topics import create_session_topic_record, link_artifact_topic_record
 from .ai_tasks import get_ai_task_profile
 from .semantic_router import route_artifact, validate_route
-from .content_types import ARTIFACT_TYPES, SEGMENT_TO_CLASSIFICATION, validate_classification
+from .content_types import (ARTIFACT_TYPES, SEGMENT_TO_CLASSIFICATION,
+                            is_deictic_list_instruction, validate_classification)
 from .semantic_examples import evaluate_semantic_examples
 from .observability import emit_event
 
@@ -248,12 +249,96 @@ def _adjacent_task_modifier_operation(session_id,segment_id,text,segment_confide
         "confidence":classification['confidence'],"source_segment_ids":[segment_id],"topic_titles":[],
         "validated":True,"classification":classification}
 
+
+def _adjacent_list_continuation_operations(session_id,segment_id,text,segment_confidence,started_at):
+    """Join a deictic list instruction to the neighboring STT chunk.
+
+    The earlier content chunk is withheld when its immediate successor says
+    only "Schreib das auf eine Liste".  The successor owns the combined
+    list-item artifact, so worker ordering cannot first promote the earlier
+    sentence as a task and later create an empty list from the instruction.
+    """
+    with get_db_connection() as connection:
+        current=connection.execute(
+            "SELECT sequence FROM semantic_segments WHERE id=%s AND session_id=%s",
+            (segment_id,session_id),
+        ).fetchone()
+        if not current:return None
+
+        if not is_deictic_list_instruction(text):
+            following=connection.execute(
+                """SELECT id,text,confidence FROM semantic_segments
+                WHERE session_id=%s AND sequence=%s AND status='confirmed'
+                ORDER BY segment_index,id LIMIT 1""",
+                (session_id,current[0]+1),
+            ).fetchone()
+            if not following or not is_deictic_list_instruction(following[1]):return None
+            combined=f"{text.rstrip()} {following[1].lstrip()}"
+            route=route_artifact(combined,started_at,[])
+            valid,_=validate_route(combined,route)
+            if not valid or route['candidate_type']!='list_item' or route['confidence']<0.85:return None
+            # The following chunk creates the one canonical artifact.  Marking
+            # this segment handled prevents an ordering-dependent task/list
+            # artifact if its worker happens to run first.
+            return {"operations":[],"topics":[]}
+
+        previous=connection.execute(
+            """SELECT id,text,confidence FROM semantic_segments
+            WHERE session_id=%s AND sequence=%s AND status='confirmed'
+            ORDER BY segment_index DESC,id DESC LIMIT 1""",
+            (session_id,current[0]-1),
+        ).fetchone()
+        if not previous:return None
+        combined=f"{previous[1].rstrip()} {text.lstrip()}"
+        route=route_artifact(combined,started_at,[])
+        valid,_=validate_route(combined,route)
+        if not valid or route['candidate_type']!='list_item' or route['confidence']<0.85:return None
+
+        target=route['normalized_data']['target_list']
+        operations=[]
+        for item in route['normalized_data']['items']:
+            item_route={**route,"normalized_data":{**route['normalized_data'],"items":[item]},
+                        "validated":True,"decision_source":"rules"}
+            operations.append({"action":"create","target_artifact_id":0,"artifact_type":"list_item",
+                "content":item,"confidence":route['confidence'],
+                "source_segment_ids":[previous[0],segment_id],"topic_titles":[target],
+                "validated":True,"classification":item_route})
+
+        stale=connection.execute(
+            """SELECT a.id,a.artifact_type,a.content,a.confidence
+            FROM session_artifacts a
+            JOIN session_artifact_sources src ON src.artifact_id=a.id AND src.segment_id=%s
+            WHERE a.session_id=%s AND a.status IN('active','confirmed')
+              AND a.artifact_type IN('task','list')
+              AND NOT EXISTS (
+                  SELECT 1 FROM session_artifact_sources other
+                  WHERE other.artifact_id=a.id AND other.segment_id<>%s
+              )
+            ORDER BY a.id""",
+            (previous[0],session_id,previous[0]),
+        ).fetchall()
+    # Create stays first so its origin key remains stable across a retry even
+    # after the stale interpretation has already been dismissed.
+    operations.extend({"action":"dismiss","target_artifact_id":row[0],
+        "artifact_type":row[1],"content":row[2],"confidence":row[3],
+        "source_segment_ids":[previous[0],segment_id],"topic_titles":[],
+        "validated":True} for row in stale)
+    return {"operations":operations,"topics":[{"title":target,
+        "description":"Explizit genannte Zielliste.","confidence":route['confidence']}]}
+
 def _router_overrides(session_id,segments,topics,started_at):
     topic_titles=[row[1] for row in topics];operations=[];handled=set();new_topics=[]
     for segment_id,text,segment_type,segment_confidence in segments:
         modifier_operation=_adjacent_task_modifier_operation(session_id,segment_id,text,segment_confidence)
         if modifier_operation:
             handled.add(segment_id);operations.append(modifier_operation);continue
+        list_continuation=_adjacent_list_continuation_operations(
+            session_id,segment_id,text,segment_confidence,started_at)
+        if list_continuation is not None:
+            handled.add(segment_id)
+            operations.extend(list_continuation['operations'])
+            new_topics.extend(list_continuation['topics'])
+            continue
         route=route_artifact(text,started_at,topic_titles);valid,errors=validate_route(text,route)
         if not valid or route['confidence']<0.85 or route['candidate_type']=='question':continue
         handled.add(segment_id);route['validated']=True;route['decision_source']='rules'

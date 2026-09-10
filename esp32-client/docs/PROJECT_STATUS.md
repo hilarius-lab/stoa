@@ -1,6 +1,6 @@
 # Projektstand
 
-Stand: 2026-09-10, Ladeanzeige und dedizierte BOOT-Aufnahme implementiert
+Stand: 2026-09-10, A04 live abgenommen und ESP-Sichtkorrekturen implementiert
 
 ## Nachgewiesen am realen Gerät
 
@@ -55,7 +55,7 @@ Stand: 2026-09-10, Ladeanzeige und dedizierte BOOT-Aufnahme implementiert
   und erst nach passender `200`-Antwort entfernt. Toggle, Zurücktoggeln,
   Verlassen und das serverseitige Verschwinden von „Hafermilch“ sind physisch
   abgenommen.
-- Der letzte Firmwarebuild (`h4-boot-record`) und Flash auf COM9 waren grün.
+- Der letzte Firmwarebuild (`h4-ui-refresh`) und Flash auf COM9 waren grün.
   Das vollständige Backend-M8-Release-Gate einschließlich logischem Vier-
   Stunden-Soak lief für die aktuellen Dashboard-Backendänderungen grün.
 
@@ -86,7 +86,18 @@ Rückfragen, handlungsrelevante Processing-Hinweise und unter „Als Nächstes�
 höchstens drei serverseitig ausgewählte Entitäten: zuerst höchstens zwei nach
 der bestehenden Backendreihenfolge ausgewählte Tasks und eine aktive Liste;
 freie Plätze füllt die jeweils verbleibende Art. Die vollständigen Task-/
-Listenbereiche bleiben in ihren eigenen Ansichten.
+Listenbereiche bleiben in ihren eigenen Ansichten und erhalten jeweils bis zu
+zehn Karten. Home bleibt unverändert auf drei priorisierte Karten begrenzt. Der
+belastete automatisierte Wire-Test misst 10.971 von erlaubten 12.288 Byte bei
+realen 16.384-Byte-Puffern.
+
+Offene Taskkarten lassen in der ESP-Übersicht den redundanten Text `open` weg;
+Taskdetails behalten ihren tatsächlichen Status. Der automatische Idle-Abruf
+startet spätestens nach vier Minuten und lässt damit eine Minute für DNS, TLS
+und Validierung innerhalb des Fünf-Minuten-Erfolgsziels. Manueller Sync bleibt
+erhalten. Das Kopfzeilenalter wird weiterhin ausschließlich nach einem
+vollständig validierten Abruf zurückgesetzt. Die reale Probe nahm den nächsten
+Snapshot nach rund 244 Sekunden vollständig an.
 
 `alert` wird als nicht fokussierbare vollbreite Hinweisfläche gezeichnet;
 andere nicht renderbare Komponenten und leere Überschriften werden weiter
@@ -129,9 +140,10 @@ Enrollment bleiben ausschließlich Teil der separaten Erstinstallation.
 Der SD-Logbrowser nutzt jetzt einen eigenen, begrenzten und rotierten Sink mit
 festem Ereignisvokabular. Drei Generationen zu je höchstens 16 KiB sind von den
 Aufnahmejournalen getrennt; der lokale Viewer liest nur den jüngsten
-bereinigten Ausschnitt. Die Scrolllogik existiert, wurde nach einer früheren
-positiven Probe aber später real als wirkungslos gemeldet und ist deshalb
-wieder offen zu reproduzieren.
+bereinigten Ausschnitt. Die Scrollgrenzen werden aus demselben Text wie die
+Darstellung berechnet; eine sichtbare Angabe `erste–letzte / gesamt` macht jede
+Zeilenbewegung auch bei ähnlichen Logeinträgen überprüfbar. Die erneute reale
+Tasten-/Sichtabnahme folgt im Gespräch mit dem Nutzer.
 
 Symbolatlas, Firmwarebuild und Flash auf COM9 sind grün. Nach dem automatischen
 Verbindungsretry meldete das Gerät `compatible=1`; die Queue war mit
@@ -142,8 +154,9 @@ abgenommen. Hotspot, stabiler QR-Code und unverändertes Altprofil nach Abbruch
 sind ebenfalls real bestätigt. Speichern, wiederholte Auswahl und Rückfall mit
 einem zweiten realen Netz funktionieren; der Live-Wechsel erhält das bereits
 geladene Dashboard. Der Logsink ist gebaut, geflasht und auf der realen
-SD-Karte beschrieben; Inhalt und Rückkehr sind sichtbar, Scrollen bleibt als
-Regression offen. Der Firmwarebezeichner ist `h4-boot-record`; die Akkuanzeige ergänzt
+SD-Karte beschrieben; Inhalt und Rückkehr sind sichtbar, Scrollen erhält mit
+diesem Build eine eindeutig sichtbare Fensterposition. Der Firmwarebezeichner
+ist `h4-ui-refresh`; die Akkuanzeige ergänzt
 weiterhin die bestehende Oberfläche und behauptet nicht den H5-Meetingmodus.
 
 ## Noch offen bis zum produktiven Betrieb
@@ -157,14 +170,17 @@ weiterhin die bestehende Oberfläche und behauptet nicht den H5-Meetingmodus.
   Langzeit-/Kältetests
 - Backend: Watchdog für verwaiste `running`-Jobs und die Auto-Modus-Lücken aus
   `BACKEND_LOGIK.md` Abschnitt 18
-- Die eigene ESP-Listenansicht ist noch auf drei Karten begrenzt. Die nächste
-  Backend-/UI-Arbeit stabilisiert außerdem kombinierte Liste-plus-Item-Sätze,
-  Listen-Deduplizierung und leere Fehlklassifikationen vor A05.
+- Die A04-Listenstabilisierung ist automatisiert und live abgenommen: zehn Karten in der
+  eigenen Listenansicht, exakte Deduplizierung gleichnamiger aktiver Listen,
+  gemeinsame Auswertung benachbarter Liste-plus-Item-Chunks, Schutz vor
+  deiktischen Leerlisten und vollständiges Fixture-Cleanup. Vier echte
+  Audioaufnahmen bestätigten Task, deduplizierte Listenerstellung und die über
+  zwei STT-Chunks verteilte Liste-plus-Item-Aussage bis zur sichtbaren
+  ESP-Projektion. Vollständiges M8 ist grün.
 
 Die auswählbare IANA-Zeitzone ist ein späteres Komfortfeature. Bis dahin bleibt
-die verifizierte `Europe/Berlin`-Regel bewusst fest eingebaut. A01–A03 und der
-strukturelle A04-Typvertrag sind umgesetzt; vor A05 wird die fehlgeschlagene
-reale A04-Listenabnahme stabilisiert.
+die verifizierte `Europe/Berlin`-Regel bewusst fest eingebaut. A01–A04 sind
+umgesetzt und A04 ist real abgenommen; als nächster Backendblock folgt A05.
 
 Historische Messwerte und Fehleranalysen stehen im `CHANGELOG.md` und in
 `CLIENT_SERVER_STATE.md`; diese Datei beschreibt nur den aktuellen Übergabestand.

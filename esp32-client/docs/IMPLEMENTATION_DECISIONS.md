@@ -357,6 +357,13 @@ beschriftete Statuszeile entsteht in H3 zusammen mit den übrigen Indikatoren.
 - Ein veralteter Slot wird in der Kopfzeile gekennzeichnet, aber weiter
   angezeigt und erst durch einen neuen Snapshot überschrieben. Er wird nicht
   ausgeblendet: die Karten sind nicht falsch, nur womöglich überholt.
+- Der gesunde Idle-Poll startet spätestens nach vier Minuten. Eine Minute
+  bleibt für DNS, TLS und Validierung innerhalb des Fünf-Minuten-Erfolgsziels.
+  Ein kürzeres Server-Cachefenster zieht ihn auf die halbe Fensterdauer vor,
+  mit lokaler 30-Sekunden-Untergrenze gegen ungebremste Requestschleifen.
+  Manueller Sync weckt denselben Worker sofort. Nur ein vollständig validierter
+  Abruf erneuert die Kopfzeilenzeit; eine bloße lokale Redraw- oder
+  Snapshotrevision tut es nicht.
 - Technische Diagnose ist ein Ring aus höchstens 256 strukturierten Ereignissen
   und 64 KiB. Er enthält Codes, Zähler, Firmwareversion und grobe Zeit, niemals
   Audio, Texte, Payloads, WLAN-Daten oder Tokens.

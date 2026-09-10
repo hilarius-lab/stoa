@@ -25,6 +25,7 @@
 #include "api_client.h"
 #include "screen.h"
 #include "diagnostic_log.h"
+#include "refresh_policy.h"
 
 /* Headroom, not a fit. The server projects the e-paper surface down to roughly
  * six kilobytes, so 8192 would have worked on paper — and a worst case measured
@@ -53,9 +54,6 @@
 #define API_RETRY_MIN_MS 15000
 #define API_RETRY_MAX_MS 600000
 /* Used only when the server states no cache window of its own. */
-#define API_REFRESH_FALLBACK_S 3600
-#define API_REFRESH_MIN_S 300
-#define API_REFRESH_MAX_S 3600
 
 typedef struct {
     char *data;
@@ -1495,16 +1493,13 @@ static unsigned retry_delay_ms(unsigned failures) {
 
 /* How long a healthy, idle device may go without asking for a new snapshot.
  *
- * Derived from what the server announces rather than chosen here, so a server
- * that shortens its window is followed without a firmware change. Half the
- * window, not all of it: refreshing exactly at the deadline would mean the panel
- * spends a moment showing something it has already declared stale. */
+ * Derived from what the server announces, with a local four-minute start ceiling.
+ * Half the window, not all of it: refreshing exactly at the deadline would
+ * mean the panel spends a moment showing something it has already declared
+ * stale. Starting by four minutes leaves a full minute inside the five-minute
+ * success target for DNS, TLS and response validation. */
 static unsigned refresh_interval_s(void) {
-    unsigned window = cache_max_age_s ? cache_max_age_s : API_REFRESH_FALLBACK_S;
-    unsigned interval = window / 2;
-    if (interval < API_REFRESH_MIN_S) interval = API_REFRESH_MIN_S;
-    if (interval > API_REFRESH_MAX_S) interval = API_REFRESH_MAX_S;
-    return interval;
+    return dashboard_refresh_interval_s(cache_max_age_s);
 }
 
 /* Wake the radio for the duration of a pass and let it doze again afterwards.
@@ -1519,7 +1514,7 @@ static unsigned refresh_interval_s(void) {
  * connection to the same host carried on working. The beacon timeouts and the
  * reset connections come from the same place.
  *
- * A pass lasts seconds and happens at most hourly when idle, so the saving is
+ * A pass lasts seconds and starts at most every four minutes when idle, so the saving is
  * kept where it is worth having and given up only where it costs reliability. */
 static void radio_awake(bool awake) {
     esp_err_t result = esp_wifi_set_ps(awake ? WIFI_PS_NONE : WIFI_PS_MIN_MODEM);

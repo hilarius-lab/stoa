@@ -123,6 +123,65 @@ async def create_list_record(
 
     return list_id
 
+
+async def get_or_create_active_list_record(
+    title: str,
+    description: str = "",
+    embedding_vector: list[float] | None = None,
+):
+    """Return one active exact-title list, creating it only when absent.
+
+    The advisory transaction lock makes the check-and-create path safe when
+    two independently captured list-creation artifacts are promoted together.
+    Archived lists deliberately do not block a new active list.
+    """
+    title = title.strip()
+    description = description.strip()
+    if not title:
+        raise ValueError("List title must not be empty")
+
+    lock_key = f"active-list-title:{title.casefold()}"
+
+    # Reusing an exact active container must not depend on the embedding
+    # service being available.  The unlocked read is only a fast path; a
+    # second check under the advisory lock remains authoritative for creation.
+    with get_db_connection() as connection:
+        existing = connection.execute(
+            """SELECT id FROM lists
+            WHERE lower(title)=lower(%s) AND archived=FALSE
+            ORDER BY id LIMIT 1""",
+            (title,),
+        ).fetchone()
+    if existing is not None:
+        return existing[0], False
+
+    embedding = embedding_vector if embedding_vector is not None else await get_embedding(
+        title + ("\n" + description if description else "")
+    )
+    vector_value = embedding_to_pgvector(embedding)
+    now = datetime.now(TIMEZONE)
+
+    with get_db_connection() as connection:
+        connection.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (lock_key,))
+        existing = connection.execute(
+            """SELECT id FROM lists
+            WHERE lower(title)=lower(%s) AND archived=FALSE
+            ORDER BY id LIMIT 1""",
+            (title,),
+        ).fetchone()
+        if existing is not None:
+            connection.commit()
+            return existing[0], False
+        list_id = connection.execute(
+            """INSERT INTO lists (
+                title, description, created_at, updated_at, embedding, embedding_model
+            ) VALUES (%s, %s, %s, %s, %s::vector, %s)
+            RETURNING id""",
+            (title, description, now, now, vector_value, EMBEDDING_MODEL),
+        ).fetchone()[0]
+        connection.commit()
+    return list_id, True
+
 async def add_list_item_record(
     list_id: int,
     content: str,

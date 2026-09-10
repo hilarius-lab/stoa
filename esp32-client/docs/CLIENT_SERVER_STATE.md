@@ -987,3 +987,67 @@ Die vorhandene 1,5-Sekunden-Mindestdauer verwirft kurze Aufnahmen weiterhin.
 ESP-IDF-Build und Flash auf COM9 sind grün. Firmware: `h4-boot-record`; eine
 physische Sprachprobe nach dem Flash ist noch nicht als Nutzerabnahme
 protokolliert.
+
+## A04-Listenstabilisierung — automatisiert und live grün, 10. September
+
+Die E-Paper-Projektion begrenzt nur allgemeine kompakte Sektionen auf drei
+Karten. `today` und `lists` liefern für ihre eigenen scrollbaren Ansichten nun
+jeweils bis zu zehn Karten; Home bleibt mit seiner separaten Auswahl bei drei.
+Der belastete Wire-Test misst zehn Tasks, zehn Listen und drei Home-Karten mit
+11.200 Byte. Das Gate liegt nun bei 12.288 Byte und lässt gegenüber den realen
+16.384-Byte-Puffern 4 KiB Mindestreserve.
+
+Reine `list`-Promotion verwendet eine aktive Liste mit exakt gleichem Titel
+wieder. Wenn keine existiert, serialisiert ein titelgebundener PostgreSQL-
+Advisory-Lock die erneute Prüfung und Anlage; archivierte Listen bleiben davon
+ausgenommen. Der Wiederverwendungsfall benötigt keinen Embedding-Aufruf.
+
+Der Artefaktworker erkennt eine unmittelbar benachbarte Kombination aus Inhalt
+und rein deiktischer Fortsetzung, etwa „Nach dem Urlaub will ich Fotos
+sortieren.“ plus „Schreib das auf eine Liste.“. Beide bestätigten Segmente
+belegen gemeinsam den Listenpunkt `Fotos sortieren` im Container `Nach dem
+Urlaub`. Läuft der erste Chunk zuerst, wird eine bereits entstandene Task- oder
+Listenfehlinterpretation beim Fortsetzungs-Chunk verworfen; ist der Folgechunk
+schon bestätigt, hält der erste Worker seinen isolierten Kandidaten zurück.
+Ohne passenden Nachbarchunk verbietet der gemeinsame A04-Validator, den
+deiktischen Aktionssatz selbst als Liste zu materialisieren.
+
+`m8_content_type_pipeline_test.py` prüft beide Workerreihenfolgen, das Verwerfen
+der vorläufigen Taskinterpretation, exakte Aktivlisten-Deduplizierung und den
+Leerlisten-Guard. Sein `finally` ermittelt außerdem Parent-Listen verlinkter
+Items, bevor die Sessionkaskade die Artefaktlinks entfernt. Drei während der
+Entwicklung eindeutig tokenisierte leere Testcontainer (IDs 61, 73, 95) wurden
+nach Prüfung entfernt; anschließend meldete die Nachkontrolle null A04-Sessions
+und null A04-Listenfixtures. Das vollständige M8-Release-Gate einschließlich
+logischem Vier-Stunden-Soak ist grün. Nach Worker-Neustart liefen vier echte
+Audioaufnahmen als Sessions 427–430 vollständig durch. Session 427 erzeugte
+Task 199 „Die Fahrradkette prüfen“ mit dem separaten 12–18-Uhr-Fenster. Zwei
+identische Aufnahmen „Erstelle eine Liste für den Herbsturlaub“ verwendeten
+genau eine aktive Liste 110 „Den Herbsturlaub“. Die über zwei STT-Chunks
+verteilte Aufnahme „Nach dem Herbsturlaub will ich Fotos sortieren. Schreib das
+auf eine Liste.“ erzeugte Liste 111 mit Item 80 „Fotos sortieren“. Die
+Ergebnisse waren dauerhaft in der DB und anschließend auf dem ESP sichtbar;
+A04 ist damit fachlich abgenommen.
+
+## ESP-Sichtkorrekturen — Arbeitsstand 10. September
+
+Offene Taskkarten verlieren ausschließlich in der E-Paper-Übersichtsprojektion
+den redundanten Statustext `open`; die Detailantwort behält den wirklichen
+Status. Der Projektions-/Wiretest bleibt mit 10.971 Byte unter dem
+12.288-Byte-Gate.
+
+Der SD-Logviewer besitzt nun eine einzige Grenzfunktion für Initialposition und
+Hoch-/Runter-Schritt. Zusätzlich zeigt er im Titelbereich
+`erste–letzte / gesamt`. Damit ist auch bei fast identischen technischen
+Logzeilen sichtbar, ob der Ein-Zeilen-Schritt angekommen ist. Build und Flash
+sind grün; die erneute physische Tasten-/Sichtbestätigung wird nach dieser
+Implementierungsrunde gemeinsam mit dem Nutzer durchgeführt.
+
+Der zuvor bis zu stündliche Idle-Poll startet nun nach höchstens vier Minuten.
+Eine erste reale Variante mit 300 Sekunden Wartezeit validierte den nächsten
+Snapshot wegen TLS und Passnachlauf erst nach rund 306 Sekunden und verfehlte
+damit das wörtliche Fünf-Minuten-Erfolgsziel. Die Vier-Minuten-Grenze lässt
+deshalb eine Minute Transportreserve. Manueller Sync bleibt bestehen, und nur
+`screen_snapshot_received` nach vollständiger JSON-/Schemaannahme erneuert das
+in der Kopfzeile gezeigte Abrufalter. Die finale reale Probe nahm den nächsten
+Snapshot nach rund 244 Sekunden vollständig an. Firmware: `h4-ui-refresh`.

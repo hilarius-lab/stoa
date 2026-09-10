@@ -155,7 +155,8 @@ alle Segmente genau einmal logisch zustellen und serverseitig vollständig verar
 
 - atomarer REST-Snapshotcache und capability-gesteuertes Polling
 - E-Paper-Renderer für eine bewusst kleine Teilmenge des festen Katalogs
-- kompakte Kartenschlagzeilen mit Art-/Statussymbolen und knapper Vorschau
+- kompakte Kartenschlagzeilen mit Art-/Statussymbolen und knapper Vorschau;
+  offene Taskkarten lassen das redundante `open` in der Übersicht weg
 - monochrome Abbildung von Farb-/Rahmenrollen nach `docs/DASHBOARD_UI.md`
 - echtes Fensterupdate im regulären Zeichenpfad: Partial Refresh auf das
   geänderte Rechteck begrenzen, ohne den Controller zurückzusetzen. Der
@@ -194,19 +195,25 @@ als lokale fünfte Ansicht samt inhaltsarmer Diagnose implementiert; Build,
 Flash und reale Navigation-/Lesbarkeitsprobe sind grün. Hotspoteinstieg,
 Mehrnetzprofile und Rückfall sind mit zwei realen Netzen bestätigt. Der
 bereinigte, rotierte SD-Logsink samt Viewer ist implementiert, gebaut und
-geflasht; SD-Schreibung, Darstellung und Rückkehr sind real bestätigt. Eine
-spätere reale Probe meldete die vorhandene Scrollfunktion jedoch als
-wirkungslos; diese UI-Regression ist wieder offen.
+geflasht; SD-Schreibung, Darstellung und Rückkehr sind real bestätigt. Die
+später als wirkungslos gemeldete Scrollbewegung erhält nun eine gemeinsame,
+hosttestbare Grenzberechnung und die sichtbare Fensterangabe
+`erste–letzte / gesamt`; die erneute reale Sichtprobe folgt. Der gesunde
+Dashboardabruf ist unabhängig vom zweistündigen Cachelimit auf höchstens fünf
+Minuten Abstand gedeckelt, manueller Sync bleibt bestehen.
 Details stehen in `docs/DASHBOARD_UI.md`.
 
 Vor dem nächsten Auto-Modus-Schritt A05 wird die reale A04-Listenabnahme
-stabilisiert: Die eigene Listenansicht erhält bis zu zehn statt drei Karten,
-reine Listenerstellung wird gegen gleichnamige aktive Listen dedupliziert und
-ein über mehrere STT-Chunks verteilter Satz kann gleichzeitig einen
-Listencontainer und sein Item erzeugen. Leere Listen aus einer fehlgedeuteten
-Aktion dürfen nicht entstehen. Die drei leeren „Nach dem M2“-Listen aus der
-Live-/Testprobe wurden am 10. September auf die älteste echte Liste
-konsolidiert; zwei Duplikate bleiben nachvollziehbar archiviert.
+abgeschlossen. Automatisiert umgesetzt sind bis zu zehn statt drei Karten in
+der eigenen Listenansicht, exakte Deduplizierung gleichnamiger aktiver Listen,
+gemeinsame Auswertung benachbarter STT-Chunks als Liste plus Item, Schutz vor
+leeren Listen aus deiktischen Aktionssätzen und vollständiges Fixture-Cleanup.
+Das vollständige M8-Gate ist grün. Vier reale Audioaufnahmen nach Worker-
+Neustart bestätigten Task, Aktivlisten-Deduplizierung und die über benachbarte
+Chunks verteilte Liste-plus-Item-Aussage bis zur sichtbaren ESP-Projektion. Die
+drei leeren „Nach dem M2“-Listen
+aus der ersten Live-/Testprobe wurden am 10. September auf die älteste echte
+Liste konsolidiert; zwei Duplikate bleiben nachvollziehbar archiviert.
 
 ## H5 – Meetingmodus
 

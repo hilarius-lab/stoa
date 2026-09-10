@@ -406,7 +406,7 @@ Zielauflösung.
 |---|---|
 | Note, Fact, Decision | Inhalt und Embedding als **Note** speichern. Ein Fact-Artefakt allein erzeugt keinen Fact-Claim. |
 | Task | Validierten normalisierten Bearbeitungsbeginn, Frist und Dringlichkeit verwenden oder zusätzliche Task-Feldprüfung durchführen. Ohne geeignete Frist oder positive Dringlichkeit zurückstellen. Bei Frist ohne explizites `work_start_at` setzt `save_task` dauerhaft den Beginn des ursprünglichen Event-/Sessiontags; bei bereits vergangener Frist spätestens auf den Fristzeitpunkt. |
-| List | Ab Konfidenz `0.85` eine Liste anlegen. |
+| List | Ab Konfidenz `0.85` eine aktive Liste mit exakt gleichem Titel wiederverwenden, sonst atomar eine neue Liste anlegen. Archivierte gleichnamige Listen blockieren eine neue aktive Liste nicht. |
 | List Item | Ab Konfidenz `0.85` und mit Zielthema die Listenauflösung/Deduplizierung verwenden. |
 | Bereits verknüpftes Artefakt | Vorhandenes Wissensobjekt zurückgeben; Claims-/Themenverknüpfungen ergänzen, kein reguläres erneutes Anlegen. |
 
@@ -782,7 +782,7 @@ Sie bilden aber noch kein gemeinsames Transaktionsprotokoll für „eine Eingabe
 - Der interne Live-Feed liefert Transkriptstatus, Session-Artefakte, Themen, offene Fragen und thematisch verknüpftes Wissen.
 - Die Auswahl relevanten Wissens im Live-Feed erfolgt über passende Themen und Konfidenzschwellen. Sie ist nicht gleichbedeutend mit automatischer Fragenbeantwortung oder beliebiger Suche zu jedem gesprochenen Satz.
 - Client-Dashboards projizieren gespeicherte Zustände in einen geschlossenen Komponenten-/Aktionskatalog. Surface-spezifische Darstellung und stabile öffentliche IDs gehören zur Projektion, nicht zur Wissensextraktion.
-- Die Projektion `esp32_epaper` komponiert Home aus offenen Rückfragen, handlungsrelevanten Processing-Hinweisen und höchstens drei nächsten Entitäten. Aus der bereits fachlich gefilterten und sortierten Taskmenge kommen zunächst höchstens zwei Tasks, dazu eine aktive Liste; freie Plätze füllt die verbleibende Art. Vollständige Task-/Listenbereiche bleiben eigene Geräteansichten. `alert` wird auf dem ESP als nicht fokussierbarer Hinweis gerendert; weiterhin nicht gezeichnete Komponenten und danach leere Sektionen werden entfernt. Technische offene Sessions bleiben dem paginierten Verlauf vorbehalten. Kopierte Home-Karten besitzen eigene stabile Komponenten-IDs und dieselbe `entity_ref`; die Firmware hält Fokus über neue Snapshots zuerst per Komponenten-ID, dann per Entity-Referenz und Positionsfallback. Listen tragen in Übersicht und Detail die Anzahl offener Einträge; die Detailantwort enthält nur aktive Items mit stabiler öffentlicher UUID sowie eine lesbare `content`-Fassung. `PUT /api/client/v1/entities/list-item/{id}/status` setzt `active|done` idempotent; erledigte Items fehlen in späteren Details. Die Default-Surface bleibt davon unberührt.
+- Die Projektion `esp32_epaper` komponiert Home aus offenen Rückfragen, handlungsrelevanten Processing-Hinweisen und höchstens drei nächsten Entitäten. Aus der bereits fachlich gefilterten und sortierten Taskmenge kommen zunächst höchstens zwei Tasks, dazu eine aktive Liste; freie Plätze füllt die verbleibende Art. Die eigenen Task- und Listenansichten erhalten jeweils bis zu zehn Karten. `alert` wird auf dem ESP als nicht fokussierbarer Hinweis gerendert; weiterhin nicht gezeichnete Komponenten und danach leere Sektionen werden entfernt. Technische offene Sessions bleiben dem paginierten Verlauf vorbehalten. Kopierte Home-Karten besitzen eigene stabile Komponenten-IDs und dieselbe `entity_ref`; die Firmware hält Fokus über neue Snapshots zuerst per Komponenten-ID, dann per Entity-Referenz und Positionsfallback. Listen tragen in Übersicht und Detail die Anzahl offener Einträge; die Detailantwort enthält nur aktive Items mit stabiler öffentlicher UUID sowie eine lesbare `content`-Fassung. `PUT /api/client/v1/entities/list-item/{id}/status` setzt `active|done` idempotent; erledigte Items fehlen in späteren Details. Die Default-Surface bleibt davon unberührt.
 - Eine ausdrücklich neu angelegte, noch leere Liste bleibt in der ESP-Listenansicht als `0 offen` sichtbar. Home berücksichtigt für „Als Nächstes“ weiterhin nur Listen mit mindestens einem offenen Item.
 - SSE signalisiert Zustandsänderungen; Snapshots bleiben für den Clientabgleich relevant.
 
@@ -824,7 +824,7 @@ Die folgende Liste konsolidiert das Gespräch und den tatsächlichen Integration
 | A01 | Gemeinsamer fachlicher Pfad für Text und Audio — **seit 2026-09-09 geschlossen:** Client-Text-Captures materialisieren einen Ingestion-Chunk, legen per Repair den Textjob an und laufen durch dieselbe Segmentierungs-, Artefakt-, Finalisierungs- und Promotionskette wie stabilisierte Audiotranskripte. | Text oder stabilisiertes Transkript → dieselbe Interpretation und Aktionslogik. |
 | A02 | Inhaltliche Intent-Erkennung statt Frageheuristik — **seit 2026-09-10 geschlossen:** Nach gemeinsamer semantischer Verarbeitung wird eine validierte, persistierte Entscheidung aus `memo|query|change|complete|archive` samt Zielhinweis und Mehrfachkennzeichen getroffen. Mutationsabsichten werden bis A06/A07 nicht ausgeführt und nicht als neues Wissen promotet. | Beliebiger Inhalt → Mitteilung, Merkauftrag, Änderungsauftrag, Erledigung, Frage oder gekennzeichnete Kombination. |
 | A03 | Mehrere Absichten pro Eingabe — **seit 2026-09-10 geschlossen:** Gemischte `auto`-Eingaben werden in höchstens zwölf geordnete, vollständige und segmentgebundene Quellspannen zerlegt. Reine Memo-Artefakte dürfen selektiv weiterlaufen, Frageanteile bilden einen eigenen Query-Input und Mutationen bleiben bis A06/A07 zurückgestellt. | Gemischter Absatz → geordnete, quellengebundene Teilinformationen und erkannte, noch nicht ausgeführte Aktionen. |
-| A04 | Einheitliche Typdefinitionen und Validierung — **strukturell seit 2026-09-10 umgesetzt, Liveabnahme wieder offen:** `content_types.py` definiert Artefakt-, Claim-, Question- und Segmenttypen sowie gemeinsame lokale Guards. Die reale Audioabnahme zeigte danach noch Chunk-übergreifende Liste-plus-Item-Verluste, doppelte gleichnamige Listen und eine leere Fehlklassifikation; diese Stabilisierungsarbeit geht A05 voraus. | Kandidat → konsistente Note-/Task-/List-/Claim-/Question-Einordnung in allen Pfaden, einschließlich kombinierter Liste-plus-Item-Aussagen über Chunkgrenzen. |
+| A04 | Einheitliche Typdefinitionen und Validierung — **strukturell und automatisiert seit 2026-09-10 umgesetzt, erneute Liveabnahme offen:** `content_types.py` definiert Artefakt-, Claim-, Question- und Segmenttypen sowie gemeinsame lokale Guards. Die nach der ersten Audioabnahme gefundenen Listenfehler sind automatisiert geschlossen: benachbarte Chunk-Fortsetzungen werden gemeinsam als Listeneintrag gewertet, gleichnamige aktive Container exakt dedupliziert und rein deiktische Aktionssätze nicht als leere Liste zugelassen. | Kandidat → konsistente Note-/Task-/List-/Claim-/Question-Einordnung in allen Pfaden, einschließlich kombinierter Liste-plus-Item-Aussagen über Chunkgrenzen. |
 | A05 | Wissen und Ziele vor Mutationen abgleichen | Neuer Inhalt + passende Suche → neu, identisch, ergänzend, widersprechend oder auf ein Objekt bezogen. |
 | A06 | Referenzen aus Sprache und Gespräch auflösen | „Das ist erledigt“, „dort noch Brot“ → eindeutige Objekt-ID oder offene Rückfrage. |
 | A07 | Gemeinsamer Aktionsplan und Executor | Validierte Interpretation → anlegen, ergänzen, ändern, abhaken, wieder öffnen oder archivieren. |
@@ -964,7 +964,7 @@ Diese Übersicht dokumentiert die Abweichungen, ohne ältere normative Dateien s
 | A01 | Geschlossen | `client_capture.py::create_capture` erzeugt Client-/Ingestion-Session, Chunk und Repair-Job; `segmentation.py::run_text_processing_once`, Artefaktworker und gemeinsamer wissenssicherer Abschluss sind danach für Text und stabilisiertes Audiotranskript identisch. `m8_capture_contract_test.py` vergleicht beide Quellen deterministisch und prüft Status/Recovery; das vollständige M8-Gate ist grün. |
 | A02 | Geschlossen | `capture_intent.py::ensure_session_intent_decision` klassifiziert nach Text-/Artefaktverarbeitung strukturiert und persistiert die Entscheidung. `client_sessions.py` materialisiert daraus das autoritative Ergebnis; Mutation und gemischte Eingabe sperren die gewöhnliche Promotion. Der verbleibende Memo-/Query-Hinweis während `processing` ist ausdrücklich nur Vertragskompatibilität. Der deterministische Regressionstest deckt Frage, Memo, Ändern, Erledigen/Listenpunktstreichen und Archivieren ab. |
 | A03 | Geschlossen | `capture_intent.py::ensure_session_intent_parts` persistiert geordnete Quellspannen und Segmentbindungen. Der Abschluss promotet nur ausschließlich memo-gebundene Artefakte, bildet den Query-Turn nur aus Frageanteilen und hält Mutationsteile zurück. `m8_capture_contract_test.py` prüft Reihenfolge, exakte Spannen, interne-ID-Abschirmung, selektive Promotion und Querytext. |
-| A04 | Strukturell umgesetzt, Liveabnahme offen | `content_types.py` trennt Artefakte, Claims und separat gespeicherte Questions und liefert die gemeinsamen Guards für Segmentierung, Router, Shadow, API-Schemas, Capture, Konsolidierung und LLM-Artefaktoperationen. Migration 0044 ergänzt `list_candidate`. Die Tests prüfen kurze zeitfreie Tasktitel, Tageszeitfenster sowie explizite und implizite Listenerstellung, deckten aber die später real beobachtete Chunkgrenze und eine frühe Cleanup-Assertion nicht ab. |
+| A04 | Automatisiert umgesetzt, erneute Liveabnahme offen | `content_types.py` trennt Artefakte, Claims und separat gespeicherte Questions und liefert die gemeinsamen Guards für Segmentierung, Router, Shadow, API-Schemas, Capture, Konsolidierung und LLM-Artefaktoperationen. Migration 0044 ergänzt `list_candidate`. Die Tests prüfen kurze zeitfreie Tasktitel, Tageszeitfenster, explizite/implizite Listenerstellung, beide Workerreihenfolgen einer Chunk-übergreifenden Fortsetzung, exakte Aktivlisten-Deduplizierung, Schutz vor deiktischen Leerlisten und Cleanup einschließlich neu erzeugtem Parent-Container. |
 | A05 | Offen | Capture-Deduplizierung (`dedupe.py`, `lists.py`) und Session-Promotion (`promotion.py`) besitzen keinen gemeinsamen Vorab-Abgleich. |
 | A06 | Offen | `reference_resolver.py::resolve_internal` ist nicht an allgemeine Sprachänderungen oder `context_ref`-Verarbeitung angeschlossen. |
 | A07 | Offen | Es gibt keinen eingangswegübergreifenden Aktionsplan/Executor; Capture und Artefaktoperationen mutieren über eigene Services. |
@@ -1180,8 +1180,9 @@ aktive Liste „Nach dem M2“; zusätzlich hinterließ
 Cleanup-Buchführung eine dritte leere Liste. Nach ausdrücklicher Freigabe
 bleibt die älteste echte Liste aktiv, die zweite echte Leerliste und die
 Testfixture wurden über den normalen Listenservice archiviert. Die
-ESP-Listenansicht projiziert derzeit wie allgemeine Sektionen höchstens drei
-Karten und kann dadurch etwa die Einkaufsliste nur verdrängen, nicht löschen.
+ESP-Listenansicht projizierte zu diesem Zeitpunkt wie allgemeine Sektionen
+höchstens drei Karten und konnte dadurch etwa die Einkaufsliste nur verdrängen,
+nicht löschen.
 
 Die Aufnahme „Nach dem Urlaub will ich Fotos sortieren. Schreib das auf eine
 Liste.“ belegte die eigentliche Integrationslücke: STT/Segmentierung trennte den
@@ -1193,7 +1194,7 @@ Wort-/Listenregeln funktionieren für Container und Item im selben Chunk, nicht
 für diese verteilte Kombination. Semantisches Nudging und Goldbeispiele laufen
 hier weiterhin nur im Shadow-Modus und waren nicht die unmittelbare Ursache.
 
-Vor A05 sind deshalb vier eng begrenzte Korrekturen fällig: Listenansicht bis
+Vor A05 waren deshalb vier eng begrenzte Korrekturen fällig: Listenansicht bis
 zehn Karten bei unverändert höchstens drei Home-Karten; Deduplizierung reiner
 Listenerstellung gegen aktive gleichnamige Container; gemeinsame Auswertung
 benachbarter Quellchunks für eine kombinierte Liste-plus-Item-Aussage; und
@@ -1201,3 +1202,21 @@ Cleanup-Registrierung vor jeder potenziell fehlschlagenden Testassertion. Erst
 eine neue reale Audioabnahme schließt A04 fachlich. Die oben beschriebene
 spätere STT-Unsicherheitslogik ist davon getrennt und wird jetzt nicht
 vorweggenommen.
+
+**Codekorrektur 2026-09-10 (A04-Listenstabilisierung, Liveabnahme noch offen):**
+Die E-Paper-Projektion lässt in der eigenen Listenansicht wie bei Tasks bis zu
+zehn Karten zu; Home bleibt auf drei priorisierte Karten begrenzt. Promotion
+reiner Listenartefakte verwendet unter einem titelgebundenen PostgreSQL-
+Advisory-Lock eine aktive Liste mit exakt gleichem Titel wieder. Ein rein
+deiktischer Satz wie „Schreib das auf eine Liste“ ist allein kein gültiger
+Listenkandidat. Liegt er im unmittelbar folgenden STT-Chunk, wertet der
+Artefaktworker beide bestätigten Quellsegmente gemeinsam als Listeneintrag aus
+und verwirft eine bereits aus dem ersten Chunk entstandene Task-/Listen-
+Fehlinterpretation; die Gegenrichtung hält den ersten Chunk zurück, sodass die
+Workerreihenfolge das Ergebnis nicht ändert. Das A04-DB-Gate registriert
+erzeugte Parent-Listen vor jeder möglichen Assertion beziehungsweise ermittelt
+sie über die Artefaktlinks. Gezielte Tests und das vollständige M8-Release-Gate
+einschließlich logischem Vier-Stunden-Soak sind grün. Der belastete Snapshot mit
+zehn Tasks, zehn Listen und drei Home-Karten misst 11.200 Byte; das Gate erlaubt
+höchstens 12.288 Byte bei realen 16.384-Byte-Puffern. Eine neue echte
+Audio→DB→ESP-Probe steht noch aus.

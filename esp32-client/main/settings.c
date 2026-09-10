@@ -157,6 +157,17 @@ int settings_log_visible_capacity(int top, int bottom) {
     return available > 0 ? available / LOG_ROW_HEIGHT : 0;
 }
 
+int settings_log_scroll_for(const char *text, int top, int bottom,
+                            int first_line, int delta) {
+    int total = settings_log_line_count(text);
+    int visible = settings_log_visible_capacity(top, bottom);
+    int limit = total > visible ? total - visible : 0;
+    int next = first_line + delta;
+    if (next < 0) next = 0;
+    if (next > limit) next = limit;
+    return next;
+}
+
 void settings_logs_draw(unsigned char *canvas, int top, int bottom,
                         const char *text, int first_line) {
     static const char title[] = "SD-Logs";
@@ -166,9 +177,18 @@ void settings_logs_draw(unsigned char *canvas, int top, int bottom,
     row_draw(canvas, y, "Zurück", NULL, true);
     int total = settings_log_line_count(text);
     int visible = settings_log_visible_capacity(top, bottom);
-    int limit = total > visible ? total - visible : 0;
-    if (first_line < 0) first_line = 0;
-    if (first_line > limit) first_line = limit;
+    first_line = settings_log_scroll_for(text, top, bottom, first_line, 0);
+    if (total) {
+        char position[32];
+        int last = first_line + visible;
+        if (last > total) last = total;
+        snprintf(position, sizeof(position), "%d–%d / %d",
+                 first_line + 1, last, total);
+        int width = text_measure(&text_font_preview, position,
+                                 strlen(position));
+        text_draw(canvas, &text_font_preview, LEFT + WIDTH - PAD - width,
+                  top + 10, position, strlen(position));
+    }
     if (!text || !text[0]) {
         static const char empty[] = "Noch keine Diagnoseereignisse.";
         text_draw(canvas, &text_font_preview, LEFT + PAD,

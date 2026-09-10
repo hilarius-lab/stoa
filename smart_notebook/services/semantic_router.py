@@ -85,7 +85,8 @@ def _display_phrase(value):
 def _contextual_list_parts(text):
     implicit = re.search(
         r"(?P<context>\bnach\s+(?:dem|der|den|einem|einer)\s+[^,.!?]+?)\s+"
-        r"(?:will|möchte)\s+ich\s+(?P<item>[^,.!?]+?)\s*,\s*"
+        r"(?:will|möchte)\s+ich\s+(?P<item>[^,.!?]+?)"
+        r"(?:\s*,\s*|\s*[.!?;]\s*)"
         r"(?:schreib|schreibe|setz|setze|pack|packe)\s+(?:das|es)\s+auf\s+eine\s+liste\b",
         text, re.I,
     )
