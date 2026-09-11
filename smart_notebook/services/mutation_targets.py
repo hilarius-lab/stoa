@@ -15,7 +15,7 @@ from psycopg.types.json import Jsonb
 from ..config import MUTATION_PART_MIN_CONFIDENCE,MUTATION_TARGET_MIN_CONFIDENCE,TIMEZONE
 from ..database import get_db_connection
 from .ai_tasks import get_ai_task_profile
-from .capture_intent import MUTATION_INTENTS
+from .capture_intent import MUTATION_INTENTS,get_session_intent_parts
 from .intelligence import create_question
 from .knowledge_preflight import get_session_knowledge_preflights
 
@@ -231,6 +231,35 @@ def get_session_mutation_target_resolutions_for_question(question_id):
     with get_db_connection() as c:
         rows=c.execute(RESOLUTION_SELECT+" WHERE r.clarification_question_id=%s ORDER BY r.id",(question_id,)).fetchall()
     return [_item(row) for row in rows]
+
+
+def mutation_target_clarification_options(question_id):
+    """Return only answers that explicitly identify an existing A05 candidate.
+
+    The public option contains display text, never the internal candidate key.
+    Selecting it still travels through the normal clarification capture and is
+    resolved against the persisted candidate snapshot.
+    """
+    resolutions=get_session_mutation_target_resolutions_for_question(question_id)
+    if len(resolutions)!=1:return []
+    resolution=resolutions[0]
+    if resolution["status"] in {"resolved","cancelled"}:return []
+    assessment=next((item for item in get_session_knowledge_preflights(resolution["session_id"])
+                     if item["id"]==resolution["preflight_assessment_id"]),None)
+    if not assessment:return []
+    part=next((item for item in get_session_intent_parts(resolution["session_id"])
+        if item["id"]==resolution["intent_part_id"]),None)
+    if not part:return []
+    allowed=set(resolution["candidate_keys"])
+    candidates=[item for item in assessment["candidate_refs"]
+                if item["key"] in allowed and _compatible(part,item["type"])]
+    if "low_intent_confidence" in resolution["reason_codes"] and len(candidates)==1:
+        return [{"label":"Ja","content":"Ja"},{"label":"Nein","content":"Nein"}]
+    labels=[_candidate_label(item) for item in candidates[:3]]
+    normalized=[_normalized(label) for label in labels]
+    if not labels or any(not label for label in normalized) or len(set(normalized))!=len(normalized):
+        return []
+    return [{"label":label,"content":label} for label in labels]
 
 
 def _clarification_text(part,candidates,decision):

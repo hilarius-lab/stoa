@@ -59,6 +59,8 @@ async def main_async():
     confirm_question,confirm_public=_question_public(confirm_session)
     detail=get_dashboard_entity("question",confirm_public)
     assert detail["action"]["type"]=="submit_capture" and detail["action"]["params"]["content"]=="Ja",detail
+    assert detail["action"]["params"]["options"]==[
+        {"label":"Ja","content":"Ja"},{"label":"Nein","content":"Nein"}],detail
     assert detail["action"]["params"]["context_ref"]=={
         "type":"clarification","id":str(confirm_public),"answer_source":"suggested"},detail
     child=_answer_session(confirm_public,"Ja")
@@ -88,7 +90,9 @@ async def main_async():
     _correction_question,correction_public=_question_public(correction_session)
     correction_detail=get_dashboard_entity("question",correction_public)
     assert correction_detail["action"]["type"]=="submit_capture"
-    assert "content" not in correction_detail["action"]["params"],correction_detail
+    assert correction_detail["action"]["params"]["options"]==[
+        {"label":"Frühlingsurlaub","content":"Frühlingsurlaub"},
+        {"label":"Herbsturlaub","content":"Herbsturlaub"}],correction_detail
     correction_child=_answer_session(correction_public,"Ich meine den Herbsturlaub.")
     corrected=await resolve_clarification_answer(correction_child["ingestion_session_id"],
         {"type":"clarification","id":str(correction_public)},"Ich meine den Herbsturlaub.","deterministic")

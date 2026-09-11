@@ -1,5 +1,17 @@
 # Änderungen
 
+## 2026-09-11 – Mehrere feste Antworten auf Rückfragen
+
+- Bestätigungsfragen können „Ja/Nein“, mehrdeutige Mutationsziele bis zu drei
+  unterscheidbare A05-Kandidaten als feste Antworten projizieren. Interne IDs
+  werden nicht übertragen; der ältere einzelne Vorschlag bleibt als Fallback.
+- Rückfragedetails zeichnen „Zurück“ und die Vorschläge vertikal. Hoch/Runter
+  bewegt den Fokus, Mitteldruck journalisiert ausschließlich die gewählte
+  Antwort; BOOT bleibt jederzeit die freie kontextgebundene Alternative.
+- Gezieltes W05-Gate, vollständiges M8 mit 25 Prüfungen, ESP-IDF-Build, Flash
+  auf COM9 und Contractstatus sind grün. Firmwarekennung: `h4-w05.2`; die reale
+  Sicht-/Auswahlprobe steht noch aus.
+
 ## 2026-09-11 – W05-Antworten aus der Rückfragedetailansicht
 
 - Offene Question-Details tragen einen festen `clarification`-Kontext. Eine

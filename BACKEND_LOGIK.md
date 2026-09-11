@@ -1433,16 +1433,19 @@ Fortsetzung ihres abhängigen Teils bleiben ausdrücklich W05.
 
 Question-Details tragen für offene Fragen eine bestehende `submit_capture`-
 Aktion mit öffentlichem `clarification`-Kontext. Bei einer A08-Bestätigung mit
-genau einem gespeicherten Kandidaten darf der Server zusätzlich den festen
-Vorschlag „Ja“ liefern; ohne festen Vorschlag bleibt die gebundene freie
-Audioantwort verfügbar. `clarification_answer_attempts` hält Antwortsession,
+genau einem gespeicherten Kandidaten liefert der Server „Ja/Nein“; bei einer
+A06-Mehrdeutigkeit bis zu drei unterscheidbare Kandidatenbezeichnungen aus dem
+persistierten A05-Snapshot. Interne Kandidatenschlüssel werden nicht
+übertragen, und ohne sicheren Vorschlag bleibt die gebundene freie Audioantwort
+verfügbar. `clarification_answer_attempts` hält Antwortsession,
 Quelle, Ergebnis und Wiederholungszustand. Die Auflösung verwendet nur den
 schon persistierten A05-Kandidatensnapshot, aktualisiert denselben A06-/A07-
 Datensatz und führt abgeschlossene Aktionen bei Wiederholung nicht erneut aus.
 Das ursprüngliche Capture-Ergebnis wird anschließend neu materialisiert.
 
 Die ESP-Firmware ab `h4-w05` persistiert den Question-Kontext im Audiojournal und
-sendet vorgeschlagene Antworten mit einer über Neustarts stabilen Capture-ID.
+sendet vorgeschlagene Antworten mit einer über Neustarts stabilen Capture-ID;
+`h4-w05.2` rendert bis zu drei feste Optionen als vertikalen Auswahlring.
 Das dedizierte Gate prüft vorgeschlagenes „Ja“, freie Korrektur zwischen zwei
 Listen, Frageabschluss, Eltern-/Kindresultate und Idempotenz; das vollständige
 M8-Gate mit 25 Prüfungen, Firmwarebuild, Flash auf COM9 und Contractstatus sind

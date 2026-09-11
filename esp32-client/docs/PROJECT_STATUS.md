@@ -64,7 +64,7 @@ Stand: 2026-09-11, W05-Mutationsantwort real abgenommen
   und erst nach passender `200`-Antwort entfernt. Toggle, Zurücktoggeln,
   Verlassen und das serverseitige Verschwinden von „Hafermilch“ sind physisch
   abgenommen.
-- Der letzte geflashte Firmwarebuild (`h4-w05.1`) war grün. Der
+- Der letzte geflashte Firmwarebuild (`h4-w05.2`) war grün. Der
   serielle Endstatus meldete `compatible=1` und einen weiterhin grünen
   Contract-Gate-Zähler.
 - A07 führt eindeutig aufgelöste Sprachmutationen serverseitig idempotent aus:
@@ -93,6 +93,10 @@ Stand: 2026-09-11, W05-Mutationsantwort real abgenommen
   dauerhaft beantwortete Karte sofort aus; Build, Flash, Contractstatus und
   der freie Audioweg „Nein“ sind real bestätigt. Die Antwort brach nur die
   gebundene Aktion ab und ließ beide Zielobjekte unverändert.
+  `h4-w05.2` ergänzt bis zu drei vertikal auswählbare Serveroptionen: „Ja/Nein“
+  bei Bestätigungen oder unterscheidbare A05-Kandidaten bei Mehrdeutigkeit.
+  Vollständiges M8, Build, Flash und Contractstatus sind grün; die reale
+  Sicht-/Auswahlprobe dieser Ergänzung steht noch aus.
 
 ## Systemgrenze
 
@@ -192,7 +196,7 @@ einem zweiten realen Netz funktionieren; der Live-Wechsel erhält das bereits
 geladene Dashboard. Der Logsink ist gebaut, geflasht und auf der realen
 SD-Karte beschrieben; Inhalt und Rückkehr sind sichtbar, Scrollen erhält mit
 diesem Build eine eindeutig sichtbare Fensterposition. Der aktuelle
-Firmwarebezeichner im Quellstand ist `h4-w05.1`; die Akkuanzeige ergänzt
+Firmwarebezeichner im Quellstand ist `h4-w05.2`; die Akkuanzeige ergänzt
 weiterhin die bestehende Oberfläche und behauptet nicht den H5-Meetingmodus.
 
 ## Noch offen bis zum produktiven Betrieb

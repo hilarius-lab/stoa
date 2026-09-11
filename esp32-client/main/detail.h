@@ -5,20 +5,20 @@
 // tested on the host. The caller supplies already resolved strings.
 #include <stdbool.h>
 
+#define DETAIL_ACTION_MAX 3
+
 typedef struct {
     const char *title;
     const char *reason;  /* reason_text, between title and body; may be NULL */
     const char *body;    /* content, or the question for a query */
     const char *answer;  /* answer, when one exists; may be NULL */
-    const char *meta;    /* kind and status, drawn at the foot; hidden when action_label is set */
-    /* Set only when the entity offers a mutation beyond navigation — today,
-     * "Erledigt" on an open task's `complete_task`. When present it replaces
-     * the meta line with two selectable elements, "Zurück" and this label;
-     * `action_focused` says which one currently carries the focus. Absent for
-     * every other entity, which keeps the plain "short press is always back"
-     * behaviour unchanged there. */
-    const char *action_label;
-    bool action_focused;
+    const char *meta;    /* kind and status, hidden when actions are present */
+    /* Focus 0 is "Zurück"; 1..action_count select server-projected answers or
+     * the one closed object action. Labels are display-only and bounded here;
+     * the caller resolves the selected index back to its fixed content. */
+    const char *action_labels[DETAIL_ACTION_MAX];
+    int action_count;
+    int action_focus;
 } detail_content;
 
 /* Draw the detail between the logical rows `top` and `bottom`, starting at

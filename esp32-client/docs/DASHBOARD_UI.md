@@ -361,6 +361,12 @@ begrenzten Aktionen.
 - untere Taste: nächster Textabschnitt
 - kurze mittlere Betätigung: zurück zur Übersicht und zur zuvor fokussierten Karte
 
+Besitzt ein Detail eine geschlossene Aktion, ersetzt ein vertikaler Auswahlring
+das Blättern: Fokus `0` ist „Zurück“, danach folgen bis zu drei kurze
+serverseitige Optionen. Die Mitteltaste sendet nur die fokussierte Option. Eine
+Rückfrage kann unabhängig davon jederzeit per BOOT-Aufnahme frei beantwortet
+werden; bloßes Anzeigen oder Fokussieren zählt nicht als Antwort.
+
 Geblättert wird um genau eine Seite, deren Zeilenzahl aus demselben Layout
 stammt, das auch zeichnet. Der Statuswert wird als Servertoken angezeigt; er ist
 Serverinhalt und wird nicht übersetzt. Die Artbezeichnung daneben ist dagegen

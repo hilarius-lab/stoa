@@ -1165,6 +1165,14 @@ Build, Flash und Contractstatus sind grün. Die reale freie BOOT-Antwort „Nein
 auf Frage 46 wurde als `audio_capture` gespeichert, brach ausschließlich die
 gebundene Aktion ab, ließ die beiden möglichen Listen unverändert und blendete
 die Karte unmittelbar aus.
+Der Folgebuild `h4-w05.2` nimmt bis zu drei feste Antwortoptionen entgegen und
+zeichnet sie unter „Zurück“ vertikal. Der Server bietet für die eindeutige
+A08-Bestätigung „Ja/Nein“ und für eine A06-Mehrdeutigkeit bis zu drei
+unterscheidbare Bezeichnungen aus dem persistierten A05-Snapshot an; interne
+Kandidaten-IDs verlassen das Backend nicht. Der erste Eintrag bleibt zusätzlich
+in den bisherigen Einzelfeldern erhalten, damit ältere Firmware degradiert
+nutzbar bleibt. Gezieltes Gate, vollständiges M8, Firmwarebuild, Flash und
+Contractstatus sind grün; die reale Sicht-/Auswahlprobe steht noch aus.
 Die allgemeine Wissensneubewertung für andere
 Question-Arten und die freie nachträgliche Zuordnung einer kontextlosen Memo
 bleiben spätere W05-Arbeit.

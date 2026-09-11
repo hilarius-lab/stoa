@@ -11,7 +11,7 @@ from .intelligence import answer_question,get_question
 from .mutation_actions import (ensure_session_mutation_actions,
     get_session_mutation_actions_for_question,resume_mutation_action)
 from .mutation_targets import (get_session_mutation_target_resolutions_for_question,
-    resume_mutation_target_resolution)
+    mutation_target_clarification_options,resume_mutation_target_resolution)
 
 
 ATTEMPT_SELECT="""SELECT id,question_id,answer_session_id,answer_text,answer_source,status,result,
@@ -46,10 +46,12 @@ def clarification_detail_action(question_id,public_id,status):
     """Use the existing closed submit_capture action; params carry its fixed context."""
     if status!="open":return None
     params={"mode":"auto","context_ref":{"type":"clarification","id":str(public_id)}}
-    resolutions=get_session_mutation_target_resolutions_for_question(question_id)
-    if len(resolutions)==1 and "low_intent_confidence" in resolutions[0]["reason_codes"] and \
-       len(resolutions[0]["candidate_keys"])==1:
-        params.update({"label":"Ja","content":"Ja","answer_source":"suggested"})
+    options=mutation_target_clarification_options(question_id)
+    if options:
+        # label/content keep older clients useful; current clients prefer the
+        # bounded options array and therefore do not render the first twice.
+        params.update({"label":options[0]["label"],"content":options[0]["content"],
+                       "options":options,"answer_source":"suggested"})
         params["context_ref"]["answer_source"]="suggested"
     return {"type":"submit_capture","params":params}
 

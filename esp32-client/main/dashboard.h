@@ -31,26 +31,25 @@ int dashboard_remap_focus(const char *old_json, const char *new_json,
 
 /* Draw an entity response as the detail view. Returns the number of body text
  * lines, and reports through `page` how many of them fit at once. Both come
- * from the same layout the drawing uses. `action_focused` only matters when
- * the entity's own `action.type` is one the ESP implements (`complete_task`
- * or a fixed suggested `submit_capture`); the caller owns that focus. */
+ * from the same layout the drawing uses. `action_focus` is 0 for "Zurück" or
+ * 1..N for one of the bounded actions returned below. */
 int dashboard_entity_draw(unsigned char *canvas, const char *json,
                           int top, int bottom, int line_offset, int *page,
-                          bool action_focused);
+                          int action_focus);
 
-/* Whether the entity response names an action this build implements, so the
- * caller can decide whether the up/down buttons pick between "Zurück" and the
- * action instead of paging — see docs/API_INTERACTION.md. */
+/* Whether/how many actions this build implements, so the caller can choose
+ * between "Zurück" and the bounded options instead of paging. */
 bool dashboard_entity_has_action(const char *json);
+int dashboard_entity_action_count(const char *json);
 
 /* Extract the closed clarification context announced by a question detail.
  * A context without a suggested answer still binds the next BOOT recording;
- * a suggested capture additionally returns the fixed text for the middle
- * button. Nothing here infers business meaning from the question text. */
+ * a suggested capture additionally returns the fixed text at `option_index`.
+ * Nothing here infers business meaning from the question text. */
 bool dashboard_entity_capture_context(const char *json, char *question_id,
                                       size_t capacity);
-bool dashboard_entity_suggested_capture(const char *json, char *content,
-                                        size_t content_capacity,
+bool dashboard_entity_suggested_capture(const char *json, int option_index,
+                                        char *content, size_t content_capacity,
                                         char *question_id, size_t id_capacity);
 
 /* Remove matching cards from a mutable snapshot and prune sections that become

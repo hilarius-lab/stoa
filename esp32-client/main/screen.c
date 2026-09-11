@@ -340,7 +340,7 @@ static void draw_detail(unsigned char *buffer) {
     }
     int page = 1;
     int total = dashboard_entity_draw(buffer, copy, BODY_TOP, BODY_BOTTOM,
-                                      detail_line, &page, detail_action_focus == 1);
+                                      detail_line, &page, detail_action_focus);
     ESP_LOGI("detail", "line=%d of %d page=%d has_action=%d id=%s",
              detail_line, total, page, dashboard_entity_has_action(copy), detail_entity_id);
     free(copy);
@@ -351,7 +351,7 @@ static void page_detail(int delta) {
     if (!copy) return;
     if (!entity_take(copy, ENTITY_MAX)) { free(copy); return; }
     int page = 1;
-    int total = dashboard_entity_draw(NULL, copy, BODY_TOP, BODY_BOTTOM, 0, &page, false);
+    int total = dashboard_entity_draw(NULL, copy, BODY_TOP, BODY_BOTTOM, 0, &page, 0);
     free(copy);
     int next = detail_line + delta * page;
     if (next > total - page) next = total - page;
@@ -407,12 +407,12 @@ static bool detail_current_has_action(void) {
     return has;
 }
 
-static bool activate_detail_action(void) {
+static bool activate_detail_action(int option_index) {
     char *copy = heap_caps_malloc(ENTITY_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!copy || !entity_take(copy, ENTITY_MAX)) { free(copy); return false; }
     char content[192], question_id[40];
     bool suggested = dashboard_entity_suggested_capture(
-        copy, content, sizeof(content), question_id, sizeof(question_id));
+        copy, option_index, content, sizeof(content), question_id, sizeof(question_id));
     free(copy);
     if (suggested) {
         if (!api_client_submit_capture(content, question_id)) {
@@ -957,22 +957,23 @@ static void screen_task(void *unused) {
                  * selection, and only a dashboard-family view (dashboard,
                  * tasks, lists) moves the card focus. */
                 if (detail_open) {
-                    /* An entity with an action trades paging for choosing
-                     * between "Zurück" and it — agreed as the simpler of two
-                     * options, since a page-then-choose ring is harder to get
-                     * right without hardware to check it against, and the
-                     * entities that carry an action today are short enough
-                     * that paging was never doing anything there anyway. */
+                    /* An entity with actions trades paging for choosing
+                     * between "Zurück" and its bounded server options. */
                     bool has_action = detail_current_has_action();
                     if (detail_list_mode) {
                         move_list_detail_focus(message.focus_delta);
                         ESP_LOGI("detail", "diag: list focus=%d", detail_list_focus);
                     } else if (has_action) {
+                        char *copy = heap_caps_malloc(ENTITY_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+                        int action_count = copy && entity_take(copy, ENTITY_MAX)
+                            ? dashboard_entity_action_count(copy) : 0;
+                        free(copy);
                         int next = detail_action_focus - message.focus_delta;
                         if (next < 0) next = 0;
-                        if (next > 1) next = 1;
+                        if (next > action_count) next = action_count;
                         detail_action_focus = next;
-                        ESP_LOGI("detail", "diag: has_action=1 action_focus=%d", detail_action_focus);
+                        ESP_LOGI("detail", "diag: actions=%d action_focus=%d",
+                                 action_count, detail_action_focus);
                     } else {
                         page_detail(message.focus_delta);
                         ESP_LOGI("detail", "diag: has_action=0 (paged instead)");
@@ -994,8 +995,8 @@ static void screen_task(void *unused) {
                  * lands, through screen_entity_received like any other fetch. */
                 if (detail_list_mode)
                     activate_list_detail();
-                else if (detail_action_focus == 1 && detail_current_has_action())
-                    activate_detail_action();
+                else if (detail_action_focus > 0 && detail_current_has_action())
+                    activate_detail_action(detail_action_focus - 1);
                 else {
                     detail_open = detail_waiting = false;   /* back to the overview */
                     recorder_set_clarification_context(NULL);

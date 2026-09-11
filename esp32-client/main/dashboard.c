@@ -268,27 +268,62 @@ static bool capture_context_for(const cJSON *root, const char **id) {
     return true;
 }
 
-/* Action labels are server-owned, but only for the closed action vocabulary
- * this build implements. A bare submit_capture is intentionally not focusable:
- * it binds BOOT recording, while a label plus fixed content makes a selectable
- * suggested answer. */
-static const char *action_label_for(const cJSON *root) {
-    const cJSON *action = cJSON_GetObjectItemCaseSensitive(root, "action");
-    const char *type = action ? string_of(action, "type") : NULL;
-    if (type && strcmp(type, "complete_task") == 0) return "Erledigt";
-    const cJSON *params = capture_params_for(root);
+static int capture_option_count(const cJSON *params) {
+    const cJSON *options = params
+        ? cJSON_GetObjectItemCaseSensitive(params, "options") : NULL;
+    if (cJSON_IsArray(options)) {
+        int count = cJSON_GetArraySize(options);
+        if (count < 1 || count > DETAIL_ACTION_MAX) return 0;
+        for (int index = 0; index < count; index++) {
+            const cJSON *option = cJSON_GetArrayItem(options, index);
+            if (!cJSON_IsObject(option) || !string_of(option, "label") ||
+                !string_of(option, "label")[0] || !string_of(option, "content") ||
+                !string_of(option, "content")[0]) return 0;
+        }
+        return count;
+    }
     const char *label = params ? string_of(params, "label") : NULL;
     const char *content = params ? string_of(params, "content") : NULL;
-    if (label && label[0] && content && content[0] && capture_context_for(root, NULL))
-        return label;
-    return NULL;
+    return label && label[0] && content && content[0] ? 1 : 0;
+}
+
+/* Labels are server-owned, but only for the closed action vocabulary this
+ * build implements. Options are bounded and each carries fixed answer text;
+ * a bare submit_capture only binds BOOT recording and is not focusable. */
+static const char *action_label_for(const cJSON *root, int option_index) {
+    const cJSON *action = cJSON_GetObjectItemCaseSensitive(root, "action");
+    const char *type = action ? string_of(action, "type") : NULL;
+    if (type && strcmp(type, "complete_task") == 0)
+        return option_index == 0 ? "Erledigt" : NULL;
+    const cJSON *params = capture_params_for(root);
+    if (!params || !capture_context_for(root, NULL) || option_index < 0 ||
+        option_index >= capture_option_count(params)) return NULL;
+    const cJSON *options = cJSON_GetObjectItemCaseSensitive(params, "options");
+    if (cJSON_IsArray(options))
+        return string_of(cJSON_GetArrayItem(options, option_index), "label");
+    return option_index == 0 ? string_of(params, "label") : NULL;
+}
+
+static int action_count_for(const cJSON *root) {
+    const cJSON *action = cJSON_GetObjectItemCaseSensitive(root, "action");
+    const char *type = action ? string_of(action, "type") : NULL;
+    if (type && strcmp(type, "complete_task") == 0) return 1;
+    const cJSON *params = capture_params_for(root);
+    return params && capture_context_for(root, NULL) ? capture_option_count(params) : 0;
 }
 
 bool dashboard_entity_has_action(const char *json) {
     cJSON *root = cJSON_Parse(json);
-    bool has = cJSON_IsObject(root) && action_label_for(root) != NULL;
+    bool has = cJSON_IsObject(root) && action_count_for(root) > 0;
     cJSON_Delete(root);
     return has;
+}
+
+int dashboard_entity_action_count(const char *json) {
+    cJSON *root = cJSON_Parse(json);
+    int count = cJSON_IsObject(root) ? action_count_for(root) : 0;
+    cJSON_Delete(root);
+    return count;
 }
 
 bool dashboard_entity_capture_context(const char *json, char *question_id,
@@ -303,17 +338,24 @@ bool dashboard_entity_capture_context(const char *json, char *question_id,
     return valid;
 }
 
-bool dashboard_entity_suggested_capture(const char *json, char *content,
-                                        size_t content_capacity,
+bool dashboard_entity_suggested_capture(const char *json, int option_index,
+                                        char *content, size_t content_capacity,
                                         char *question_id, size_t id_capacity) {
     if (!content || !content_capacity || !question_id || !id_capacity) return false;
     content[0] = question_id[0] = 0;
     cJSON *root = cJSON_Parse(json);
     const cJSON *params = cJSON_IsObject(root) ? capture_params_for(root) : NULL;
-    const char *value = params ? string_of(params, "content") : NULL;
+    const cJSON *options = params
+        ? cJSON_GetObjectItemCaseSensitive(params, "options") : NULL;
+    const char *value = NULL;
+    if (cJSON_IsArray(options) && option_index >= 0 &&
+        option_index < capture_option_count(params))
+        value = string_of(cJSON_GetArrayItem(options, option_index), "content");
+    else if (!cJSON_IsArray(options) && option_index == 0)
+        value = params ? string_of(params, "content") : NULL;
     const char *id = NULL;
     bool valid = value && value[0] && strlen(value) < content_capacity &&
-                 id_capacity >= 37 && action_label_for(root) &&
+                 id_capacity >= 37 && action_label_for(root, option_index) &&
                  capture_context_for(root, &id);
     if (valid) {
         snprintf(content, content_capacity, "%s", value);
@@ -369,7 +411,7 @@ bool dashboard_remove_entity(char *json, size_t capacity,
 
 int dashboard_entity_draw(unsigned char *canvas, const char *json,
                           int top, int bottom, int line_offset, int *page,
-                          bool action_focused) {
+                          int action_focus) {
     cJSON *root = cJSON_Parse(json);
     if (!cJSON_IsObject(root)) { cJSON_Delete(root); if (page) *page = 1; return 0; }
 
@@ -386,15 +428,18 @@ int dashboard_entity_draw(unsigned char *canvas, const char *json,
     if (!body) body = string_of(root, "content");
     if (!body) body = string_of(root, "description");
 
+    int action_count = action_count_for(root);
     detail_content detail = {
         .title = string_of(root, "title"),
         .reason = string_of(root, "question") ? string_of(root, "description") : NULL,
         .body = body,
         .answer = string_of(root, "answer"),
         .meta = meta,
-        .action_label = action_label_for(root),
-        .action_focused = action_focused,
+        .action_count = action_count,
+        .action_focus = action_focus,
     };
+    for (int index = 0; index < action_count && index < DETAIL_ACTION_MAX; index++)
+        detail.action_labels[index] = action_label_for(root, index);
     if (page) *page = detail_page_lines(&detail, top, bottom);
     int total = canvas ? detail_draw(canvas, &detail, top, bottom, line_offset)
                        : 0;

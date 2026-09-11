@@ -285,9 +285,13 @@ Eine offene Question-Detailantwort liefert bei `submit_capture` immer
 `params.context_ref={type:"clarification",id:…}`. Die Firmware bindet damit
 die nächste gültige BOOT-Aufnahme bereits im SD-Journal an genau diese Frage;
 zu kurze verworfene Aufnahmen verbrauchen die Bindung nicht. Optional kann die
-Aktion zusätzlich ein festes `label` und `content` enthalten. Nur dann ist sie
-mit den Hoch-/Runtertasten neben „Zurück“ fokussierbar und wird per Mitteldruck
-ausdrücklich abgesendet. Der aktuelle sichere Vorschlag lautet „Ja“.
+Aktion zusätzlich bis zu drei feste Einträge in `options` mit jeweils `label`
+und `content` enthalten. Bestätigungen dürfen „Ja“ und „Nein“ anbieten;
+mehrdeutige Ziele nur die unterscheidbaren Kandidaten des gespeicherten
+A05-Snapshots. Die Optionen stehen unter „Zurück“ in einem vertikalen
+Auswahlring und werden erst per Mitteldruck ausdrücklich abgesendet. Ein
+paralleles `label`/`content` des ersten Eintrags hält ältere Firmware nutzbar;
+aktuelle Builds bevorzugen `options` und zeigen nichts doppelt.
 
 Vorgeschlagene Antworten werden vor dem Schließen der Detailansicht mit einer
 einmal erzeugten `client_capture_id` in NVS gespeichert. Der Worker wiederholt
