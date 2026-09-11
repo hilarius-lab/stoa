@@ -134,6 +134,7 @@ def main():
     assert again==actions,"completed execution must be idempotent"
     result=_materialize_capture_result(client_id)
     assert result["action_status"]=="completed" and result["actions"][0]["status"]=="completed",result
+    assert result["action_outcomes"][0]["status"]=="completed",result
     assert all("target_id" not in item and "before_state" not in item and "after_state" not in item
                for item in result["actions"]),result
 

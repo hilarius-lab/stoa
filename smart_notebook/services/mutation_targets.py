@@ -11,7 +11,7 @@ from uuid import UUID
 import httpx
 from psycopg.types.json import Jsonb
 
-from ..config import MUTATION_TARGET_MIN_CONFIDENCE,TIMEZONE
+from ..config import MUTATION_PART_MIN_CONFIDENCE,MUTATION_TARGET_MIN_CONFIDENCE,TIMEZONE
 from ..database import get_db_connection
 from .ai_tasks import get_ai_task_profile
 from .capture_intent import MUTATION_INTENTS
@@ -23,7 +23,7 @@ STATUSES={"resolved","ambiguous","unresolved"}
 TARGET_TYPES={"note","task","list","list_item"}
 REASON_CODES={"context_reference","single_candidate","model_selection","no_candidates",
               "ambiguous_candidates","low_confidence","incompatible_context","stale_context",
-              "weak_reference"}
+              "weak_reference","low_intent_confidence"}
 INTENT_TARGETS={"change":TARGET_TYPES,"complete":{"task","list_item"},
                 "archive":TARGET_TYPES}
 
@@ -153,9 +153,12 @@ async def _resolve_with_llm(part,candidates):
     return _validate_model_result(json.loads(response.json()["choices"][0]["message"]["content"]),len(candidates)),f"{profile['provider']}:{profile['model']}"
 
 
-def _clarification_text(part,candidates,status):
+def _clarification_text(part,candidates,decision):
     target=" ".join((part["target_text"] or part["source_text"]).split())[:180]
-    if status=="ambiguous" and candidates:
+    if "low_intent_confidence" in decision["reason_codes"]:
+        action={"archive":"archiviert","complete":"als erledigt markiert","change":"geändert"}[part["primary_intent"]]
+        return f"Soll „{target}“ wirklich {action} werden?"
+    if decision["status"]=="ambiguous" and candidates:
         labels=[_candidate_label(item) for item in candidates[:3]]
         return f"Welches Ziel meinst du mit „{target}“: "+" oder ".join(f"„{label}“" for label in labels)+"?"
     return f"Welches Objekt meinst du mit „{target}“?"
@@ -165,7 +168,7 @@ def _persist(part,assessment,decision,candidates,source):
     target=candidates[decision["selected_candidate_index"]-1] if decision["status"]=="resolved" else None
     question=None
     if target is None:
-        question=create_question(part["session_id"],_clarification_text(part,candidates,decision["status"]),
+        question=create_question(part["session_id"],_clarification_text(part,candidates,decision),
             "implicit",max(.5,1-decision["confidence"]),.95,segment_ids=part.get("source_segment_ids") or [])
     now=datetime.now(TIMEZONE)
     with get_db_connection() as c:
@@ -195,7 +198,10 @@ async def ensure_session_mutation_target_resolutions(session_id,intent_parts,mod
         for item in assessment["candidate_refs"]:
             if _compatible(part,item["type"]) and item["key"] not in {x["key"] for x in candidates}:
                 candidates.append(item)
-        if context_candidate and _compatible(part,context_candidate["type"]):
+        if part["confidence"]<MUTATION_PART_MIN_CONFIDENCE:
+            decision={"status":"unresolved","selected_candidate_index":0,"confidence":part["confidence"],
+                      "reason_codes":["low_intent_confidence"]};source="policy"
+        elif context_candidate and _compatible(part,context_candidate["type"]):
             candidates=[context_candidate]+[item for item in candidates if item["key"]!=context_candidate["key"]]
             decision={"status":"resolved","selected_candidate_index":1,"confidence":1.0,
                       "reason_codes":["context_reference"]};source="context"

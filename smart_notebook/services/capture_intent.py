@@ -5,7 +5,7 @@ import json,re
 import httpx
 from psycopg.types.json import Jsonb
 
-from ..config import TIMEZONE
+from ..config import MUTATION_PART_MIN_CONFIDENCE,TIMEZONE
 from ..database import get_db_connection
 from ..prompts import CAPTURE_INTENT_SPLIT_SYSTEM_PROMPT,CAPTURE_INTENT_SYSTEM_PROMPT
 from .ai_tasks import get_ai_task_profile
@@ -14,9 +14,14 @@ from .ai_tasks import get_ai_task_profile
 INTENTS={"memo","query","change","complete","archive"}
 TARGET_TYPES={"none","unknown","note","task","list","list_item"}
 REASON_CODES={"asks_for_answer","adds_information","creates_object","modifies_existing",
-              "marks_done","removes_or_forgets","multiple_intents","uncertain_target"}
+              "marks_done","removes_or_forgets","multiple_intents","uncertain_target",
+              "tentative_action"}
 MUTATION_INTENTS={"change","complete","archive"}
 MAX_INTENT_PARTS=12
+
+
+def _tentative_action(text):
+    return bool(re.search(r"\b(vielleicht|eventuell|möglicherweise)\b|\bkönnte(?:st|n)?\b",text.casefold()))
 
 
 def _item(row):
@@ -63,8 +68,13 @@ def _validate_decision(raw,text):
         raise ValueError("Unknown or excessive intent reason codes")
     if intent in MUTATION_INTENTS and target_type=="none":raise ValueError("Mutation intent requires a target type")
     if intent in MUTATION_INTENTS and not target_text:raise ValueError("Mutation intent requires an exact target span")
+    reasons=list(dict.fromkeys(reasons))
+    if intent in MUTATION_INTENTS and _tentative_action(text):
+        confidence=min(float(confidence),max(0.0,MUTATION_PART_MIN_CONFIDENCE-.01))
+        if "tentative_action" not in reasons:reasons.append("tentative_action")
+    else:reasons=[reason for reason in reasons if reason!="tentative_action"]
     return {"primary_intent":intent,"target_type":target_type,"target_text":target_text,
-            "confidence":float(confidence),"multiple_intents_detected":multiple,"reason_codes":list(dict.fromkeys(reasons))}
+            "confidence":float(confidence),"multiple_intents_detected":multiple,"reason_codes":reasons}
 
 
 def deterministic_content_intent(text):
@@ -82,10 +92,13 @@ def deterministic_content_intent(text):
         intent="query";target_type="none";reasons=["asks_for_answer"]
     else:
         intent="memo";target_type="none";reasons=["adds_information"]
+    tentative=_tentative_action(text)
+    confidence=.6 if intent in MUTATION_INTENTS and tentative else 1.0
+    if tentative and intent in MUTATION_INTENTS:reasons.append("tentative_action")
     if multiple:reasons.append("multiple_intents")
     target_text=text.strip() if intent in MUTATION_INTENTS else ""
     return _validate_decision({"primary_intent":intent,"target_type":target_type,"target_text":target_text,
-        "confidence":1.0,"multiple_intents_detected":multiple,"reason_codes":reasons},text)
+        "confidence":confidence,"multiple_intents_detected":multiple,"reason_codes":reasons},text)
 
 
 async def classify_content_intent_with_llm(text,segments,artifacts):

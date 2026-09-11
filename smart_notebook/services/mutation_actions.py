@@ -324,3 +324,40 @@ def public_mutation_actions(actions):
              "target_type":item["target_type"],"status":item["status"],"confidence":item["confidence"],
              "clarification_required":item["status"]=="clarification_required","reason_codes":item["reason_codes"]}
             for item in actions]
+
+
+def public_mutation_part_outcomes(intent_parts,resolutions,actions):
+    """Combine A06/A07 state without exposing target, candidate, or audit IDs."""
+    by_resolution={item["intent_part_id"]:item for item in resolutions}
+    by_action={item["intent_part_id"]:item for item in actions}
+    outcomes=[]
+    for part in intent_parts:
+        if part["primary_intent"] not in {"change","complete","archive"}:continue
+        resolution=by_resolution.get(part["id"]);action=by_action.get(part["id"])
+        confidences=[part["confidence"]];reasons=list(part["reason_codes"])
+        if resolution:
+            confidences.append(resolution["confidence"]);reasons.extend(resolution["reason_codes"])
+        if action:
+            confidences.append(action["confidence"]);reasons.extend(action["reason_codes"])
+            status={"clarification_required":"pending_clarification","planned":"pending_execution"}.get(
+                action["status"],action["status"])
+        elif resolution and resolution["status"]!="resolved":status="pending_clarification"
+        elif resolution:status="pending_execution"
+        else:status="pending_resolution"
+        outcomes.append({"ordinal":part["ordinal"],"intent":part["primary_intent"],
+            "target_type":action["target_type"] if action else (resolution["target_type"] if resolution and
+                resolution["target_type"] else part["target_type"]),
+            "operation":action["operation"] if action else None,"status":status,
+            "confidence":min(confidences),"clarification_required":status=="pending_clarification",
+            "reason_codes":list(dict.fromkeys(reasons))})
+    return outcomes
+
+
+def mutation_action_status(outcomes):
+    statuses=[item["status"] for item in outcomes]
+    if statuses and all(status=="completed" for status in statuses):return "completed"
+    if "completed" in statuses:return "partially_completed"
+    if "failed" in statuses:return "failed"
+    if "pending_clarification" in statuses:return "pending_clarification"
+    if "pending_resolution" in statuses:return "pending_resolution"
+    return "pending_execution"

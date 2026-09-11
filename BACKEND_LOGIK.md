@@ -1,6 +1,6 @@
 # Smart Notebook – Logik der Verarbeitung und des Wissens
 
-Stand der Zusammenführung: **2026-09-10**. Grundlage: lokaler Quellcode, bestehende Projektdokumentation und das Gespräch über einen allgemeinen Auto-Modus.
+Stand der Zusammenführung: **2026-09-11**. Grundlage: lokaler Quellcode, bestehende Projektdokumentation und das Gespräch über einen allgemeinen Auto-Modus.
 
 Fachliche Ergänzung vom **2026-09-08**: Die Produktentscheidungen zu Aufnahmefilter, langfristiger Wissensverdichtung, Facts, Konfliktklärung, Dashboard-Rückfragen und Archivierung wurden vom Nutzer bestätigt. Die entsprechend markierten Abschnitte beschreiben beschlossenes Soll-Verhalten; sie sind kein Nachweis seiner Implementierung.
 
@@ -202,8 +202,9 @@ Eine Quelle, ein Zitat und die daraus extrahierte Aussage sind unterschiedliche 
 9. A05 gleicht vorgesehene Anlagen und Mutationsteile über den hybriden Wissenszugriff ab. Nur Artefakte, deren Quellsegmente ausschließlich zu `memo`-Teilen gehören, dürfen anschließend in die bestehende Promotion. Frageanteile werden in Quellreihenfolge zu genau einem Query-Turn verbunden; bei einer gemischten Eingabe enthält dieser nicht den Memo- oder Mutationstext.
 10. A06 filtert die persistierten Mutationskandidaten nach Intent und Zieltyp. Ein gültiger expliziter öffentlicher Objektkontext hat Vorrang; sonst wählt ein streng strukturierter Modellschritt nur bei hinreichend eindeutiger Zuordnung ein Ziel. Fehlende, mehrdeutige, inkompatible oder unter `0.85` bewertete Referenzen erzeugen eine persistierte implizite Rückfrage mit den Quellsegmenten. Interne Ziel-IDs und Kandidatenschlüssel werden nicht ausgegeben.
 11. A07 bildet für jedes eindeutig aufgelöste Ziel genau einen persistierten Aktionsdatensatz. `complete` und `archive` werden regelbasiert auf die zulässige Objektoperation abgebildet; `change` erhält einen strikt strukturierten Plan. Neue Werte müssen exakte Quelltextspannen sein und mindestens `0.85` erreichen, sonst entsteht statt einer Mutation eine quellgebundene Rückfrage. Jede Aktion sperrt Ziel und Aktionszeile, schreibt Objektänderung sowie Vorher-/Nachher-Audit in derselben Transaktion und wird bei Wiederholung nicht doppelt ausgeführt. Das öffentliche Ergebnis meldet `completed|pending_clarification|failed|pending_execution`, aber keine internen Ziel-IDs, Payloads oder Auditstände. Das Capture meldet die erfolgreiche Zerlegung als `interpretation_status=split_completed`.
+12. A08 bewertet die Sicherheit je Intentteil statt nur für die gesamte Eingabe. Tentative Mutationssprache wie „vielleicht“ bleibt unter der Teilfreigabeschwelle `0.85` und erzeugt eine bestätigende, quellgebundene Rückfrage; unabhängige sichere Geschwister laufen weiter. Das öffentliche Ergebnis enthält pro Mutationsteil einen abgeschirmten Outcome und meldet bei gemischtem Abschluss `action_status=partially_completed`.
 
-**Grenze:** A07 führt die validierte Einzelaktion pro aufgelöstem Intentteil aus. Unsicherheitsabhängige Teilfreigabe bleibt A08; ein vollständiger allgemeiner Recovery-/Nachtlauf über Capture-, Chat- und Promotionsfehler bleibt A11/W06. Archivieren ist fachlich reversibel und kein physisches Löschen.
+**Grenze:** A08 trennt unabhängige sichere und unsichere Mutationsteile, beantwortet aber keine Rückfrage und setzt deren zurückgestellte Aktion noch nicht fort; das bleibt W05. Ein vollständiger allgemeiner Recovery-/Nachtlauf über Capture-, Chat- und Promotionsfehler bleibt A11/W06. Archivieren ist fachlich reversibel und kein physisches Löschen.
 
 `context_ref` wird gespeichert und gehört zur Capture-Identität. A06 versteht einen gültigen Kontext vom Typ `note|task|list|list_item` als ausdrücklichen Objektbezug. Der davon getrennte Kontexttyp `clarification` wird weiterhin noch keinem offenen Rückfrage-Antwortkreislauf zugeordnet; diese W05-Lücke bleibt bestehen.
 
@@ -382,7 +383,7 @@ Zielauflösung.
    - `meeting`: Ergebnis mit `resolved_intent=meeting`;
    - `memo`: zusammengefügter stabiler Transkripttext;
    - `query`: aus diesem Text Conversation und Turn anlegen;
-   - `auto`: autoritative primäre Intententscheidung und öffentlich sichere `intents`-Liste verwenden; vorhandene Frageanteile erzeugen einen Query-Turn nur aus ihren Quellspannen. A05 gleicht Mutationskandidaten ab, A06 bindet ein eindeutiges Ziel oder erzeugt eine Rückfrage, und A07 führt einen belastbaren Plan atomar aus. Das Ergebnis meldet entsprechend `completed`, `pending_clarification`, `failed` oder nur während eines offenen Schritts `pending_execution`.
+   - `auto`: autoritative primäre Intententscheidung und öffentlich sichere `intents`-Liste verwenden; vorhandene Frageanteile erzeugen einen Query-Turn nur aus ihren Quellspannen. A05 gleicht Mutationskandidaten ab, A06 bindet ein eindeutiges und hinreichend sicheres Ziel oder erzeugt eine Rückfrage, A07 führt einen belastbaren Plan atomar aus und A08 lässt unabhängige sichere Geschwister trotz eines unsicheren Teils weiterlaufen. Das Ergebnis meldet entsprechend `completed`, `partially_completed`, `pending_clarification`, `failed` oder nur während eines offenen Schritts `pending_execution` und enthält je Mutationsteil einen abgeschirmten Outcome.
 7. Client- und Ingestion-Session auf `completed` setzen.
 8. Monotone sessionsweite `local_audio_release_allowed`-Freigabe und Zeitpunkt setzen.
 
@@ -519,6 +520,26 @@ Items werden nicht doppelt angelegt. Freisprachliches Wiederöffnen erledigter
 Tasks oder Listeneinträge benötigt derzeit einen gültigen öffentlichen
 Objektkontext, weil die allgemeine A05-Suche abgeschlossene Objekte nicht als
 aktive Kandidaten liefert.
+
+### 9.6 A08-Teilfreigabe bei gemischter Unsicherheit
+
+A08 wendet die Freigabeschwelle `0.85` auf jeden Mutationsteil einzeln an.
+Tentative oder konditionale Formulierungen werden bereits bei der lokalen
+Intentvalidierung als `tentative_action` markiert und unter die Schwelle
+begrenzt. A06 legt dafür keine Zielbindung an, sondern eine bestätigende Frage
+mit genau den ursprünglichen Segmentquellen. Andere, unabhängige Teile
+desselben Captures behalten ihre eigene Konfidenz und können über A06/A07
+vollständig ausgeführt werden.
+
+`mutation_actions.py::public_mutation_part_outcomes` führt Intentteile,
+Zielauflösungen und Aktionen zu einem öffentlichen Ergebnis je Mutationsteil
+zusammen. Es enthält Reihenfolge, Intent, Zieltyp, Operation, Status,
+Konfidenz, Rückfragebedarf und kontrollierte Gründe, aber weder interne IDs
+noch Aktionspayload oder Auditstände. Sind mindestens ein Teil abgeschlossen
+und weitere Teile noch offen, lautet der Aggregatstatus
+`partially_completed`. Bereits abgeschlossene Geschwister bleiben beim Retry
+No-ops. Die Antwort auf eine Rückfrage und die Fortsetzung ihres abhängigen
+Teils gehören weiterhin zum separaten W05-Kreislauf.
 
 ## 10. Antworten und Gesprächsgedächtnis
 
@@ -889,7 +910,7 @@ Die folgende Liste konsolidiert das Gespräch und den tatsächlichen Integration
 | A05 | Wissen und Ziele vor Mutationen abgleichen — **seit 2026-09-10 geschlossen:** Jede vorgesehene Artefaktanlage und jede zurückgestellte Mutationsabsicht erhält vor Promotion über `search_knowledge` einen persistierten, idempotenten Abgleich als `new|identical|complementary|contradictory|targeted`. Exakte eindeutige Identität darf eine Neuanlage wiederverwenden; mögliche Mutationstreffer bleiben reine Kandidaten ohne A06-Zielwahl oder A07-Ausführung. Zwei echte Audioaufnahmen bestätigten `new` und die Wiederverwendung einer STT-orthografisch leicht abweichenden `identical`-Aussage. | Neuer Inhalt + passende Suche → neu, identisch, ergänzend, widersprechend oder auf ein Objekt bezogen. |
 | A06 | Referenzen aus Sprache und Gespräch auflösen — **seit 2026-09-11 geschlossen:** Mutationsteile werden ausschließlich gegen den persistierten A05-Suchsnapshot oder einen gültigen öffentlichen Objektkontext geprüft. Eindeutige Ziele werden intern gebunden; fehlende, mehrdeutige, inkompatible und zu schwache Bezüge erzeugen eine quellgebundene offene Rückfrage. Keine A07-Mutation wird vorweggenommen. | „Das ist erledigt“, „dort noch Brot“ → eindeutige Objekt-ID oder offene Rückfrage. |
 | A07 | Gemeinsamer Aktionsplan und Executor — **seit 2026-09-11 geschlossen:** Eindeutig aufgelöste Mutationsteile erhalten je einen persistenten, quellenvalidierten Plan. Inhaltsänderung/Umbenennung, Ergänzen, Erledigen, kontextgebundenes Wiederöffnen und Archivieren laufen idempotent mit atomarem Vorher-/Nachher-Audit; unklare oder schwache Pläne werden Rückfragen. Neue Objekte entstehen weiterhin über die bestehende Promotion. | Validierte Interpretation → anlegen, ergänzen, ändern, abhaken, wieder öffnen oder archivieren. |
-| A08 | Teilweise Unsicherheit behandeln | Gemischte sichere/unsichere Aktionen → sichere Teile ausführen, restliche mit Kontext zur Klärung speichern. |
+| A08 | Teilweise Unsicherheit behandeln — **seit 2026-09-11 strukturell geschlossen:** Sicherheit wird je Mutationsteil geprüft. Tentative Teile bleiben unter `0.85`, erzeugen eine quellgebundene Bestätigungsfrage und blockieren unabhängige sichere Geschwister nicht. Das öffentliche Ergebnis weist jeden Teil einzeln und gemischten Erfolg als `partially_completed` aus. Die echte Audioabnahme nach Worker-Neustart steht noch aus; Antworten und Fortsetzen bleiben W05. | Gemischte sichere/unsichere Aktionen → sichere Teile ausführen, restliche mit Kontext zur Klärung speichern. |
 | A09 | Dauerhafte Übernahme und Claim-Kandidaten anschließen — **Übernahme seit 2026-09-08 automatisch und vor Audiofreigabe verdrahtet** (`settle_client_session_for_ingestion`/Client-Finalize → `finalize_session` → `promote_session_artifacts` → technischer Abschluss), live im Happy Path und regressionsgeprüft im Fehlerpfad. Claim-Kandidaten-Aktivierung (Abschnitt 11.2) bleibt offen. | Geeignete bestätigte Inhalte → dauerhaftes Wissen; geprüfte Claim-Kandidaten → kontrolliert aktivierte Claims. |
 | A10 | Capture-/Chat-Verarbeitung automatisch betreiben — **seit Re-Audit 2026-09-08 geschlossen:** Beide Queues sind Bestandteil von `worker.py all`; die manuellen Run-once-Endpunkte bleiben für Diagnose/Tests erhalten. Automatische Retries bereits fehlgeschlagener Capture-/Chat-Datensätze bleiben Teil von A11/W06. | Persistierte Aufträge → ohne manuelle run-once-Aufrufe abgearbeitete Ergebnisse. |
 | A11 | Idempotente Mehrfachaktionen und Recovery — **für A07-Objektaktionen teilweise geschlossen:** Ein Aktionsdatensatz pro Intentteil, Transaktion pro Mutation und Wiederaufnahme fehlgeschlagener Schritte verhindern die doppelte Ausführung bereits abgeschlossener Geschwister. Allgemeine Capture-/Chat-/Promotionsretries und Nacht-Recovery bleiben offen. | Retry / Absturz → Fortsetzung ab offenem Teilschritt ohne doppelte Mutation. |
@@ -1029,7 +1050,7 @@ Diese Übersicht dokumentiert die Abweichungen, ohne ältere normative Dateien s
 | A05 | Geschlossen | `knowledge_preflight.py` ruft vor Artefaktpromotion und für zurückgestellte Mutationsteile ausschließlich `retrieval.py::search_knowledge` auf und persistiert Kandidaten, Bezugsauswahl, Konfidenz und kontrollierte Gründe über Migration 0045. Exakte eindeutige Identität wird ohne Neuanlage wiederverwendet; `targeted` setzt weder Ziel-ID noch `action_status` um. `m8_knowledge_preflight_test.py` prüft alle fünf Klassen, Idempotenz, öffentliche ID-Abschirmung, identische Wiederverwendung und den mutationsfreien Target-Fall; `m8_capture_contract_test.py` prüft die Einbindung in reine und gemischte Auto-Captures. Zwei echte Audioaufnahmen liefen nach Worker-Neustart bis zu `new`, `identical` und derselben dauerhaften Note durch. |
 | A06 | Geschlossen | `mutation_targets.py::ensure_session_mutation_target_resolutions` prüft jeden Mutationsteil gegen den A05-Snapshot und optionalen öffentlichen Objektkontext, persistiert genau eine Zielauflösung und erzeugt für Mehrdeutigkeit, fehlenden Bezug, inkompatiblen Kontext oder zu geringe Konfidenz eine implizite quellgebundene Frage. Das öffentliche Ergebnis schirmt interne IDs ab. `m8_mutation_target_resolution_test.py` prüft Auswahl, Kontextvorrang, Rückfragen, Idempotenz und Mutationsfreiheit; `m8_capture_contract_test.py` die Text-/Audiointegration. |
 | A07 | Geschlossen | `mutation_actions.py::ensure_session_mutation_actions` plant und persistiert pro eindeutig aufgelöstem Intentteil genau eine zulässige Operation, validiert Modellwerte gegen den Quelltext und führt sie mit Ziel-Lock und atomarem Vorher-/Nachher-Audit aus. Schwache, ungültige und veraltete Ziele erzeugen Rückfragen statt stiller Mutation. `m8_mutation_action_test.py` prüft alle Operationsklassen, Audit, Deduplizierung, Idempotenz, Kontext-Reopen und öffentliche ID-/Payload-Abschirmung; das vollständige M8-Gate ist grün. |
-| A08 | Offen | Unsichere Artefakte/Questions können gespeichert werden, aber kein gemeinsamer Plan hält nur abhängige Teilmutationen zurück und setzt sie später fort. |
+| A08 | Strukturell geschlossen, Live-Abnahme offen | Die Intentvalidierung markiert tentative Mutationssprache, A06 hält nur den betroffenen Teil unter `MUTATION_PART_MIN_CONFIDENCE=0.85` mit quellgebundener Bestätigungsfrage zurück und A07 führt unabhängige sichere Geschwister aus. `public_mutation_part_outcomes` liefert abgeschirmte Einzelzustände und `partially_completed`; der Retry wiederholt abgeschlossene Geschwister nicht. `m8_partial_action_test.py`, die angrenzenden Gates, ein echter strukturierter Split-Aufruf und das vollständige M8-Gate mit 24 Prüfungen einschließlich logischem Soak sind grün. Eine echte Audio→DB→ESP-Probe folgt nach Worker-Neustart. W05 bleibt separat offen. |
 | A09 | Teilweise geschlossen | `client_sessions.py::finalize_client_session_with_knowledge/settle_client_session_for_ingestion` schließen Promotion jetzt vor Clientabschluss und Audiofreigabe an; nur die ausdrücklich dokumentierte text-only D03-Kompatibilitätsausnahme überspringt die Session-Pipeline. `claims.py::extract_note_claim_candidates` erzeugt weiterhin nur Kandidaten. |
 | A10 | Geschlossen | `worker.py::WORKER_KINDS/run_worker_once` betreibt Capture und Chat nun im Standardmodus `all`. |
 | A11 | Teilweise geschlossen | A07 besitzt einen eindeutigen Aktionsdatensatz je Intentteil, atomare Einzelmutation und Wiederaufnahme fehlgeschlagener Schritte; bereits abgeschlossene Geschwister werden nicht wiederholt. Ein allgemeiner Nacht-/Retrymechanismus für Capture, Chat und Promotion fehlt weiter. |
@@ -1381,3 +1402,23 @@ Kandidaten mit Zielkonfidenz `0.40` ohne Mutation und erzeugte die passende
 Rückfrage; „den Herbsturlaub“ band mit `0.98` ausschließlich Liste 110 und
 archivierte sie. Liste 111 „Nach dem Herbsturlaub“ blieb aktiv, die sichtbare
 ESP-Projektion aktualisierte sich. A07 ist damit auch fachlich live abgenommen.
+
+**Codeänderung 2026-09-11 (A08, strukturell geschlossen):**
+Die Intentprompts und der lokale Validator erkennen tentative Mutationssprache
+wie „vielleicht“ oder „eventuell“ je Quellspanne. `mutation_targets.py` hält
+nur Mutationsteile unter `MUTATION_PART_MIN_CONFIDENCE=0.85` zurück und erzeugt
+eine bestätigende, segmentgebundene Rückfrage; sichere Geschwister behalten
+ihre eigene Konfidenz und laufen durch den bestehenden A06-/A07-Pfad.
+`mutation_actions.py` materialisiert daraus datenschutzarme Einzeloutcomes und
+den Aggregatstatus `partially_completed`.
+
+`m8_partial_action_test.py` belegt sichere Ausführung plus unsichere
+Listenarchivierungsfrage in derselben Session, unverändertes unsicheres Ziel,
+Quellenbindung, interne Abschirmung und einen Retry ohne doppelte Ausführung.
+Die angrenzenden Intent-, A06-, A07- und Capture-Gates sowie das vollständige
+M8-Release-Gate mit 24 Prüfungen einschließlich logischem Vier-Stunden-Soak
+sind grün; die Fixture-Nachkontrolle ergab null A08-Test-Sessions und -Listen.
+Ein echter strukturierter Split-Aufruf bewertete den sicheren Erledigungsteil
+mit `0.95` und den tentativen Archivierungsteil mit `0.70`. Die physische
+Audioabnahme folgt nach Worker-Neustart. Das Beantworten der Rückfrage und die
+Fortsetzung ihres abhängigen Teils bleiben ausdrücklich W05.

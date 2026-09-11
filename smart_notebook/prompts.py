@@ -195,8 +195,12 @@ Objekt-ID und führe keine Änderung aus.
 
 reason_codes dürfen nur asks_for_answer, adds_information, creates_object,
 modifies_existing, marks_done, removes_or_forgets, multiple_intents oder
-uncertain_target enthalten. confidence bewertet nur die Sicherheit der
-Intententscheidung. Gib ausschließlich Daten aus, die dem JSON-Schema entsprechen.
+uncertain_target oder tentative_action enthalten. Bei Mutationen bewertet
+confidence zusätzlich, ob der Nutzer die Ausführung eindeutig beauftragt.
+Vorsichtige oder bedingte Formulierungen wie „vielleicht“, „eventuell“,
+„möglicherweise“ oder „könnte man“ erhalten tentative_action und eine
+confidence unter 0.85, auch wenn der Intenttyp selbst eindeutig ist. Gib
+ausschließlich Daten aus, die dem JSON-Schema entsprechen.
 """
 
 CAPTURE_INTENT_SPLIT_SYSTEM_PROMPT = """Du zerlegst eine bereits vollständig
@@ -223,7 +227,12 @@ zusammenhängende Spanne innerhalb von source_text. source_segment_ids dürfen
 nur IDs aus den gelieferten semantischen Segmenten enthalten und müssen den
 Teilinhalt tatsächlich belegen. Ordinal beginnt bei 1 und ist lückenlos.
 reason_codes verwenden ausschließlich die erlaubten kontrollierten Werte aus
-dem Schema. Gib ausschließlich schema-konformes JSON aus.
+dem Schema. Bei Mutationen bewertet confidence zusätzlich, ob die Ausführung
+eindeutig beauftragt ist. Vorsichtige oder bedingte Formulierungen wie
+„vielleicht“, „eventuell“, „möglicherweise“ oder „könnte man“ erhalten
+tentative_action und eine confidence unter 0.85; sichere unabhängige Teile
+behalten ihre eigene hohe Konfidenz. Gib ausschließlich schema-konformes JSON
+aus.
 """
 
 SESSION_ARTIFACT_SYSTEM_PROMPT = """Du pflegst das vorläufige Live Session Memory.

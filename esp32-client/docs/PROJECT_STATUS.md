@@ -1,6 +1,6 @@
 # Projektstand
 
-Stand: 2026-09-11, A07 live abgenommen und `h4-auto` geflasht
+Stand: 2026-09-11, A08 strukturell geschlossen; Live-Abnahme offen
 
 ## Nachgewiesen am realen Gerät
 
@@ -74,6 +74,13 @@ Stand: 2026-09-11, A07 live abgenommen und `h4-auto` geflasht
   Urlaub“ wegen zweier plausibler Listen nach und archivierte bei „den
   Herbsturlaub“ ausschließlich die richtige Liste; die zweite blieb aktiv und
   die ESP-Projektion aktualisierte sich.
+- A08 hält bei gemischten Sprachmutationen nur den unsicheren Teil zurück.
+  Tentative Formulierungen bleiben unter `0.85` und erzeugen eine
+  quellgebundene Bestätigungsfrage; unabhängige sichere Geschwister werden
+  ausgeführt. Öffentliche Einzeloutcomes und `partially_completed` sind mit
+  dediziertem DB-Test, echtem strukturiertem Modellaufruf und vollständigem
+  M8-Gate mit 24 Prüfungen belegt. Die Firmware bleibt unverändert `h4-auto`;
+  offen ist nur die reale Audioabnahme nach Backend-Worker-Neustart.
 
 ## Systemgrenze
 
@@ -185,7 +192,7 @@ weiterhin die bestehende Oberfläche und behauptet nicht den H5-Meetingmodus.
 - Meetingmodus, OTA/signierte Releases, Secure Boot/Flash Encryption und
   Langzeit-/Kältetests
 - Backend: Watchdog für verwaiste `running`-Jobs und die verbleibenden
-  Auto-Modus-Lücken ab A08 aus `BACKEND_LOGIK.md` Abschnitt 18
+  Auto-Modus-Lücken nach A08 aus `BACKEND_LOGIK.md` Abschnitt 18
 - Die A04-Listenstabilisierung ist automatisiert und live abgenommen: zehn Karten in der
   eigenen Listenansicht, exakte Deduplizierung gleichnamiger aktiver Listen,
   gemeinsame Auswertung benachbarter Liste-plus-Item-Chunks, Schutz vor
@@ -196,8 +203,9 @@ weiterhin die bestehende Oberfläche und behauptet nicht den H5-Meetingmodus.
 
 Die auswählbare IANA-Zeitzone ist ein späteres Komfortfeature. Bis dahin bleibt
 die verifizierte `Europe/Berlin`-Regel bewusst fest eingebaut. A01–A07 sind
-umgesetzt; A07 ist einschließlich der sicheren Mehrdeutigkeitsrückfrage und
-der physischen Audio-Mutationsprobe bestätigt. Danach folgt A08.
+umgesetzt und live abgenommen; A08 ist strukturell grün und wartet nur noch auf
+die physische Audioabnahme nach Worker-Neustart. Danach bleiben insbesondere
+A09-Claim-Aktivierung, A11-Recovery, A12-Gesamtresultat und W05 offen.
 
 Historische Messwerte und Fehleranalysen stehen im `CHANGELOG.md` und in
 `CLIENT_SERVER_STATE.md`; diese Datei beschreibt nur den aktuellen Übergabestand.

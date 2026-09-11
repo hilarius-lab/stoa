@@ -371,18 +371,13 @@ def _materialize_capture_result(client_session_id):
                     public_mutation_target_resolutions)
                 resolutions=get_session_mutation_target_resolutions(item["ingestion_session_id"])
                 result["reference_resolutions"]=public_mutation_target_resolutions(resolutions)
-                from .mutation_actions import get_session_mutation_actions,public_mutation_actions
+                from .mutation_actions import (get_session_mutation_actions,mutation_action_status,
+                    public_mutation_actions,public_mutation_part_outcomes)
                 actions=get_session_mutation_actions(item["ingestion_session_id"])
                 result["actions"]=public_mutation_actions(actions)
-                if not resolutions or any(entry["status"]!="resolved" for entry in resolutions):
-                    result["action_status"]="pending_clarification"
-                elif any(entry["status"]=="clarification_required" for entry in actions):
-                    result["action_status"]="pending_clarification"
-                elif actions and all(entry["status"]=="completed" for entry in actions):
-                    result["action_status"]="completed"
-                elif any(entry["status"]=="failed" for entry in actions):
-                    result["action_status"]="failed"
-                else:result["action_status"]="pending_execution"
+                outcomes=public_mutation_part_outcomes(intent_parts,resolutions,actions)
+                result["action_outcomes"]=outcomes
+                result["action_status"]=mutation_action_status(outcomes)
             if len(intent_parts)>1:result["interpretation_status"]="split_completed"
             from .knowledge_preflight import get_session_knowledge_preflights,public_knowledge_preflights
             assessments=get_session_knowledge_preflights(item["ingestion_session_id"])

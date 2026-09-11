@@ -1098,3 +1098,22 @@ mit „Fotos sortieren“ blieb aktiv. Der Nutzer bestätigte das Verschwinden d
 richtigen Liste auf dem ESP. A07 ist damit live abgenommen. Der in W05 geplante
 Antwortkreislauf aus der geöffneten Rückfragedetailansicht ist davon getrennt
 und weiterhin offen.
+
+## A08-Teilfreigabe — Arbeitsstand 11. September
+
+Das Backend bewertet gemischte Mutationen nun je Intentteil. Tentative Sprache
+wie „vielleicht“ oder „eventuell“ begrenzt ausschließlich den betroffenen Teil
+unter die Freigabeschwelle `0.85`; A06 erzeugt dafür eine bestätigende,
+quellgebundene Rückfrage. Unabhängige sichere Geschwister laufen gleichzeitig
+durch A06/A07. Das Capture-Ergebnis enthält abgeschirmte Einzeloutcomes und bei
+dieser Mischung `action_status=partially_completed`. Bereits abgeschlossene
+Geschwister werden bei einem Retry nicht wiederholt.
+
+Das neue A08-DB-Gate, die angrenzenden Regressionen und das vollständige
+M8-Gate mit 24 Prüfungen einschließlich logischem Vier-Stunden-Soak sind grün;
+die Fixture-Nachkontrolle ergab null A08-Test-Sessions und -Listen. Ein echter
+strukturierter Split-Aufruf bewertete den sicheren Erledigungsteil mit `0.95`
+und den tentativen Archivierungsteil mit `0.70`. Es gab keine Firmwareänderung;
+`h4-auto` bleibt gültig. Offen ist die echte Audio→DB→ESP-Abnahme nach einem
+Backend-Worker-Neustart. Rückfrageantwort und Fortsetzung des zurückgestellten
+Teils bleiben der separate W05-Block.

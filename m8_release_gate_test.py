@@ -26,6 +26,7 @@ TESTS=[
     "m8_knowledge_preflight_test.py",
     "m8_mutation_target_resolution_test.py",
     "m8_mutation_action_test.py",
+    "m8_partial_action_test.py",
     "m8_chat_push_contract_test.py",
     "m8_capture_contract_test.py",
     "m8_audio_recovery_e2e_test.py",
