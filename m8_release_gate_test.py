@@ -22,6 +22,7 @@ TESTS=[
     "m8_knowledge_sync_test.py",
     "m8_note_fact_promotion_test.py",
     "semantic_router_test.py",
+    "capture_intent_span_test.py",
     "m8_content_type_pipeline_test.py",
     "m8_knowledge_preflight_test.py",
     "m8_mutation_target_resolution_test.py",

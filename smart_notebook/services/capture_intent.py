@@ -24,6 +24,20 @@ def _tentative_action(text):
     return bool(re.search(r"\b(vielleicht|eventuell|möglicherweise)\b|\bkönnte(?:st|n)?\b",text.casefold()))
 
 
+def _contains_span(text,span):
+    """Whitespace-insensitive substring check.
+
+    STT output and semantic-segment text normalize whitespace around
+    punctuation differently (observed: "W05 -Testschrank" vs "W05-Testschrank"),
+    so a byte-exact containment check on incidental whitespace rejects a
+    faithfully-quoted span. Stripping all whitespace keeps the anti-
+    hallucination guarantee (same characters, same order) without being
+    sensitive to spacing artifacts that carry no meaning.
+    """
+    strip_ws=lambda value:re.sub(r"\s+","",value)
+    return strip_ws(span) in strip_ws(text)
+
+
 def _item(row):
     if not row:return None
     return {"session_id":row[0],"primary_intent":row[1],"target_type":row[2],"target_text":row[3],
@@ -60,7 +74,7 @@ def _validate_decision(raw,text):
     if target_type not in TARGET_TYPES:raise ValueError("Unknown intent target type")
     if not isinstance(target_text,str):raise ValueError("target_text must be a string")
     target_text=target_text.strip()
-    if target_text and target_text not in text:raise ValueError("target_text must be an exact source span")
+    if target_text and not _contains_span(text,target_text):raise ValueError("target_text must be an exact source span")
     if isinstance(confidence,bool) or not isinstance(confidence,(int,float)) or not 0<=confidence<=1:
         raise ValueError("Intent confidence must be between 0 and 1")
     if not isinstance(multiple,bool):raise ValueError("multiple_intents_detected must be boolean")

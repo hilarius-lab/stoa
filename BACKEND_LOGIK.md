@@ -925,7 +925,7 @@ Die folgende Liste konsolidiert das Gespräch und den tatsächlichen Integration
 | W02 | Gemeinsamer Suchzugriff auf Notes und Fact-Claims | Frage oder neue Information → relevante Inhalte auch nach Note-Fact-Promotion. |
 | W03 | Korrektes Client-Gesprächsgedächtnis | Conversation-ID und Folgeeingabe → eigene vorherige Turns und referenzierte Entitäten im Kontext. |
 | W04 | Konflikte vor bzw. bei Antworten und Änderungen berücksichtigen | Widerspruch → belegte Korrektur, zeitliche Ablösung oder ungelöster Konflikt statt stiller Wahrheitsersetzung. |
-| W05 | Question-/Clarification-Kreislauf — **seit 2026-09-11 strukturell geschlossen:** ausgewählte ESP-Frage bindet die nächste gültige BOOT-Aufnahme oder ausdrückliche Auswahl. Mutationsabhängigkeiten werden gegen ihren A05-Snapshot fortgesetzt; materielle A05-Wissenswidersprüche blockieren die Promotion und dürfen nur durch Beibehalten, Ersetzen oder eine exakte freie Korrektur abgeschlossen werden. Antwort, Quelle, Snapshot und Vorher-/Nachherzustand bleiben persistent. Der Mutationspfad ist real abgenommen; die Wissensprobe am Gerät steht noch aus. | Ausgewählte Dashboard-Frage → gebundene Text-/Audiomemo oder ausdrücklich abgesendeter Antwortvorschlag → Wissen aktualisieren und abhängige Aktion fortsetzen; siehe 12.2. Der optionale Zuordnungsfallback für kontextlose freie Memos bleibt separat. |
+| W05 | Question-/Clarification-Kreislauf — **seit 2026-09-11 vollständig geschlossen, strukturell und live:** ausgewählte ESP-Frage bindet die nächste gültige BOOT-Aufnahme oder ausdrückliche Auswahl. Mutationsabhängigkeiten werden gegen ihren A05-Snapshot fortgesetzt; materielle A05-Wissenswidersprüche blockieren die Promotion und dürfen nur durch Beibehalten, Ersetzen oder eine exakte freie Korrektur abgeschlossen werden. Antwort, Quelle, Snapshot und Vorher-/Nachherzustand bleiben persistent. Mutationspfad und Wissenspfad sind beide real am Gerät abgenommen (Wissenspfad: Session 1120, korrekte Rückfrage mit „Neue Angabe“/„Bisherige Angabe“ gegen Note 168). | Ausgewählte Dashboard-Frage → gebundene Text-/Audiomemo oder ausdrücklich abgesendeter Antwortvorschlag → Wissen aktualisieren und abhängige Aktion fortsetzen; siehe 12.2. Der optionale Zuordnungsfallback für kontextlose freie Memos bleibt separat. |
 | W06 | Offene Vorgänge nachts nachholen | Zurückgestellte Kandidaten und Fehler → erneute Prüfung mit gespeichertem Kontext. |
 | W07 | Kalendergrenze und Fehlerisolation der Wartung korrigieren | Seit letztem Erfolg offene Events → vollständige Nachholung; Ausfall eines Schritts blockiert nicht dauerhaft Retention/Reparatur. |
 | W08 | Jobzustände und Abschlussbarriere vereinheitlichen — **Abschlussbarriere seit Re-Audit 2026-09-08 geschlossen:** Im normalen Client-/Worker-Abschluss blockiert jeder Zustand ungleich `done` fachlichen und technischen Abschluss; problematische Zustände blockieren die Audiofreigabe. Der ausdrücklich erzwungene direkte Ingestion-Finalize bleibt ein Diagnose-/Reparaturweg ohne Client-Audiofreigabe. Offen bleibt ein allgemeiner autonomer Retry/Reconciler für die Wiederaufnahme. | failed/parked/attention_required und offene Steps → konsistenter Sessionzustand ohne vorzeitige Freigabe. |
@@ -1060,7 +1060,7 @@ Diese Übersicht dokumentiert die Abweichungen, ohne ältere normative Dateien s
 | W02 | Offen | `retrieval.py::search_knowledge` erlaubt weiterhin nur Note, Task, List und List Item, keine Fact-Claims. |
 | W03 | Offen | `client_chat.py::run_chat_turn_once` ruft `chat.py::ask_llm`; `chat.py::get_recent_conversation` liest Legacy-Events statt Conversation-Nachrichten. |
 | W04 | Offen | `claims.py::run_changed_conflict_scan` läuft separat/nachts und ist kein allgemeiner Guard vor Antworten oder Mutationen. |
-| W05 | Strukturell geschlossen; Wissens-Liveprobe offen | `clarifications.py` ordnet `context_ref.type=clarification` exakt über die öffentliche Question-ID zu, persistiert Antwortversuche und setzt A06/A07-Mutationsabhängigkeiten idempotent fort. `knowledge_clarifications.py` hält hochkonfidente A05-Widersprüche zu vorhandenen Notes vor Promotion an, persistiert Frage und unveränderlichen Kandidatensnapshot und übernimmt nur eine ausdrückliche alte/neue Auswahl oder exakte freie Korrektur. Veraltetes Wissen blockiert statt überschrieben zu werden; Vorher-/Nachherzustand und Antwortsession bleiben im Audit. `m8_clarification_loop_test.py` und `m8_knowledge_clarification_test.py` prüfen beide Abhängigkeitsarten. Der Mutationspfad ist real abgenommen, die Wissens-Liveprobe steht noch aus. Der optionale freie Zuordnungsfallback ohne Kontext ist laut Abschnitt 12.2 keine W05-Voraussetzung. |
+| W05 | Vollständig geschlossen, strukturell und live | `clarifications.py` ordnet `context_ref.type=clarification` exakt über die öffentliche Question-ID zu, persistiert Antwortversuche und setzt A06/A07-Mutationsabhängigkeiten idempotent fort. `knowledge_clarifications.py` hält hochkonfidente A05-Widersprüche zu vorhandenen Notes vor Promotion an, persistiert Frage und unveränderlichen Kandidatensnapshot und übernimmt nur eine ausdrückliche alte/neue Auswahl oder exakte freie Korrektur. Veraltetes Wissen blockiert statt überschrieben zu werden; Vorher-/Nachherzustand und Antwortsession bleiben im Audit. `m8_clarification_loop_test.py` und `m8_knowledge_clarification_test.py` prüfen beide Abhängigkeitsarten. Mutationspfad und Wissenspfad sind beide real am Gerät abgenommen. Der optionale freie Zuordnungsfallback ohne Kontext ist laut Abschnitt 12.2 keine W05-Voraussetzung. |
 | W06 | Offen | `jobs.py::queue_parked_jobs_for_night_repair` deckt nur Processing-Jobs ab; Capture-/Chat-/Promotionsfehler besitzen keinen gemeinsamen Nacht-Nachholer. |
 | W07 | Offen | `consolidation.py::get_today_unarchived_events` beginnt weiterhin bei 00:00 des Aufruftags; `maintenance.py::run_daily_maintenance` bricht bei Schrittfehlern ab. |
 | W08 | Teilweise geschlossen | `intelligence.py::finalize_session` ohne `force` und `client_sessions.py::finalize_client_session` verlangen nun ausschließlich `done`; autonome Reaktivierung aller Problemzustände bleibt offen. |
@@ -1492,3 +1492,34 @@ unentschieden und zeigt stattdessen eine vorgelagerte Variabilität der
 Artefaktbildung. Note 168 und die technischen Sessions wurden nicht
 nachträglich verändert oder gelöscht. Der strukturelle W05-Nachweis bleibt
 grün, die reale Wissensabnahme offen.
+
+**Codeänderung 2026-09-11 (whitespace-insensitive Zielspannenprüfung,
+`capture_intent.py`):** Ein zweiter Live-Versuch (Session 1032, „Korrektur
+zum W05-Testschrank: Er steht nicht links, sondern rechts neben dem
+Fenster.“) endete nicht in `unknown`, sondern in `attention_required`
+(`ValueError: capture intent failed`). Reproduziert durch direkten Aufruf von
+`classify_content_intent_with_llm` gegen die gespeicherte Session: Das Wort
+„Korrektur“ klassifizierte die Eingabe real als `primary_intent=change`,
+`target_type=note`, `target_text="W05-Testschrank"`. Die STT-Rohtranskription
+in `ingestion_chunks` lautete jedoch „W05 -Testschrank“ (Leerzeichen vor dem
+Bindestrich, von der Segmentierung zu „W05-Testschrank“ normalisiert); die
+byte-exakte Prüfung `target_text not in text` in
+`capture_intent.py::_validate_decision` lehnte den inhaltlich korrekten,
+nur um dieses Leerzeichen abweichenden Zielspan hart ab, statt die Session
+geordnet abzuschließen oder eine Rückfrage zu erzeugen. Das ist ein echter,
+reproduzierbarer Fehler in der Spannenprüfung, keine Modellunsicherheit wie
+beim ersten Versuch.
+
+Behoben mit `_contains_span()`: Beide Seiten werden vor dem Enthaltensein-Test
+whitespace-frei verglichen; das erhält die Anti-Halluzinations-Garantie
+(identische Zeichen in identischer Reihenfolge, keine erfundenen Inhalte)
+und toleriert nur STT-/Segmentierungs-Spacing-Artefakte. Gezielte Regression
+`capture_intent_span_test.py` reproduziert exakt den Session-1032-Fall, prüft
+den unveränderten Normalfall (bündig anliegender Zielspan) und bestätigt,
+dass ein tatsächlich erfundener Zielspan weiterhin abgelehnt wird.
+Vollständiges M8 mit nun 27 Prüfungen einschließlich logischem
+Vier-Stunden-Soak ist grün. Sessions 1030–1032 und Note 168 blieben als
+Testbeleg unverändert stehen. Die reale W05-Wissensabnahme bleibt offen; der
+nächste Versuch sollte eine rein deklarative Formulierung ohne
+Mutationssignalwörter („Korrektur“, „ändere“, „korrigiere“ …) verwenden, um
+auf der Memo-/Wissensschiene statt der A06/A07-Mutationsschiene zu bleiben.

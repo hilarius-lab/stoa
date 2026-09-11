@@ -1200,3 +1200,41 @@ als `unknown` und erzeugte kein Artefakt. Deshalb liefen A05 und W05 für diese
 zweite Aussage nicht an; dies ist kein beobachteter Fehler des neuen
 Rückfragepfads, aber die reale W05-Wissensabnahme bleibt offen. Note 168 und
 beide technischen Sessions blieben unverändert bestehen.
+
+Ein zweiter Versuch (Session 1032, „Korrektur zum W05-Testschrank: …“) legte
+einen echten Backendfehler statt einer Modellunsicherheit offen: Das Wort
+„Korrektur“ klassifizierte die Eingabe als `change`-Mutation; eine
+STT-Leerzeichen-Abweichung ließ die anschließende Zielspannenprüfung in
+`capture_intent.py` hart auf `attention_required` abstürzen. Behoben durch
+eine whitespace-insensitive Spannenprüfung mit gezielter Regression; die
+Anti-Halluzinations-Garantie (nur echte Quellinhalte) bleibt erhalten.
+Vollständiges M8 mit 27 Prüfungen ist grün. Sessions 1030–1032 und Note 168
+blieben als Testbeleg unverändert stehen; Details in `BACKEND_LOGIK.md`. Der
+nächste Live-Versuch sollte eine rein deklarative Formulierung ohne
+Mutationssignalwörter verwenden, um auf der Memo-/Wissensschiene zu bleiben.
+
+**W05 real bestanden (2026-09-11):** Ein dritter Versuch (Session 1119, rein
+deklarativ) traf zunächst denselben `attention_required`-Fehler — diesmal
+nicht am Code, sondern weil der laufende Worker-Prozess den Fix aus Session
+1032 nicht geladen hatte (kein automatisches Modul-Neuladen). Nach
+Worker-Neustart erzeugte derselbe Satz (Session 1120) den echten W05-Fall am
+Gerät: Rückfrage „Soll die neue Angabe ‚… steht rechts …‘ die bisherige
+Angabe ‚… steht links …‘ ersetzen?“ mit den Optionen „Zurück“, „Neue Angabe“,
+„Bisherige Angabe“ — das erwartete Ergebnis, real bestätigt. W05 gilt damit
+als vollständig geschlossen, strukturell und live.
+
+**ESP-Firmware-Fund direkt danach: `HISTORY_MAX` zu klein.** Unmittelbar nach
+der bestandenen W05-Rückfrage meldete das Gerät die Verlaufsansicht als leer
+(„Noch keine Aufnahmen“), obwohl gerade aufgenommen worden war; der SD-Log
+zeigte den Eintrag weiterhin korrekt. Ursache: `screen.c` definierte
+`HISTORY_MAX 8192`, während der Fetch-Puffer `API_RESPONSE_MAX` in
+`api_client.c` bereits auf `16384` steht (dieselbe Fehlerklasse, die der
+Kommentar bei `SNAPSHOT_MAX` in `screen.c` seit der letzten Erhöhung
+dokumentiert). Der Fetch holt die Antwort vollständig — real gemessen 9190
+Bytes bei zwölf Verlaufseinträgen —, aber `screen_history_received()`
+schneidet sie beim Kopieren in den zu kleinen Puffer ab; das kaputte JSON
+lässt sich nicht mehr parsen, und die Ansicht zeigt dieselbe Meldung wie bei
+echter Leere. Im Quellcode auf `16384` korrigiert, mit Kommentar zur
+Invariante. `screen.c` liegt außerhalb der Hosttest-Abdeckung (braucht
+FreeRTOS/`heap_caps`); Build, Flash auf COM9 und reale Sichtprobe sind
+bestanden — die Verlaufsansicht zeigt die Einträge wieder.

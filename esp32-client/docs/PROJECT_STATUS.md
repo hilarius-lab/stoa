@@ -152,10 +152,12 @@ zeigte zwei Aufgaben und die Einkaufsliste unter „Als Nächstes“; der Fokus 
 beim verzögert einsetzenden erzwungenen Sync erhalten. Für das weitere
 Dashboard fehlen:
 
-1. reale W05-Wissensprobe nach dem strukturellen Backendabschluss; der erste
-   Versuch wurde abgebrochen, weil die korrekt transkribierte zweite Aussage
-   vorgelagert kein Artefakt bildete und W05 nicht erreichte;
-2. echtes Controllerfenster im regulären Zeichenpfad sowie später SSE.
+1. echtes Controllerfenster im regulären Zeichenpfad sowie später SSE.
+
+Die reale W05-Wissensprobe selbst ist bestanden: Nach anfänglichem
+`attention_required` durch einen fehlenden Worker-Neustart erzeugte dieselbe
+rein deklarative Aussage die erwartete Rückfrage „Neue Angabe“/„Bisherige
+Angabe“ am Gerät; W05 gilt als strukturell und live geschlossen.
 
 Der Verlauf zeigt den technischen Sessionzustand nun vollständig in jeder
 Zeile: zustandsabhängiges Symbol, lokale Zeit und deutscher Kurzstatus. Ein
@@ -205,7 +207,6 @@ weiterhin die bestehende Oberfläche und behauptet nicht den H5-Meetingmodus.
 
 ## Noch offen bis zum produktiven Betrieb
 
-- reale Geräteabnahme des strukturell fertigen W05-Wissenspfads
 - automatische Credentialrotation und vollständige persistierte Retry-/Backoff-
   Klassen
 - verschlüsseltes NVS und verschlüsselte Audiodateien
@@ -225,8 +226,8 @@ weiterhin die bestehende Oberfläche und behauptet nicht den H5-Meetingmodus.
 Die auswählbare IANA-Zeitzone ist ein späteres Komfortfeature. Bis dahin bleibt
 die verifizierte `Europe/Berlin`-Regel bewusst fest eingebaut. A01–A07 sind
 umgesetzt und live abgenommen; A08 ist ebenfalls strukturell und physisch grün.
-Danach bleiben insbesondere A09-Claim-Aktivierung, A11-Recovery,
-A12-Gesamtresultat und die reale W05-Wissensprobe offen.
+W05 ist inzwischen auch live bestanden. Danach bleiben insbesondere
+A09-Claim-Aktivierung, A11-Recovery und A12-Gesamtresultat offen.
 
 Historische Messwerte und Fehleranalysen stehen im `CHANGELOG.md` und in
 `CLIENT_SERVER_STATE.md`; diese Datei beschreibt nur den aktuellen Übergabestand.

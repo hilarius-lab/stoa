@@ -1,5 +1,23 @@
 # Änderungen
 
+## 2026-09-11 – W05-Wissenspfad live bestanden, Verlaufsansicht-Fix
+
+- Reale W05-Wissensprobe bestanden: eine rein deklarative Korrekturaussage
+  erzeugte am Gerät die erwartete Rückfrage „Soll die neue Angabe … die
+  bisherige Angabe … ersetzen?“ mit den Optionen „Zurück“, „Neue Angabe“,
+  „Bisherige Angabe“ gegen eine vorhandene Note. Mutationspfad und
+  Wissenspfad von W05 sind damit beide strukturell und live abgenommen.
+- Verlaufsansicht zeigte danach „Noch keine Aufnahmen“, obwohl gerade
+  aufgenommen worden war; der SD-Log blieb korrekt. Ursache: `HISTORY_MAX`
+  in `screen.c` war mit 8192 Bytes nur halb so groß wie der Fetch-Puffer
+  `API_RESPONSE_MAX` (16384) — dieselbe Fehlerklasse, die der Kommentar bei
+  `SNAPSHOT_MAX` im selben File bereits dokumentiert. Der Fetch holt die
+  Antwort vollständig (real gemessen: 9190 Bytes bei zwölf Einträgen), aber
+  das Kopieren in den zu kleinen Puffer schnitt das JSON ab und machte es
+  unparsbar. `HISTORY_MAX` auf 16384 angehoben, mit Kommentar zur Invariante.
+- Build, Flash auf COM9 und reale Sichtprobe bestanden: Verlaufsansicht
+  zeigt die Einträge wieder.
+
 ## 2026-09-11 – Mehrere feste Antworten auf Rückfragen
 
 - Bestätigungsfragen können „Ja/Nein“, mehrdeutige Mutationsziele bis zu drei

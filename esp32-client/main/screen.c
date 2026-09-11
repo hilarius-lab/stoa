@@ -157,8 +157,15 @@ static int detail_list_focus, detail_list_scroll, detail_list_count;
 static char detail_list_ids[LIST_DETAIL_MAX_ITEMS][LIST_DETAIL_ID_CHARS];
 static bool detail_list_done[LIST_DETAIL_MAX_ITEMS];
 /* The history view. Same handover as the snapshot and the entity: written by
- * the upload worker, parsed by the display task, so it needs the same lock. */
-#define HISTORY_MAX 8192
+ * the upload worker, parsed by the display task, so it needs the same lock.
+ *
+ * Must stay at or above API_RESPONSE_MAX in api_client.c, same as
+ * SNAPSHOT_MAX above: a history that passed the fetch would then be
+ * truncated by the snprintf below and fail to parse here, and the view
+ * would show "Noch keine Aufnahmen" for a reason no log line names —
+ * indistinguishable from a genuinely empty history. Observed live: a
+ * 9190-byte response over this 8192-byte buffer. */
+#define HISTORY_MAX 16384
 static char *history_json;
 static SemaphoreHandle_t history_lock;
 static bool history_open, history_waiting;
