@@ -407,6 +407,11 @@ def _materialize_capture_result(client_session_id):
             from .knowledge_preflight import get_session_knowledge_preflights,public_knowledge_preflights
             assessments=get_session_knowledge_preflights(item["ingestion_session_id"])
             if assessments:result["knowledge_assessments"]=public_knowledge_preflights(assessments)
+            from .knowledge_clarifications import (get_session_knowledge_clarifications,
+                public_knowledge_clarifications)
+            knowledge_clarifications=get_session_knowledge_clarifications(item["ingestion_session_id"])
+            if knowledge_clarifications:
+                result["knowledge_clarifications"]=public_knowledge_clarifications(knowledge_clarifications)
     with get_db_connection() as c:c.execute("UPDATE client_sessions SET capture_result=%s,updated_at=%s WHERE client_session_id=%s",(Jsonb(result),datetime.now(TIMEZONE),client_session_id));c.commit()
     return result
 

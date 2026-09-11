@@ -13,6 +13,7 @@ from .tasks import save_task
 from .claims import materialize_validated_artifact_claims
 from .topics import normalize_topic_key
 from .knowledge_preflight import ensure_artifact_knowledge_preflight,identical_knowledge_target
+from .knowledge_clarifications import ensure_artifact_knowledge_clarification
 
 async def _task_fields(content,mode,started_at=None):
     if mode=='deterministic':
@@ -94,6 +95,10 @@ async def promote_session_artifacts(session_id,mode='llm',artifact_ids=None):
             continue
         try:
             assessment=await ensure_artifact_knowledge_preflight(artifact_id,mode)
+            clarification=ensure_artifact_knowledge_clarification(assessment)
+            if clarification and clarification["status"] in {"pending","needs_clarification"}:
+                deferred.append({"artifact_id":artifact_id,"reason":"knowledge_clarification_required"})
+                continue
             target='note' if kind in {'note','fact','decision'} else kind
             identical_id=identical_knowledge_target(assessment,target)
             if identical_id is not None:

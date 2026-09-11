@@ -663,6 +663,23 @@ MIGRATIONS=[
         CHECK(status IN('processing','completed','cancelled','needs_clarification','failed')))""",
         "CREATE INDEX clarification_answer_question_idx ON clarification_answer_attempts(question_id,id)",
     ]),
+    ("0049_knowledge_clarification_loop","Persist W05 knowledge-conflict dependencies and audited outcomes",[
+        """CREATE TABLE knowledge_clarification_resolutions(
+        id BIGSERIAL PRIMARY KEY,session_id BIGINT NOT NULL REFERENCES ingestion_sessions(id) ON DELETE CASCADE,
+        artifact_id BIGINT NOT NULL UNIQUE REFERENCES session_artifacts(id) ON DELETE CASCADE,
+        preflight_assessment_id BIGINT NOT NULL UNIQUE REFERENCES knowledge_preflight_assessments(id) ON DELETE CASCADE,
+        clarification_question_id BIGINT NOT NULL UNIQUE REFERENCES session_questions(id) ON DELETE CASCADE,
+        status TEXT NOT NULL,resolution TEXT,selected_candidate_key TEXT,
+        candidate_keys JSONB NOT NULL DEFAULT '[]'::jsonb,
+        answer_session_id BIGINT UNIQUE REFERENCES ingestion_sessions(id) ON DELETE SET NULL,
+        before_state JSONB,after_state JSONB,reason_codes JSONB NOT NULL DEFAULT '[]'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL,updated_at TIMESTAMPTZ NOT NULL,resolved_at TIMESTAMPTZ,
+        CHECK(status IN('pending','completed','cancelled','needs_clarification','failed')),
+        CHECK(resolution IS NULL OR resolution IN('keep_existing','replace_existing','revised_statement')),
+        CHECK(status NOT IN('completed','cancelled') OR resolved_at IS NOT NULL),
+        CHECK(status<>'completed' OR resolution IS NOT NULL))""",
+        "CREATE INDEX knowledge_clarification_session_idx ON knowledge_clarification_resolutions(session_id,id)",
+    ]),
 ]
 
 

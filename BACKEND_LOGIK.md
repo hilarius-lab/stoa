@@ -204,9 +204,9 @@ Eine Quelle, ein Zitat und die daraus extrahierte Aussage sind unterschiedliche 
 11. A07 bildet für jedes eindeutig aufgelöste Ziel genau einen persistierten Aktionsdatensatz. `complete` und `archive` werden regelbasiert auf die zulässige Objektoperation abgebildet; `change` erhält einen strikt strukturierten Plan. Neue Werte müssen exakte Quelltextspannen sein und mindestens `0.85` erreichen, sonst entsteht statt einer Mutation eine quellgebundene Rückfrage. Jede Aktion sperrt Ziel und Aktionszeile, schreibt Objektänderung sowie Vorher-/Nachher-Audit in derselben Transaktion und wird bei Wiederholung nicht doppelt ausgeführt. Das öffentliche Ergebnis meldet `completed|pending_clarification|failed|pending_execution`, aber keine internen Ziel-IDs, Payloads oder Auditstände. Das Capture meldet die erfolgreiche Zerlegung als `interpretation_status=split_completed`.
 12. A08 bewertet die Sicherheit je Intentteil statt nur für die gesamte Eingabe. Tentative Mutationssprache wie „vielleicht“ bleibt unter der Teilfreigabeschwelle `0.85` und erzeugt eine bestätigende, quellgebundene Rückfrage; unabhängige sichere Geschwister laufen weiter. Das öffentliche Ergebnis enthält pro Mutationsteil einen abgeschirmten Outcome und meldet bei gemischtem Abschluss `action_status=partially_completed`.
 
-**Grenze:** A08 trennt unabhängige sichere und unsichere Mutationsteile, beantwortet aber keine Rückfrage und setzt deren zurückgestellte Aktion noch nicht fort; das bleibt W05. Ein vollständiger allgemeiner Recovery-/Nachtlauf über Capture-, Chat- und Promotionsfehler bleibt A11/W06. Archivieren ist fachlich reversibel und kein physisches Löschen.
+**Grenze:** A08 trennt unabhängige sichere und unsichere Mutationsteile; das Beantworten und Fortsetzen übernimmt der inzwischen geschlossene W05-Pfad. Ein vollständiger allgemeiner Recovery-/Nachtlauf über Capture-, Chat- und Promotionsfehler bleibt A11/W06. Archivieren ist fachlich reversibel und kein physisches Löschen.
 
-`context_ref` wird gespeichert und gehört zur Capture-Identität. A06 versteht einen gültigen Kontext vom Typ `note|task|list|list_item` als ausdrücklichen Objektbezug. Der getrennte Kontexttyp `clarification` bindet Audio- und Textantworten inzwischen an genau eine öffentliche Frage. Für A06/A07-Mutationsfragen wird der bestehende Kandidatensnapshot erneut bewertet und nur der abhängige Teil fortgesetzt; die allgemeinere Neubewertung von Wissen bei Nicht-Mutationsfragen bleibt in W05 offen.
+`context_ref` wird gespeichert und gehört zur Capture-Identität. A06 versteht einen gültigen Kontext vom Typ `note|task|list|list_item` als ausdrücklichen Objektbezug. Der getrennte Kontexttyp `clarification` bindet Audio- und Textantworten inzwischen an genau eine öffentliche Frage. Für A06/A07-Mutationsfragen wird der bestehende Kandidatensnapshot erneut bewertet und nur der abhängige Teil fortgesetzt. Materielle A05-Widersprüche zwischen einer neuen Fact-/Note-/Decision-Aussage und vorhandenen Notes werden vor Promotion ebenfalls als persistente Abhängigkeit angehalten: Die gebundene Antwort darf die alte Angabe behalten, die neue übernehmen oder eine exakte freie Ersatzspanne liefern. Gewöhnliche explizite Nutzerfragen sind keine Korrekturabhängigkeit und laufen nicht durch diesen Pfad.
 
 ### 5.3 Verarbeitung eines direkten Text-Captures
 
@@ -648,7 +648,7 @@ Die Nutzerauskunft wird quellengebunden gespeichert. Sie schließt die Rückfrag
 | Budget | Session und optionale Topic-Zuordnung | Standardmäßig 12 offene Fragen je Session und 4 je Topic-Bezug | Implementiert; Budgetüberschreitung ergibt einen Fehler. |
 | Antwort / Reopen | Question-ID und Antwortquelle | `answered` mit Text bzw. erneut `open` | Separate API. |
 | Implizite Frage | Zum Beispiel fehlender Verantwortlicher, unentschiedener Sachverhalt oder unklarer Mutationsbezug | Aus einer materiellen Wissenslücke eine konkrete Frage bilden | A06 erzeugt sie automatisch für fehlende, mehrdeutige, inkompatible oder zu schwache Mutationsziele; die allgemeine automatische Ableitung bleibt offen. |
-| Clarification-Capture | `context_ref` mit Clarification-ID | Neue Audio-/Texterfassung als Antwort auf genau eine offene Rückfrage zuordnen | Für A06/A07-Mutationsfragen einschließlich Antwortpersistenz und Fortsetzung implementiert; allgemeine Wissensneubewertung bleibt offen. |
+| Clarification-Capture | `context_ref` mit Clarification-ID | Neue Audio-/Texterfassung als Antwort auf genau eine offene Rückfrage zuordnen | Für A06/A07-Mutationsfragen und materielle A05-Wissenswidersprüche einschließlich Antwortpersistenz, Neubewertung und Fortsetzung implementiert. |
 | Selbstständige Beantwortung | Offene Frage plus Wissensbestand | Gewünscht: suchen, Evidence prüfen, beantworten oder gezielt nachfragen | Such- und Antwortbausteine vorhanden, kein geschlossener automatischer Kreislauf. |
 
 Die KI-Registry enthält `questions.detect` und `questions.resolve`; diese Einträge belegen keinen produktiven Aufruf. Offene Decisions sind ebenfalls nicht automatisch erzeugte implizite Questions.
@@ -661,7 +661,7 @@ Nicht blockierende Unklarheiten werden als offene Dashboard-Fragen gesammelt. Ei
 
 ### 12.2 Beschlossen: Rückfrage auswählen und direkt in ihrem Kontext antworten
 
-**Status: Beschlossen / Mutationspfad strukturell umgesetzt.** Der bevorzugte Ablauf benötigt keine nachträgliche semantische Suche nach der gemeinten Frage:
+**Status: Strukturell umgesetzt; reale Wissensprobe noch ausstehend.** Der bevorzugte Ablauf benötigt keine nachträgliche semantische Suche nach der gemeinten Frage:
 
 | Reihenfolge | Input / Nutzeraktion | Verarbeitung | Output |
 |---|---|---|---|
@@ -925,7 +925,7 @@ Die folgende Liste konsolidiert das Gespräch und den tatsächlichen Integration
 | W02 | Gemeinsamer Suchzugriff auf Notes und Fact-Claims | Frage oder neue Information → relevante Inhalte auch nach Note-Fact-Promotion. |
 | W03 | Korrektes Client-Gesprächsgedächtnis | Conversation-ID und Folgeeingabe → eigene vorherige Turns und referenzierte Entitäten im Kontext. |
 | W04 | Konflikte vor bzw. bei Antworten und Änderungen berücksichtigen | Widerspruch → belegte Korrektur, zeitliche Ablösung oder ungelöster Konflikt statt stiller Wahrheitsersetzung. |
-| W05 | Question-/Clarification-Kreislauf — **Mutationspfad seit 2026-09-11 strukturell umgesetzt:** ausgewählte ESP-Frage bindet die nächste gültige BOOT-Aufnahme; ein sicherer Vorschlag kann ausdrücklich per `submit_capture` gesendet werden. Antwortversuch und Quelle werden persistiert, das bestehende A06-Ziel mit dem A05-Snapshot präzisiert, die A07-Aktion idempotent fortgesetzt und das Elternresultat erneuert. Reale Geräteabnahme und allgemeine Wissensfragen bleiben offen. | Ausgewählte Dashboard-Frage → gebundene Text-/Audiomemo oder ausdrücklich abgesendeter Antwortvorschlag → Wissen aktualisieren und abhängige Aktion fortsetzen; siehe 12.2. Freie Memos behalten einen separaten Zuordnungsfallback. |
+| W05 | Question-/Clarification-Kreislauf — **seit 2026-09-11 strukturell geschlossen:** ausgewählte ESP-Frage bindet die nächste gültige BOOT-Aufnahme oder ausdrückliche Auswahl. Mutationsabhängigkeiten werden gegen ihren A05-Snapshot fortgesetzt; materielle A05-Wissenswidersprüche blockieren die Promotion und dürfen nur durch Beibehalten, Ersetzen oder eine exakte freie Korrektur abgeschlossen werden. Antwort, Quelle, Snapshot und Vorher-/Nachherzustand bleiben persistent. Der Mutationspfad ist real abgenommen; die Wissensprobe am Gerät steht noch aus. | Ausgewählte Dashboard-Frage → gebundene Text-/Audiomemo oder ausdrücklich abgesendeter Antwortvorschlag → Wissen aktualisieren und abhängige Aktion fortsetzen; siehe 12.2. Der optionale Zuordnungsfallback für kontextlose freie Memos bleibt separat. |
 | W06 | Offene Vorgänge nachts nachholen | Zurückgestellte Kandidaten und Fehler → erneute Prüfung mit gespeichertem Kontext. |
 | W07 | Kalendergrenze und Fehlerisolation der Wartung korrigieren | Seit letztem Erfolg offene Events → vollständige Nachholung; Ausfall eines Schritts blockiert nicht dauerhaft Retention/Reparatur. |
 | W08 | Jobzustände und Abschlussbarriere vereinheitlichen — **Abschlussbarriere seit Re-Audit 2026-09-08 geschlossen:** Im normalen Client-/Worker-Abschluss blockiert jeder Zustand ungleich `done` fachlichen und technischen Abschluss; problematische Zustände blockieren die Audiofreigabe. Der ausdrücklich erzwungene direkte Ingestion-Finalize bleibt ein Diagnose-/Reparaturweg ohne Client-Audiofreigabe. Offen bleibt ein allgemeiner autonomer Retry/Reconciler für die Wiederaufnahme. | failed/parked/attention_required und offene Steps → konsistenter Sessionzustand ohne vorzeitige Freigabe. |
@@ -1060,7 +1060,7 @@ Diese Übersicht dokumentiert die Abweichungen, ohne ältere normative Dateien s
 | W02 | Offen | `retrieval.py::search_knowledge` erlaubt weiterhin nur Note, Task, List und List Item, keine Fact-Claims. |
 | W03 | Offen | `client_chat.py::run_chat_turn_once` ruft `chat.py::ask_llm`; `chat.py::get_recent_conversation` liest Legacy-Events statt Conversation-Nachrichten. |
 | W04 | Offen | `claims.py::run_changed_conflict_scan` läuft separat/nachts und ist kein allgemeiner Guard vor Antworten oder Mutationen. |
-| W05 | Teilweise geschlossen | `clarifications.py` ordnet `context_ref.type=clarification` exakt über die öffentliche Question-ID zu, persistiert Antwortversuche und setzt A06/A07-Mutationsabhängigkeiten idempotent fort. Die Question-Detailprojektion liefert stets den Aufnahmekontext und bei genau einem schwach formulierten Ziel optional „Ja“ als ausdrücklich abzusendenden `submit_capture`. Die Firmware `h4-w05` journalisiert Audio-Kontext und vorgeschlagene Antwort ausfallsicher; `m8_clarification_loop_test.py` prüft Bestätigung, freie Zielkorrektur, Fortsetzung, Eltern-/Kindresultat und Idempotenz. Offen bleiben reale Geräteabnahme, allgemeine Wissensneubewertung und der freie Zuordnungsfallback ohne Kontext. |
+| W05 | Strukturell geschlossen; Wissens-Liveprobe offen | `clarifications.py` ordnet `context_ref.type=clarification` exakt über die öffentliche Question-ID zu, persistiert Antwortversuche und setzt A06/A07-Mutationsabhängigkeiten idempotent fort. `knowledge_clarifications.py` hält hochkonfidente A05-Widersprüche zu vorhandenen Notes vor Promotion an, persistiert Frage und unveränderlichen Kandidatensnapshot und übernimmt nur eine ausdrückliche alte/neue Auswahl oder exakte freie Korrektur. Veraltetes Wissen blockiert statt überschrieben zu werden; Vorher-/Nachherzustand und Antwortsession bleiben im Audit. `m8_clarification_loop_test.py` und `m8_knowledge_clarification_test.py` prüfen beide Abhängigkeitsarten. Der Mutationspfad ist real abgenommen, die Wissens-Liveprobe steht noch aus. Der optionale freie Zuordnungsfallback ohne Kontext ist laut Abschnitt 12.2 keine W05-Voraussetzung. |
 | W06 | Offen | `jobs.py::queue_parked_jobs_for_night_repair` deckt nur Processing-Jobs ab; Capture-/Chat-/Promotionsfehler besitzen keinen gemeinsamen Nacht-Nachholer. |
 | W07 | Offen | `consolidation.py::get_today_unarchived_events` beginnt weiterhin bei 00:00 des Aufruftags; `maintenance.py::run_daily_maintenance` bricht bei Schrittfehlern ab. |
 | W08 | Teilweise geschlossen | `intelligence.py::finalize_session` ohne `force` und `client_sessions.py::finalize_client_session` verlangen nun ausschließlich `done`; autonome Reaktivierung aller Problemzustände bleibt offen. |
@@ -1449,5 +1449,46 @@ sendet vorgeschlagene Antworten mit einer über Neustarts stabilen Capture-ID;
 Das dedizierte Gate prüft vorgeschlagenes „Ja“, freie Korrektur zwischen zwei
 Listen, Frageabschluss, Eltern-/Kindresultate und Idempotenz; das vollständige
 M8-Gate mit 25 Prüfungen, Firmwarebuild, Flash auf COM9 und Contractstatus sind
-grün. Die reale Bedienabnahme und die allgemeine Wissensneubewertung für
-Nicht-Mutationsfragen bleiben offen.
+grün. Die reale Mutationsbedienung wurde anschließend vollständig abgenommen;
+der folgende Absatz ergänzt den danach implementierten Wissenspfad.
+
+**Codeänderung 2026-09-11 (W05-Wissenspfad, strukturell):**
+
+Migration `0049_knowledge_clarification_loop` bindet einen hochkonfidenten
+`contradictory`-A05-Befund für Fact-, Note- oder Decision-Artefakte dauerhaft
+an genau eine implizite Frage. `promotion.py` hält nur diesen betroffenen
+Inhalt zurück. Der persistierte Suchsnapshot bleibt die feste Prüfgrenze;
+gewöhnliche explizite Nutzerfragen besitzen keine solche Abhängigkeit und
+können daher nicht versehentlich Wissen verändern.
+
+Bei genau einer vorhandenen Note projiziert das Dashboard „Neue Angabe“ und
+„Bisherige Angabe“ als ausdrückliche Auswahl, während die freie BOOT-Aufnahme
+verfügbar bleibt. `questions.resolve` darf bei freier Sprache nur eine exakte
+Antwortspanne als Ersatz liefern. Die Auflösung sperrt Abhängigkeit und
+betroffene Notes, verwirft einen veralteten Snapshot, behält genau die
+bestätigte alte Angabe oder legt die bestätigte Ersatzangabe quellentreu neu an
+und archiviert nur ausdrücklich verdrängte Widerspruchsobjekte reversibel mit
+`clarification_superseded`. Antwortsession,
+Entscheidung sowie Vorher-/Nachherzustand werden persistiert; Wiederholungen
+sind No-ops. Das ursprüngliche Capture-Ergebnis wird anschließend erneuert.
+
+Das neue Gate prüft Auswahl, freie Korrektur, Idempotenz, Audit und den Schutz
+vor zwischenzeitlich geändertem Wissen. Ein echter strukturierter Modellaufruf
+extrahierte aus „Nein, richtig ist …“ ausschließlich die wörtliche
+Korrekturspanne mit Konfidenz 0,95. Das vollständige M8-Gate ist mit nun 26
+Prüfungen einschließlich logischem Vier-Stunden-Soak grün. Offen ist nur die
+reale Audio-/Auswahlprobe nach Worker-Neustart; der in Abschnitt 12.2 bewusst
+optionale Zuordnungsfallback für eine kontextlos gestartete Memo bleibt ein
+separates Komfortfeature.
+
+**Live-Nachtrag 2026-09-11 (Wissensprobe abgebrochen):** Nach Worker-Neustart
+wurde „Der W05-Testschrank steht links neben dem Fenster“ in Session 1030 als
+Fact-Artefakt erkannt und auf Note 168 promoviert. Die anschließend korrekt
+transkribierte Aussage „Der W05-Testschrank steht rechts neben dem Fenster“
+erhielt in Session 1031 zwar den Intent `memo`, aber den Zieltyp `unknown` und
+kein Session-Artefakt. Damit erreichte die Eingabe weder A05-Widerspruch noch
+W05-Rückfrage. Die Probe wurde auf Nutzerwunsch beendet; sie ist für W05
+unentschieden und zeigt stattdessen eine vorgelagerte Variabilität der
+Artefaktbildung. Note 168 und die technischen Sessions wurden nicht
+nachträglich verändert oder gelöscht. Der strukturelle W05-Nachweis bleibt
+grün, die reale Wissensabnahme offen.

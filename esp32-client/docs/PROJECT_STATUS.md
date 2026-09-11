@@ -152,7 +152,9 @@ zeigte zwei Aufgaben und die Einkaufsliste unter „Als Nächstes“; der Fokus 
 beim verzögert einsetzenden erzwungenen Sync erhalten. Für das weitere
 Dashboard fehlen:
 
-1. allgemeine W05-Wissensneubewertung für Nicht-Mutationsfragen;
+1. reale W05-Wissensprobe nach dem strukturellen Backendabschluss; der erste
+   Versuch wurde abgebrochen, weil die korrekt transkribierte zweite Aussage
+   vorgelagert kein Artefakt bildete und W05 nicht erreichte;
 2. echtes Controllerfenster im regulären Zeichenpfad sowie später SSE.
 
 Der Verlauf zeigt den technischen Sessionzustand nun vollständig in jeder
@@ -203,7 +205,7 @@ weiterhin die bestehende Oberfläche und behauptet nicht den H5-Meetingmodus.
 
 ## Noch offen bis zum produktiven Betrieb
 
-- W05 außerhalb von Mutationsrückfragen sowie dessen reale Geräteabnahme
+- reale Geräteabnahme des strukturell fertigen W05-Wissenspfads
 - automatische Credentialrotation und vollständige persistierte Retry-/Backoff-
   Klassen
 - verschlüsseltes NVS und verschlüsselte Audiodateien
@@ -224,7 +226,7 @@ Die auswählbare IANA-Zeitzone ist ein späteres Komfortfeature. Bis dahin bleib
 die verifizierte `Europe/Berlin`-Regel bewusst fest eingebaut. A01–A07 sind
 umgesetzt und live abgenommen; A08 ist ebenfalls strukturell und physisch grün.
 Danach bleiben insbesondere A09-Claim-Aktivierung, A11-Recovery,
-A12-Gesamtresultat und der allgemeine W05-Wissenspfad offen.
+A12-Gesamtresultat und die reale W05-Wissensprobe offen.
 
 Historische Messwerte und Fehleranalysen stehen im `CHANGELOG.md` und in
 `CLIENT_SERVER_STATE.md`; diese Datei beschreibt nur den aktuellen Übergabestand.

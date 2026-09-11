@@ -1181,6 +1181,22 @@ der physischen Tastenrichtung; die korrigierte Addition des Fokusdeltas wurde
 neu gebaut, geflasht und real als „unten = nächster Eintrag, oben = vorheriger
 Eintrag“ bestätigt. Sämtliche Testlisten, Identitäten und die Testsitzung sind
 anschließend entfernt worden.
-Die allgemeine Wissensneubewertung für andere
-Question-Arten und die freie nachträgliche Zuordnung einer kontextlosen Memo
-bleiben spätere W05-Arbeit.
+Der W05-Wissenspfad ist anschließend im Backend strukturell ergänzt worden:
+Ein materieller A05-Widerspruch zu vorhandenen Notes hält die Promotion an und
+projiziert bei eindeutigem Altstand „Neue Angabe“/„Bisherige Angabe“. Auswahl
+oder freie BOOT-Antwort bleiben an Frage und unveränderlichen A05-Snapshot
+gebunden; veraltetes Wissen blockiert, Vorher-/Nachherzustand und Antwortsession
+werden auditiert. Das neue Gate, der echte strukturierte Resolver und das
+vollständige M8 mit 26 Prüfungen einschließlich logischem Soak sind grün. Offen
+ist die reale Audio-/Auswahlprobe nach Worker-Neustart. Die freie nachträgliche
+Zuordnung einer kontextlosen Memo bleibt ein separates Komfortfeature und ist
+laut Backendnorm keine Voraussetzung für W05.
+
+Die erste reale Wissensprobe nach dem Neustart blieb unentschieden und wurde
+auf Nutzerwunsch beendet. Session 1030 erzeugte aus der Links-Aussage zum
+„W05-Testschrank“ ein Fact-Artefakt und Note 168. Session 1031 transkribierte
+die widersprechende Rechts-Aussage korrekt, bewertete den Memo-Zieltyp jedoch
+als `unknown` und erzeugte kein Artefakt. Deshalb liefen A05 und W05 für diese
+zweite Aussage nicht an; dies ist kein beobachteter Fehler des neuen
+Rückfragepfads, aber die reale W05-Wissensabnahme bleibt offen. Note 168 und
+beide technischen Sessions blieben unverändert bestehen.
