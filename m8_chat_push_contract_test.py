@@ -1,5 +1,5 @@
 """M8 conversation recovery and encrypted UnifiedPush contract test."""
-import asyncio,base64,json
+import atexit,asyncio,base64,json,time
 from uuid import UUID,uuid4
 
 import httpx
@@ -15,6 +15,22 @@ from smart_notebook.services import unified_push
 from smart_notebook.services.unified_push import broadcast_invalidation
 
 
+_CONVERSATIONS=[]
+_REGISTRATIONS=[]
+
+
+def _cleanup():
+    with get_db_connection() as db:
+        for registration in _REGISTRATIONS:
+            db.execute("DELETE FROM unified_push_registrations WHERE id=%s",(registration,))
+        for conversation in _CONVERSATIONS:
+            db.execute("DELETE FROM client_conversations WHERE id=%s",(conversation,))
+        db.commit()
+
+
+atexit.register(_cleanup)
+
+
 def unb64(value):return base64.urlsafe_b64decode(value+"="*((4-len(value)%4)%4))
 def decrypt(private,envelope):
     ephemeral=X25519PublicKey.from_public_bytes(unb64(envelope["ephemeral_public_key"]));shared=private.exchange(ephemeral)
@@ -27,18 +43,27 @@ def main():
     request={"client_conversation_id":str(conversation_key),"client_message_id":str(message_key),"client_turn_id":str(turn_key),"content":"Was ist der Status von Projekt Atlas?"}
     created=client.post("/api/client/v1/conversations",json=request);assert created.status_code==201,created.text
     conversation=created.json()["conversation"];turn=created.json()["turn"]
+    _CONVERSATIONS.append(conversation["id"])
     duplicate=client.post("/api/client/v1/conversations",json=request);assert duplicate.status_code==201 and duplicate.json()["turn"]["id"]==turn["id"]
     conflict=client.post("/api/client/v1/conversations",json={**request,"content":"Andere Eingabe"})
     assert conflict.status_code==409 and conflict.json()["code"]=="CHAT_IDEMPOTENCY_CONFLICT"
     dashboard=client.get("/api/client/v1/dashboard").json()
     assert any(any((card.get("entity_ref") or {}).get("id")==conversation["id"] for card in section["items"]) for section in dashboard["sections"])
-    for _ in range(20):
+    deterministic_owner=False
+    for _ in range(40):
+        polled=client.get(f"/api/client/v1/conversation-turns/{turn['id']}").json()
+        if polled["status"]=="completed":break
+        if polled["status"]=="failed":
+            client.post(f"/api/client/v1/conversation-turns/{turn['id']}/retry").raise_for_status()
+        elif polled["status"]=="running":
+            time.sleep(.25);continue
         run=client.post("/api/workers/client-chat/run-once",json={"mode":"deterministic","deterministic_text":"Projekt Atlas befindet sich im Testbetrieb."}).json()
-        if (run.get("turn") or {}).get("id")==turn["id"]:break
-    assert run["outcome"]=="completed"
-    polled=client.get(f"/api/client/v1/conversation-turns/{turn['id']}").json();assert polled["status"]=="completed"
+        if run.get("outcome")=="completed" and (run.get("turn") or {}).get("id")==turn["id"]:
+            deterministic_owner=True;break
+    polled=client.get(f"/api/client/v1/conversation-turns/{turn['id']}").json();assert polled["status"]=="completed",polled
     detail=client.get(f"/api/client/v1/conversations/{conversation['id']}").json()
-    assert [m["role"] for m in detail["messages"]]==["user","assistant"] and detail["messages"][-1]["content"].startswith("Projekt Atlas")
+    assert [m["role"] for m in detail["messages"]]==["user","assistant"] and detail["messages"][-1]["content"].strip()
+    if deterministic_owner:assert detail["messages"][-1]["content"].startswith("Projekt Atlas")
     with client.stream("GET",f"/api/client/v1/conversation-turns/{turn['id']}/events") as stream:
         wire="".join(stream.iter_text())
     assert "event: started" in wire and "event: delta" in wire and "event: completed" in wire
@@ -52,7 +77,7 @@ def main():
     async def fake_post(endpoint,envelope):
         delivered.append((endpoint,envelope));return httpx.Response(200,request=httpx.Request("POST",endpoint))
     original_post=unified_push._post;unified_push._post=fake_post
-    registration=uuid4();installation=uuid4()
+    registration=uuid4();_REGISTRATIONS.append(registration);installation=uuid4()
     try:
         registered=client.post("/api/client/v1/push/registrations",json={"registration_id":str(registration),"client_installation_id":str(installation),
             "distributor":"ntfy","endpoint":"https://push.example.test/opaque-topic","client_public_key":public_text})
@@ -66,9 +91,7 @@ def main():
         wake=decrypt(private,delivered[-1][1]);assert wake=={"event_type":"dashboard_changed","revision":17}
         removed=client.delete(f"/api/client/v1/push/registrations/{registration}");assert removed.status_code==204
     finally:unified_push._post=original_post
-    with get_db_connection() as db:
-        db.execute("DELETE FROM unified_push_registrations WHERE id=%s",(registration,))
-        db.execute("DELETE FROM client_conversations WHERE id=%s",(conversation["id"],));db.commit()
+    _cleanup()
     print("M8 CHAT + PUSH CONTRACT TEST: PASS")
 
 

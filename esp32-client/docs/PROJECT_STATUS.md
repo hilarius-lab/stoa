@@ -1,6 +1,6 @@
 # Projektstand
 
-Stand: 2026-09-10, A05 live abgenommen und ESP-Uploadpriorisierung verifiziert
+Stand: 2026-09-11, A07 strukturell verifiziert und `h4-auto` geflasht
 
 ## Nachgewiesen am realen Gerät
 
@@ -27,7 +27,8 @@ Stand: 2026-09-10, A05 live abgenommen und ESP-Uploadpriorisierung verifiziert
   Loslassen beendet sie. Aufnahmen unter 1,5 Sekunden werden weiterhin sauber
   verworfen. Die Mitteltaste ist nur noch Auswahl/Zurück. Mono AAC-LC in
   MP4/M4A mit 48 kHz und ungefähr 64 kbit/s sowie UUID, Chunkmetadaten, Hash und
-  Finish bleiben unverändert journalisiert.
+  Finish bleiben unverändert journalisiert. Neue Aufnahmen werden als `auto`
+  journalisiert; die fachliche Klassifikation bleibt vollständig im Backend.
 - Boot-Recovery, Adoption alter Aufnahmen, Uploadunterbrechung,
   Reconciliation verlorener ACKs und bewusstes Verwerfen von
   `attention`-Aufnahmen sind am Gerät gelaufen. Der Hosttest
@@ -63,9 +64,14 @@ Stand: 2026-09-10, A05 live abgenommen und ESP-Uploadpriorisierung verifiziert
   und erst nach passender `200`-Antwort entfernt. Toggle, Zurücktoggeln,
   Verlassen und das serverseitige Verschwinden von „Hafermilch“ sind physisch
   abgenommen.
-- Der letzte Firmwarebuild (`h4-ui-refresh`) und Flash auf COM9 waren grün.
-  Das vollständige Backend-M8-Release-Gate einschließlich logischem Vier-
-  Stunden-Soak lief für die aktuellen Dashboard-Backendänderungen grün.
+- Der letzte Firmwarebuild (`h4-auto`) und Flash auf COM9 waren grün. Der
+  serielle Endstatus meldete `compatible=1` und `gate_ok=1`.
+- A07 führt eindeutig aufgelöste Sprachmutationen serverseitig idempotent aus:
+  ändern/umbenennen, Listeneintrag ergänzen, Task oder Item erledigen,
+  kontextgebunden wieder öffnen und Note, Task, Liste oder Item archivieren.
+  Das vollständige Backend-M8-Release-Gate mit 23 Prüfungen einschließlich
+  logischem Vier-Stunden-Soak ist grün; die physische Audio-Mutationsprobe ist
+  noch nicht als Nutzerabnahme protokolliert.
 
 ## Systemgrenze
 
@@ -163,8 +169,8 @@ sind ebenfalls real bestätigt. Speichern, wiederholte Auswahl und Rückfall mit
 einem zweiten realen Netz funktionieren; der Live-Wechsel erhält das bereits
 geladene Dashboard. Der Logsink ist gebaut, geflasht und auf der realen
 SD-Karte beschrieben; Inhalt und Rückkehr sind sichtbar, Scrollen erhält mit
-diesem Build eine eindeutig sichtbare Fensterposition. Der Firmwarebezeichner
-ist `h4-ui-refresh`; die Akkuanzeige ergänzt
+diesem Build eine eindeutig sichtbare Fensterposition. Der aktuelle
+Firmwarebezeichner ist `h4-auto`; die Akkuanzeige ergänzt
 weiterhin die bestehende Oberfläche und behauptet nicht den H5-Meetingmodus.
 
 ## Noch offen bis zum produktiven Betrieb
@@ -176,8 +182,8 @@ weiterhin die bestehende Oberfläche und behauptet nicht den H5-Meetingmodus.
 - reale Stromausfälle an allen Schreib-/Rename-Grenzen
 - Meetingmodus, OTA/signierte Releases, Secure Boot/Flash Encryption und
   Langzeit-/Kältetests
-- Backend: Watchdog für verwaiste `running`-Jobs und die Auto-Modus-Lücken aus
-  `BACKEND_LOGIK.md` Abschnitt 18
+- Backend: Watchdog für verwaiste `running`-Jobs und die verbleibenden
+  Auto-Modus-Lücken ab A08 aus `BACKEND_LOGIK.md` Abschnitt 18
 - Die A04-Listenstabilisierung ist automatisiert und live abgenommen: zehn Karten in der
   eigenen Listenansicht, exakte Deduplizierung gleichnamiger aktiver Listen,
   gemeinsame Auswertung benachbarter Liste-plus-Item-Chunks, Schutz vor
@@ -187,8 +193,9 @@ weiterhin die bestehende Oberfläche und behauptet nicht den H5-Meetingmodus.
   ESP-Projektion. Vollständiges M8 ist grün.
 
 Die auswählbare IANA-Zeitzone ist ein späteres Komfortfeature. Bis dahin bleibt
-die verifizierte `Europe/Berlin`-Regel bewusst fest eingebaut. A01–A05 sind
-umgesetzt und real abgenommen; als nächster Backendblock folgt A06.
+die verifizierte `Europe/Berlin`-Regel bewusst fest eingebaut. A01–A06 sind
+umgesetzt; A07 ist strukturell vollständig verifiziert und wartet nur noch auf
+die physische Audio-Mutationsprobe. Danach folgt A08.
 
 Historische Messwerte und Fehleranalysen stehen im `CHANGELOG.md` und in
 `CLIENT_SERVER_STATE.md`; diese Datei beschreibt nur den aktuellen Übergabestand.

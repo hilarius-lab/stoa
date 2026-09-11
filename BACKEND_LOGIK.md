@@ -145,6 +145,7 @@ Das Backend verwendet FastAPI als API-Schicht und PostgreSQL als autoritativen D
 | `session_intent_parts` | Gemischte `auto`-Eingabe | Geordnete Teilabsichten mit exakter Unicode-Zeichenspanne, Intent, Zielhinweis und Konfidenz. |
 | `knowledge_preflight_assessments` | Bestätigtes Artefakt oder zurückgestellte Mutationsabsicht | Idempotenter A05-Abgleich mit Suchkandidaten, bezogenen Kandidatenschlüsseln und `new|identical|complementary|contradictory|targeted`; noch keine Zielauflösung oder Mutation. |
 | `mutation_target_resolutions` | A05-Abgleich plus Mutations-Intentteil und optionaler öffentlicher Objektkontext | Idempotente A06-Zielbindung als `resolved|ambiguous|unresolved`, Konfidenz, kontrollierte Gründe und bei Klärungsbedarf der Link zur offenen Frage; noch keine Mutation. |
+| `mutation_action_executions` | Eindeutig aufgelöstes A06-Ziel plus Mutations-Intentteil | Persistenter A07-Aktionsplan, Zustand, Konfidenz, Gründe, Fehler-/Rückfragelink und bei Ausführung atomarer Vorher-/Nachher-Stand. |
 | `session_topics` | Expliziter oder semantisch erkannter Kontext | Themen der laufenden Session samt Belegen und Konfidenz. |
 | `session_questions` | Explizite oder gesondert angelegte implizite Frage | Offene/beantwortete Frage mit Priorität, Quellen und Antwort. |
 | `notes` | Dauerhaft gespeicherter Inhalt | Persönliche Notiz mit Embedding, Zeitpunkten und Archivstatus. |
@@ -199,9 +200,10 @@ Eine Quelle, ein Zitat und die daraus extrahierte Aussage sind unterschiedliche 
 7. Erst nachdem alle Verarbeitungsjobs abgeschlossen sind, erhält `capture_intent.py` den vollständigen stabilisierten Text, die semantischen Segmente und die Session-Artefakte. Ein strikt validierter strukturierter Aufruf bestimmt `memo`, `query`, `change`, `complete` oder `archive`, dazu Zieltyp, exakte Zieltextspanne, Sicherheit, kontrollierte Gründe und das Kennzeichen für mehrere unabhängige Absichten. Die Entscheidung wird genau einmal pro Ingestion-Session in `session_intent_decisions` persistiert.
 8. Bei mehreren unabhängigen Absichten zerlegt ein zweiter strukturierter Schritt den vollständigen Input in höchstens zwölf lückenlos geordnete, nicht überlappende Quellspannen. Jede Spanne wird lokal gegen den Originaltext und ihre vorhandenen semantischen Segment-IDs geprüft und in `session_intent_parts`/`session_intent_part_segments` gespeichert. Bei einer einzelnen Absicht entsteht ohne zusätzlichen LLM-Aufruf genau ein Teil über den gesamten Text.
 9. A05 gleicht vorgesehene Anlagen und Mutationsteile über den hybriden Wissenszugriff ab. Nur Artefakte, deren Quellsegmente ausschließlich zu `memo`-Teilen gehören, dürfen anschließend in die bestehende Promotion. Frageanteile werden in Quellreihenfolge zu genau einem Query-Turn verbunden; bei einer gemischten Eingabe enthält dieser nicht den Memo- oder Mutationstext.
-10. A06 filtert die persistierten Mutationskandidaten nach Intent und Zieltyp. Ein gültiger expliziter öffentlicher Objektkontext hat Vorrang; sonst wählt ein streng strukturierter Modellschritt nur bei hinreichend eindeutiger Zuordnung ein Ziel. Fehlende, mehrdeutige, inkompatible oder unter `0.85` bewertete Referenzen erzeugen eine persistierte implizite Rückfrage mit den Quellsegmenten. `resolved` ergibt öffentlich `action_status=pending_execution`, alle übrigen Fälle `pending_clarification`. Interne Ziel-IDs und Kandidatenschlüssel werden nicht ausgegeben. In beiden Fällen bleibt die eigentliche Mutation bis A07 unausgeführt. Das Capture meldet die erfolgreiche Zerlegung als `interpretation_status=split_completed`.
+10. A06 filtert die persistierten Mutationskandidaten nach Intent und Zieltyp. Ein gültiger expliziter öffentlicher Objektkontext hat Vorrang; sonst wählt ein streng strukturierter Modellschritt nur bei hinreichend eindeutiger Zuordnung ein Ziel. Fehlende, mehrdeutige, inkompatible oder unter `0.85` bewertete Referenzen erzeugen eine persistierte implizite Rückfrage mit den Quellsegmenten. Interne Ziel-IDs und Kandidatenschlüssel werden nicht ausgegeben.
+11. A07 bildet für jedes eindeutig aufgelöste Ziel genau einen persistierten Aktionsdatensatz. `complete` und `archive` werden regelbasiert auf die zulässige Objektoperation abgebildet; `change` erhält einen strikt strukturierten Plan. Neue Werte müssen exakte Quelltextspannen sein und mindestens `0.85` erreichen, sonst entsteht statt einer Mutation eine quellgebundene Rückfrage. Jede Aktion sperrt Ziel und Aktionszeile, schreibt Objektänderung sowie Vorher-/Nachher-Audit in derselben Transaktion und wird bei Wiederholung nicht doppelt ausgeführt. Das öffentliche Ergebnis meldet `completed|pending_clarification|failed|pending_execution`, aber keine internen Ziel-IDs, Payloads oder Auditstände. Das Capture meldet die erfolgreiche Zerlegung als `interpretation_status=split_completed`.
 
-**Grenze:** A06 bindet höchstens ein eindeutiges Ziel oder eröffnet eine Rückfrage. Es führt weder Erledigung noch Änderung oder Archivierung aus. Diese Ausführung bleibt A07, unsicherheitsabhängige Teilfreigabe A08 und transaktionale Wiederaufnahme mehrerer tatsächlich ausgeführter Aktionen A11.
+**Grenze:** A07 führt die validierte Einzelaktion pro aufgelöstem Intentteil aus. Unsicherheitsabhängige Teilfreigabe bleibt A08; ein vollständiger allgemeiner Recovery-/Nachtlauf über Capture-, Chat- und Promotionsfehler bleibt A11/W06. Archivieren ist fachlich reversibel und kein physisches Löschen.
 
 `context_ref` wird gespeichert und gehört zur Capture-Identität. A06 versteht einen gültigen Kontext vom Typ `note|task|list|list_item` als ausdrücklichen Objektbezug. Der davon getrennte Kontexttyp `clarification` wird weiterhin noch keinem offenen Rückfrage-Antwortkreislauf zugeordnet; diese W05-Lücke bleibt bestehen.
 
@@ -380,7 +382,7 @@ Zielauflösung.
    - `meeting`: Ergebnis mit `resolved_intent=meeting`;
    - `memo`: zusammengefügter stabiler Transkripttext;
    - `query`: aus diesem Text Conversation und Turn anlegen;
-   - `auto`: autoritative primäre Intententscheidung und öffentlich sichere `intents`-Liste verwenden; vorhandene Frageanteile erzeugen einen Query-Turn nur aus ihren Quellspannen. A05 gleicht Mutationskandidaten ab, A06 bindet ein eindeutiges Ziel oder erzeugt eine Rückfrage; das Ergebnis bleibt bis A07 `pending_execution` beziehungsweise `pending_clarification`.
+   - `auto`: autoritative primäre Intententscheidung und öffentlich sichere `intents`-Liste verwenden; vorhandene Frageanteile erzeugen einen Query-Turn nur aus ihren Quellspannen. A05 gleicht Mutationskandidaten ab, A06 bindet ein eindeutiges Ziel oder erzeugt eine Rückfrage, und A07 führt einen belastbaren Plan atomar aus. Das Ergebnis meldet entsprechend `completed`, `pending_clarification`, `failed` oder nur während eines offenen Schritts `pending_execution`.
 7. Client- und Ingestion-Session auf `completed` setzen.
 8. Monotone sessionsweite `local_audio_release_allowed`-Freigabe und Zeitpunkt setzen.
 
@@ -491,6 +493,32 @@ implizite offene Frage mit den ursprünglichen Segmentquellen an. Öffentliche
 Capture-Ergebnisse zeigen nur Reihenfolge, Intent, Status, Zieltyp,
 Konfidenz, Kandidatenanzahl und Gründe. A06 ruft keinen Task-, Note-, Listen-
 oder Listeneintrags-Mutationsservice auf.
+
+### 9.5 A07-Aktionsplan und Ausführung
+
+`mutation_actions.py` übernimmt ausschließlich A06-Auflösungen mit Status
+`resolved`. Für `complete` und `archive` ist die zulässige Operation durch
+Intent und Zieltyp festgelegt. Bei `change` sieht `capture.action_plan` nur
+Intenttext, fachlich erforderliche aktuelle Felder und die für den Zieltyp
+erlaubten Operationen; interne IDs, Listen-Elternschlüssel und Archivgründe
+werden nicht an das Modell gegeben. Ein neuer Textwert muss als exakte
+zusammenhängende Spanne in der Nutzereingabe vorkommen. Ungültige, unklare oder
+unter `0.85` bewertete Pläne werden nicht ausgeführt, sondern erzeugen eine
+quellgebundene Rückfrage.
+
+`mutation_action_executions` ist pro Intentteil eindeutig. Der Executor sperrt
+Aktionszeile und Zielobjekt, prüft den aktuellen Zustand und schreibt Mutation
+sowie `before_state`/`after_state` atomar. Bereits `completed` markierte
+Aktionen sind No-ops; fehlgeschlagene Schritte können beim erneuten fachlichen
+Abschluss wieder aufgenommen werden, ohne bereits abgeschlossene Geschwister
+zu wiederholen. Unterstützt sind Inhaltsänderung beziehungsweise Umbenennung,
+Task-/Listeneintragsstatus, Listeneintrag-Ergänzung und Archivierung von Note,
+Task, Liste oder Listeneintrag. Eine Listenarchivierung archiviert aktive
+Kinder mit dem eigenen Grund `user_requested_parent`; identische aktive neue
+Items werden nicht doppelt angelegt. Freisprachliches Wiederöffnen erledigter
+Tasks oder Listeneinträge benötigt derzeit einen gültigen öffentlichen
+Objektkontext, weil die allgemeine A05-Suche abgeschlossene Objekte nicht als
+aktive Kandidaten liefert.
 
 ## 10. Antworten und Gesprächsgedächtnis
 
@@ -664,12 +692,12 @@ Note-Projektionen leiten einen Anzeigescore aus bis zu fünf Eventquellen ab (`0
 
 | Aktion | Vorhandener Weg | Grenze der automatischen Spracheingabe |
 |---|---|---|
-| Note anlegen / ergänzen | Capture, direkte Note-API, Promotion, Eventkonsolidierung | Auto-Capture hat noch keinen allgemeinen Mehrfachaktionsplan. |
-| Task anlegen / ändern | Capture, Task-API, Promotion | A06 bindet ein eindeutiges natürlichsprachliches Änderungsziel oder fragt nach; A07-Ausführung fehlt. |
-| Listen / Einträge anlegen | Listen-API, Capture/Listenzielauflösung, Promotion | A06 kann eine bestehende Zielliste für Ergänzungssprache binden; der allgemeine A07-Executor fehlt. |
-| Task erledigen | Task-Status-API; zusätzlich Client-v1-`complete_task`; CalDAV | A06 löst natürliche Sprache auf oder fragt nach, führt die Erledigung aber noch nicht aus. |
-| Listeneintrag erledigen / wieder öffnen | List-Item-Status-API, Client-v1-Desired-State / CalDAV | A06 löst Erledigungsziele auf; Wiederöffnen und allgemeine Sprach-Ausführung bleiben A07. |
-| Archivieren / reaktivieren | Entitätsspezifische APIs, Wartung und CalDAV | A06 bindet Archivierungsziele ohne Ausführung; Archivierung ist zudem keine physische Löschung aller Quellen. |
+| Note anlegen / ergänzen | Capture, direkte Note-API, Promotion, Eventkonsolidierung | Neue Notes entstehen weiter über Promotion; A07 kann eine eindeutig referenzierte Note inhaltlich ersetzen. |
+| Task anlegen / ändern | Capture, Task-API, Promotion | A07 ändert den Inhalt eines eindeutig aufgelösten Tasks; Zeit-/Prioritätsänderungen bleiben außerhalb dieses ersten Sprachplans. |
+| Listen / Einträge anlegen | Listen-API, Capture/Listenzielauflösung, Promotion | Neue Listen entstehen über Promotion; A07 kann eine Zielliste umbenennen oder einen quellentreu benannten Eintrag ergänzen. |
+| Task erledigen | Task-Status-API; zusätzlich Client-v1-`complete_task`; CalDAV | A07 führt ein eindeutig aufgelöstes sprachliches `complete` idempotent aus. |
+| Listeneintrag erledigen / wieder öffnen | List-Item-Status-API, Client-v1-Desired-State / CalDAV | A07 führt Erledigen aus; freies Wiederöffnen benötigt derzeit einen expliziten öffentlichen Objektkontext. |
+| Archivieren / reaktivieren | Entitätsspezifische APIs, Wartung und CalDAV | A07 archiviert eindeutige Ziele mit `user_requested`; das ist keine physische Löschung. Freies Reaktivieren archivierter Objekte bleibt außerhalb der aktiven A05-Suche. |
 | Session-Kandidat korrigieren / ersetzen / verwerfen | Artefaktoperationen und spezielle Task-Modifier-Regel | Bestehende dauerhafte Wissensobjekte werden dadurch nicht automatisch rückwirkend synchron korrigiert. |
 | Fragen beantworten / wieder öffnen | Question-API | Capture-Kontext noch nicht vollständig angeschlossen. |
 
@@ -685,9 +713,14 @@ typisierter Aktionskanal. Die unter W01 dokumentierte Lücke bleibt bestehen:
 Der Statusservice schreibt noch kein allgemeines Vorher/Nachher-Mutationsaudit
 mit Entscheidungsgrund.
 
-Eine allgemeine „vergiss/lösche das“-Sprachaktion mit eindeutigem Ziel und definierter Aufbewahrungswirkung fehlt. Semantisches Ersetzen, Archivieren, Sync-Tombstones und physisches Löschen sind getrennte Vorgänge.
+Eine allgemeine „vergiss/lösche das“-Sprachaktion archiviert seit A07 ein von
+A06 eindeutig aufgelöstes Ziel. Semantisches Ersetzen, Archivieren,
+Sync-Tombstones und physisches Löschen bleiben getrennte Vorgänge; A07 löscht
+keine Wissenszeile physisch.
 
-Die fachliche Aufbewahrungswirkung für Textwissen ist inzwischen in Abschnitt 14.3 beschlossen; offen bleibt ihre Umsetzung einschließlich eindeutiger Zielauflösung.
+Die in Abschnitt 14.3 beschlossene fachliche Aufbewahrungswirkung ist damit
+für A07-Sprachaktionen umgesetzt. Andere Mutationswege besitzen weiterhin
+nicht durchgehend denselben Audit- und Wiederaufnahmepfad.
 
 ### 14.2 CalDAV als externer Aktionskanal
 
@@ -837,7 +870,7 @@ Technische Logs und Worker-Heartbeats dienen der Diagnose. Normativ sollen sie k
 
 ### 17.5 Strukturierte LLM-Aufrufe und aktueller `llama.cpp`-Befund
 
-Mit A06 existieren **sechzehn** aktive `response_format.type='json_schema'`-Aufrufe in **dreizehn** Services: `capture.py`, `capture_intent.py` (zweimal), `claims.py`, `consolidation.py`, `dedupe.py` (zweimal), `knowledge_preflight.py`, `lists.py` (zweimal), `maintenance.py`, `mutation_targets.py`, `nightly_consolidation.py`, `promotion.py`, `segmentation.py` und `shadow.py`. `chat.py` gehört entgegen einer älteren Aufzählung nicht dazu. `artifacts.py::_propose_artifact_operations` bleibt der einzige bewusst unstrukturierte Workaround: Formatvorgabe im Prompt, JSON-Extraktion und lokale Validierung.
+Mit A07 existieren **siebzehn** aktive `response_format.type='json_schema'`-Aufrufe in **vierzehn** Services: `capture.py`, `capture_intent.py` (zweimal), `claims.py`, `consolidation.py`, `dedupe.py` (zweimal), `knowledge_preflight.py`, `lists.py` (zweimal), `maintenance.py`, `mutation_actions.py`, `mutation_targets.py`, `nightly_consolidation.py`, `promotion.py`, `segmentation.py` und `shadow.py`. `chat.py` gehört entgegen einer älteren Aufzählung nicht dazu. `artifacts.py::_propose_artifact_operations` bleibt der einzige bewusst unstrukturierte Workaround: Formatvorgabe im Prompt, JSON-Extraktion und lokale Validierung.
 
 Der aktuelle Code besitzt keinen gemeinsamen Adapter für diese Aufrufe; Schema, HTTP-Client, Parsing und Fehlerbehandlung liegen jeweils im Fachservice. Auch `trust_env=False` wird nicht einheitlich gesetzt. Das ist eine Wartungsinkonsistenz, aber kein Nachweis, dass projektweit auf textbasierte Ausgabe umgestellt werden sollte. Der nächtliche strukturierte Review wurde im Re-Audit live erfolgreich ausgeführt. Der kombinierte Alpha-Test für Artefakt, Shadow und Claims war wegen eines parallel laufenden Workers nicht aussagekräftig: Dieser beanspruchte den Testjob vor dem Test-Endpoint. **AD-012 entscheidet deshalb gegen eine pauschale Umstellung:** funktionierende kleine Schemas bleiben constrained; weitere freie Textpfade benötigen einen reproduzierbaren Taskfehler und gleichwertige lokale Validierung. Ein gemeinsamer Transport-/Parsing-Adapter bleibt technische Folgearbeit, ohne die taskweise Modusentscheidung zu verwischen.
 
@@ -855,11 +888,11 @@ Die folgende Liste konsolidiert das Gespräch und den tatsächlichen Integration
 | A04 | Einheitliche Typdefinitionen und Validierung — **seit 2026-09-10 geschlossen:** `content_types.py` definiert Artefakt-, Claim-, Question- und Segmenttypen sowie gemeinsame lokale Guards. Die nach der ersten Audioabnahme gefundenen Listenfehler sind automatisiert geschlossen und mit vier echten Audio→DB→ESP-Proben bestätigt: benachbarte Chunk-Fortsetzungen werden gemeinsam als Listeneintrag gewertet, gleichnamige aktive Container exakt dedupliziert und rein deiktische Aktionssätze nicht als leere Liste zugelassen. | Kandidat → konsistente Note-/Task-/List-/Claim-/Question-Einordnung in allen Pfaden, einschließlich kombinierter Liste-plus-Item-Aussagen über Chunkgrenzen. |
 | A05 | Wissen und Ziele vor Mutationen abgleichen — **seit 2026-09-10 geschlossen:** Jede vorgesehene Artefaktanlage und jede zurückgestellte Mutationsabsicht erhält vor Promotion über `search_knowledge` einen persistierten, idempotenten Abgleich als `new|identical|complementary|contradictory|targeted`. Exakte eindeutige Identität darf eine Neuanlage wiederverwenden; mögliche Mutationstreffer bleiben reine Kandidaten ohne A06-Zielwahl oder A07-Ausführung. Zwei echte Audioaufnahmen bestätigten `new` und die Wiederverwendung einer STT-orthografisch leicht abweichenden `identical`-Aussage. | Neuer Inhalt + passende Suche → neu, identisch, ergänzend, widersprechend oder auf ein Objekt bezogen. |
 | A06 | Referenzen aus Sprache und Gespräch auflösen — **seit 2026-09-11 geschlossen:** Mutationsteile werden ausschließlich gegen den persistierten A05-Suchsnapshot oder einen gültigen öffentlichen Objektkontext geprüft. Eindeutige Ziele werden intern gebunden; fehlende, mehrdeutige, inkompatible und zu schwache Bezüge erzeugen eine quellgebundene offene Rückfrage. Keine A07-Mutation wird vorweggenommen. | „Das ist erledigt“, „dort noch Brot“ → eindeutige Objekt-ID oder offene Rückfrage. |
-| A07 | Gemeinsamer Aktionsplan und Executor | Validierte Interpretation → anlegen, ergänzen, ändern, abhaken, wieder öffnen oder archivieren. |
+| A07 | Gemeinsamer Aktionsplan und Executor — **seit 2026-09-11 geschlossen:** Eindeutig aufgelöste Mutationsteile erhalten je einen persistenten, quellenvalidierten Plan. Inhaltsänderung/Umbenennung, Ergänzen, Erledigen, kontextgebundenes Wiederöffnen und Archivieren laufen idempotent mit atomarem Vorher-/Nachher-Audit; unklare oder schwache Pläne werden Rückfragen. Neue Objekte entstehen weiterhin über die bestehende Promotion. | Validierte Interpretation → anlegen, ergänzen, ändern, abhaken, wieder öffnen oder archivieren. |
 | A08 | Teilweise Unsicherheit behandeln | Gemischte sichere/unsichere Aktionen → sichere Teile ausführen, restliche mit Kontext zur Klärung speichern. |
 | A09 | Dauerhafte Übernahme und Claim-Kandidaten anschließen — **Übernahme seit 2026-09-08 automatisch und vor Audiofreigabe verdrahtet** (`settle_client_session_for_ingestion`/Client-Finalize → `finalize_session` → `promote_session_artifacts` → technischer Abschluss), live im Happy Path und regressionsgeprüft im Fehlerpfad. Claim-Kandidaten-Aktivierung (Abschnitt 11.2) bleibt offen. | Geeignete bestätigte Inhalte → dauerhaftes Wissen; geprüfte Claim-Kandidaten → kontrolliert aktivierte Claims. |
 | A10 | Capture-/Chat-Verarbeitung automatisch betreiben — **seit Re-Audit 2026-09-08 geschlossen:** Beide Queues sind Bestandteil von `worker.py all`; die manuellen Run-once-Endpunkte bleiben für Diagnose/Tests erhalten. Automatische Retries bereits fehlgeschlagener Capture-/Chat-Datensätze bleiben Teil von A11/W06. | Persistierte Aufträge → ohne manuelle run-once-Aufrufe abgearbeitete Ergebnisse. |
-| A11 | Idempotente Mehrfachaktionen und Recovery | Retry / Absturz → Fortsetzung ab offenem Teilschritt ohne doppelte Mutation. |
+| A11 | Idempotente Mehrfachaktionen und Recovery — **für A07-Objektaktionen teilweise geschlossen:** Ein Aktionsdatensatz pro Intentteil, Transaktion pro Mutation und Wiederaufnahme fehlgeschlagener Schritte verhindern die doppelte Ausführung bereits abgeschlossener Geschwister. Allgemeine Capture-/Chat-/Promotionsretries und Nacht-Recovery bleiben offen. | Retry / Absturz → Fortsetzung ab offenem Teilschritt ohne doppelte Mutation. |
 | A12 | Verständliches Gesamtresultat | Ausgeführte Aktionen und offene Fragen → nachvollziehbare Rückmeldung, bei Bedarf Antwort. |
 | A13 | Aufnahmefilter mit niedriger Nutzenschwelle | Beliebige Eingabe → Smalltalk/Füllsätze ausfiltern, möglicherweise nützliche Inhalte als gekennzeichnete Kandidaten aufnehmen; siehe 2.1. |
 
@@ -867,7 +900,7 @@ Die folgende Liste konsolidiert das Gespräch und den tatsächlichen Integration
 
 | ID | Fehlende Verbindung | Erwarteter Input → Output |
 |---|---|---|
-| W01 | Vollständige Quellen-/Änderungskette | Jede Mutation → Eingangsquelle, Ziel, alter/neuer Stand und Entscheidungsgrund. |
+| W01 | Vollständige Quellen-/Änderungskette — **für A07-Sprachaktionen teilweise geschlossen:** Intentteil und Segmentquellen führen über Zielauflösung und Gründe zum atomaren Vorher-/Nachher-Audit. Direkte Entitäts-, CalDAV- und ESP-Desired-State-Wege sind noch nicht vollständig vereinheitlicht. | Jede Mutation → Eingangsquelle, Ziel, alter/neuer Stand und Entscheidungsgrund. |
 | W02 | Gemeinsamer Suchzugriff auf Notes und Fact-Claims | Frage oder neue Information → relevante Inhalte auch nach Note-Fact-Promotion. |
 | W03 | Korrektes Client-Gesprächsgedächtnis | Conversation-ID und Folgeeingabe → eigene vorherige Turns und referenzierte Entitäten im Kontext. |
 | W04 | Konflikte vor bzw. bei Antworten und Änderungen berücksichtigen | Widerspruch → belegte Korrektur, zeitliche Ablösung oder ungelöster Konflikt statt stiller Wahrheitsersetzung. |
@@ -974,7 +1007,7 @@ Diese Übersicht dokumentiert die Abweichungen, ohne ältere normative Dateien s
 | Themen / Beispiele | [topic_detection.py](smart_notebook/services/topic_detection.py), [topics.py](smart_notebook/services/topics.py), [semantic_examples.py](smart_notebook/services/semantic_examples.py) |
 | Suche / Deduplizierung | [retrieval.py](smart_notebook/services/retrieval.py), [dedupe.py](smart_notebook/services/dedupe.py), [lists.py](smart_notebook/services/lists.py), [embeddings.py](smart_notebook/services/embeddings.py) |
 | Wissen / Quellen | [promotion.py](smart_notebook/services/promotion.py), [provenance.py](smart_notebook/services/provenance.py), [claims.py](smart_notebook/services/claims.py), [note_fact.py](smart_notebook/services/note_fact.py) |
-| Fragen / Referenzen | [intelligence.py](smart_notebook/services/intelligence.py), [reference_resolver.py](smart_notebook/services/reference_resolver.py), [mutation_targets.py](smart_notebook/services/mutation_targets.py), [routers/intelligence.py](smart_notebook/routers/intelligence.py) |
+| Fragen / Referenzen / Aktionen | [intelligence.py](smart_notebook/services/intelligence.py), [reference_resolver.py](smart_notebook/services/reference_resolver.py), [mutation_targets.py](smart_notebook/services/mutation_targets.py), [mutation_actions.py](smart_notebook/services/mutation_actions.py), [routers/intelligence.py](smart_notebook/routers/intelligence.py) |
 | Chat | [client_chat.py](smart_notebook/services/client_chat.py), [chat.py](smart_notebook/services/chat.py) |
 | Bewertung | [activity.py](smart_notebook/services/activity.py), [knowledge_sync.py](smart_notebook/services/knowledge_sync.py) |
 | Nachtlauf | [scheduler.py](scheduler.py), [maintenance.py](smart_notebook/services/maintenance.py), [consolidation.py](smart_notebook/services/consolidation.py), [nightly_consolidation.py](smart_notebook/services/nightly_consolidation.py) |
@@ -995,14 +1028,14 @@ Diese Übersicht dokumentiert die Abweichungen, ohne ältere normative Dateien s
 | A04 | Geschlossen | `content_types.py` trennt Artefakte, Claims und separat gespeicherte Questions und liefert die gemeinsamen Guards für Segmentierung, Router, Shadow, API-Schemas, Capture, Konsolidierung und LLM-Artefaktoperationen. Migration 0044 ergänzt `list_candidate`. Die Tests und vier echte Audio→DB→ESP-Proben prüfen kurze zeitfreie Tasktitel, Tageszeitfenster, explizite/implizite Listenerstellung, beide Workerreihenfolgen einer Chunk-übergreifenden Fortsetzung, exakte Aktivlisten-Deduplizierung und Schutz vor deiktischen Leerlisten. |
 | A05 | Geschlossen | `knowledge_preflight.py` ruft vor Artefaktpromotion und für zurückgestellte Mutationsteile ausschließlich `retrieval.py::search_knowledge` auf und persistiert Kandidaten, Bezugsauswahl, Konfidenz und kontrollierte Gründe über Migration 0045. Exakte eindeutige Identität wird ohne Neuanlage wiederverwendet; `targeted` setzt weder Ziel-ID noch `action_status` um. `m8_knowledge_preflight_test.py` prüft alle fünf Klassen, Idempotenz, öffentliche ID-Abschirmung, identische Wiederverwendung und den mutationsfreien Target-Fall; `m8_capture_contract_test.py` prüft die Einbindung in reine und gemischte Auto-Captures. Zwei echte Audioaufnahmen liefen nach Worker-Neustart bis zu `new`, `identical` und derselben dauerhaften Note durch. |
 | A06 | Geschlossen | `mutation_targets.py::ensure_session_mutation_target_resolutions` prüft jeden Mutationsteil gegen den A05-Snapshot und optionalen öffentlichen Objektkontext, persistiert genau eine Zielauflösung und erzeugt für Mehrdeutigkeit, fehlenden Bezug, inkompatiblen Kontext oder zu geringe Konfidenz eine implizite quellgebundene Frage. Das öffentliche Ergebnis schirmt interne IDs ab. `m8_mutation_target_resolution_test.py` prüft Auswahl, Kontextvorrang, Rückfragen, Idempotenz und Mutationsfreiheit; `m8_capture_contract_test.py` die Text-/Audiointegration. |
-| A07 | Offen | Es gibt keinen eingangswegübergreifenden Aktionsplan/Executor; Capture und Artefaktoperationen mutieren über eigene Services. |
+| A07 | Geschlossen | `mutation_actions.py::ensure_session_mutation_actions` plant und persistiert pro eindeutig aufgelöstem Intentteil genau eine zulässige Operation, validiert Modellwerte gegen den Quelltext und führt sie mit Ziel-Lock und atomarem Vorher-/Nachher-Audit aus. Schwache, ungültige und veraltete Ziele erzeugen Rückfragen statt stiller Mutation. `m8_mutation_action_test.py` prüft alle Operationsklassen, Audit, Deduplizierung, Idempotenz, Kontext-Reopen und öffentliche ID-/Payload-Abschirmung; das vollständige M8-Gate ist grün. |
 | A08 | Offen | Unsichere Artefakte/Questions können gespeichert werden, aber kein gemeinsamer Plan hält nur abhängige Teilmutationen zurück und setzt sie später fort. |
 | A09 | Teilweise geschlossen | `client_sessions.py::finalize_client_session_with_knowledge/settle_client_session_for_ingestion` schließen Promotion jetzt vor Clientabschluss und Audiofreigabe an; nur die ausdrücklich dokumentierte text-only D03-Kompatibilitätsausnahme überspringt die Session-Pipeline. `claims.py::extract_note_claim_candidates` erzeugt weiterhin nur Kandidaten. |
 | A10 | Geschlossen | `worker.py::WORKER_KINDS/run_worker_once` betreibt Capture und Chat nun im Standardmodus `all`. |
-| A11 | Offen | Stabile IDs und lokale Idempotenz existieren, aber kein Transaktionsjournal für mehrere fachliche Teilaktionen. |
+| A11 | Teilweise geschlossen | A07 besitzt einen eindeutigen Aktionsdatensatz je Intentteil, atomare Einzelmutation und Wiederaufnahme fehlgeschlagener Schritte; bereits abgeschlossene Geschwister werden nicht wiederholt. Ein allgemeiner Nacht-/Retrymechanismus für Capture, Chat und Promotion fehlt weiter. |
 | A12 | Offen | Capture-, Promotion- und Chatresultate bleiben getrennte Rückmeldungen; kein einheitliches Gesamtresultat. |
 | A13 | Offen | Es gibt keinen gemeinsamen Aufnahmefilter, der Smalltalk, Hypothesen, Zitate und nützliche Kandidaten quellenbewusst trennt. |
-| W01 | Offen | `knowledge_sources` und Artefaktlinks sichern Quellen, aber es fehlt ein allgemeines Vorher/Nachher-Mutationsaudit mit Entscheidungsgrund. |
+| W01 | Teilweise geschlossen | A07 verknüpft Intentteil/Segmentquellen, A06-Ziel, Planungsgründe sowie Vorher-/Nachher-Stand. Direkte Objekt-APIs, CalDAV und der ESP-Listitem-Desired-State-Kanal schreiben noch kein gleichwertiges gemeinsames Audit. |
 | W02 | Offen | `retrieval.py::search_knowledge` erlaubt weiterhin nur Note, Task, List und List Item, keine Fact-Claims. |
 | W03 | Offen | `client_chat.py::run_chat_turn_once` ruft `chat.py::ask_llm`; `chat.py::get_recent_conversation` liest Legacy-Events statt Conversation-Nachrichten. |
 | W04 | Offen | `claims.py::run_changed_conflict_scan` läuft separat/nachts und ist kein allgemeiner Guard vor Antworten oder Mutationen. |
@@ -1148,7 +1181,8 @@ eine konservative Promotionsfreigabe: Nur Artefakte, deren Quellsegmente
 ausschließlich Memo-Teilen zugeordnet sind, dürfen den bestehenden
 Erstellungspfad durchlaufen. Frageanteile werden in Quellreihenfolge zum Inhalt
 genau eines Query-Turns; Änderungs-, Erledigungs- und Archivierungsanteile
-bleiben bis A06/A07 ohne Ausführung `pending_resolution`. Das öffentliche
+laufen anschließend durch A05-Suche, A06-Zielbindung und A07-Ausführung oder
+enden bei Unsicherheit in einer Rückfrage. Das öffentliche
 Capture-Ergebnis meldet `split_completed`, die geordneten Intents und deren
 Unicode-Zeichenbereiche, gibt aber keine internen Segment-IDs preis. Fehler bei
 Zerlegung oder Validierung führen nachvollziehbar zu `attention_required`.
@@ -1269,8 +1303,9 @@ oder widersprechende Inhalte bleiben neue, quellengebundene Objekte und werden
 nicht still in vorhandenes Wissen geschrieben. Öffentliche Capture-Ergebnisse
 zeigen nur Klasse, Konfidenz, Kandidatenanzahl und Gründe, nie interne IDs oder
 Kandidateninhalte. Migration `0045_knowledge_preflight` hält die Bewertung pro
-Artefakt beziehungsweise Intentteil idempotent. A06-Referenzauflösung und
-A07-Mutation bleiben ausdrücklich offen.
+Artefakt beziehungsweise Intentteil idempotent. Zum damaligen A05-Abschluss
+blieben A06-Referenzauflösung und A07-Mutation ausdrücklich offen; sie sind in
+den folgenden Änderungsabschnitten geschlossen.
 
 Die reale Abnahme nach Worker-Neustart verwendete zweimal denselben über BOOT
 aufgenommenen Prüfstein-Satz. Beide Audiodateien wurden dauerhaft bestätigt
@@ -1301,4 +1336,38 @@ Capture-Regression belegt denselben Anschluss für Text und einen
 audioförmigen Auto-Pfad. Ein echter strukturierter Modellaufruf wählte aus zwei
 Tasks das sprachlich passende Ziel mit Konfidenz `0.98`. Anschließend lief das
 vollständige M8-Release-Gate einschließlich logischem Vier-Stunden-Soak grün.
-A07 bleibt der einzige Ort für die spätere tatsächliche Ausführung.
+Die tatsächliche Ausführung erfolgt ausschließlich im anschließend beschriebenen A07-Pfad.
+
+**Codeänderung 2026-09-11 (A07, geschlossen):**
+`mutation_actions.py` führt ausschließlich eindeutig aufgelöste A06-Ziele
+weiter. `complete` und `archive` werden ohne weiteren Modellspielraum auf die
+zulässige Zieloperation abgebildet. Für `change` liefert das neue AI-Profil
+`capture.action_plan` einen strikt strukturierten Einzelplan; texttragende
+Werte müssen eine exakte Quellspanne sein und die Konfidenzschwelle `0.85`
+erreichen. Das Modell erhält nur fachlich erforderliche Zielfelder, keine
+internen IDs oder Archivmetadaten. Ungültige, schwache oder veraltete Pläne
+erzeugen eine segmentgebundene Rückfrage.
+
+Migration `0047_mutation_action_execution` ergänzt den persistenten
+Aktions-/Auditdatensatz und die fehlenden Archivmetadaten für Notes. Der
+Executor sperrt Aktionszeile und Ziel, schreibt Änderung und Vorher-/Nachher-
+Stand in derselben Transaktion und überspringt bereits abgeschlossene Aktionen.
+Unterstützt sind Note-/Task-/List-/Listitem-Inhaltsänderung, Listenitem-
+Ergänzung, Erledigen, kontextgebundenes Wiederöffnen und Archivieren. Das
+Archivieren einer Liste archiviert ihre aktiven Einträge mit eigenem
+Elterngrund; es ist bewusst kein physisches Löschen.
+
+Das neue DB-Gate prüft Ausführung, Audit, Wiederholung, sichere Rückfragen,
+Item-Deduplizierung, Kontext-Reopen und öffentliche Abschirmung. Die bestehenden
+Capture-Fixtures verwenden für Mutationsfälle eine leere gepatchte Suche, damit
+ein Testlauf niemals echte Shared-DB-Objekte mutiert. Zusätzlich wurde die alte
+Chat-/Background-Worker-Race so gehärtet, dass sowohl Test- als auch realer
+Workerbesitz korrekt geprüft und immer bereinigt werden. Zwei echte
+strukturierte Action-Plan-Aufrufe lieferten quellentreu `Brot` als
+`list_add_item` und `Reiseideen` als `note_update`; der reale A02-/A06-
+Modellpfad löste „Lösche die Liste Herbsturlaub“ als Listenarchivierung auf.
+Das vollständige M8-Release-Gate mit 23 Prüfungen einschließlich logischem
+Vier-Stunden-Soak lief grün. Die ESP-Firmware `h4-auto` sendet neue
+BOOT-Aufnahmen als `capture_mode=auto`; Build, Flash auf COM9 und serieller
+Contractstatus `compatible=1`, `gate_ok=1` sind bestätigt. Eine physische
+Audio-Mutation wird erst nach Neustart des geänderten Workers protokolliert.

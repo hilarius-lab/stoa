@@ -159,7 +159,8 @@ def main():
     mixed_session=_capture_session(mixed_id);_CLEANUP_SESSION_IDS.append(mixed_session["client_session_id"]);mixed_internal=mixed_session["ingestion_session_id"]
     text=asyncio.run(run_text_processing_once("m8-mixed-text","deterministic",mixed_internal))
     assert text["outcome"]=="completed",text
-    with patch("smart_notebook.services.promotion.promote_session_artifacts",new=AsyncMock()) as promote:
+    with patch("smart_notebook.services.promotion.promote_session_artifacts",new=AsyncMock()) as promote,\
+         patch("smart_notebook.services.knowledge_preflight.search_knowledge",new=AsyncMock(return_value=[])):
         artifacts=asyncio.run(run_session_artifact_worker_once("m8-mixed-artifacts","deterministic",mixed_internal))
         assert artifacts["outcome"]=="completed",artifacts
         assert promote.await_count==1
@@ -173,7 +174,7 @@ def main():
     assert all(mixed_content[part["source_start"]:part["source_end"]]==part["source_text"] for part in result["intents"]),result
     assert all("source_segment_ids" not in part for part in result["intents"]),result
     assert result["interpretation_status"]=="split_completed",result
-    assert result["action_status"] in {"pending_execution","pending_clarification"},result
+    assert result["action_status"]=="pending_clarification" and result["actions"]==[],result
     assert len(result["reference_resolutions"])==1 and result["reference_resolutions"][0]["ordinal"]==2,result
     assert all("target_id" not in item and "target_key" not in item for item in result["reference_resolutions"]),result
     assert any(item["input_kind"]=="mutation_intent" and item["classification"]=="targeted"
@@ -205,13 +206,14 @@ def main():
     action_session=_capture_session(action_id);_CLEANUP_SESSION_IDS.append(action_session["client_session_id"]);action_internal=action_session["ingestion_session_id"]
     text=asyncio.run(run_text_processing_once("m8-action-text","deterministic",action_internal))
     assert text["outcome"]=="completed",text
-    with patch("smart_notebook.services.promotion.promote_session_artifacts",new=AsyncMock()) as promote:
+    with patch("smart_notebook.services.promotion.promote_session_artifacts",new=AsyncMock()) as promote,\
+         patch("smart_notebook.services.knowledge_preflight.search_knowledge",new=AsyncMock(return_value=[])):
         artifacts=asyncio.run(run_session_artifact_worker_once("m8-action-artifacts","deterministic",action_internal))
         assert artifacts["outcome"]=="completed",artifacts
         promote.assert_not_awaited()
     action=get_capture(action_id)
     assert action["status"]=="completed" and action["resolved_intent"]=="complete",action
-    assert action["result"]["action_status"] in {"pending_execution","pending_clarification"},action
+    assert action["result"]["action_status"]=="pending_clarification" and action["result"]["actions"]==[],action
     assert len(action["result"]["reference_resolutions"])==1,action
     assert action["result"]["intent"]["target_type"]=="list_item",action
     assert action["result"]["knowledge_assessments"][0]["classification"]=="targeted",action
@@ -231,14 +233,16 @@ def main():
     client.post(f"/api/client/v1/sessions/{audio_action_id}/finish",json={"final_sequence":0,"final_source_end_ms":2500}).raise_for_status()
     text=asyncio.run(run_text_processing_once("m8-audio-action-text","deterministic",audio_action_internal))
     assert text["outcome"]=="completed",text
-    with patch("smart_notebook.services.promotion.promote_session_artifacts",new=AsyncMock()) as promote:
+    with patch("smart_notebook.services.promotion.promote_session_artifacts",new=AsyncMock()) as promote,\
+         patch("smart_notebook.services.knowledge_preflight.search_knowledge",new=AsyncMock(return_value=[])):
         artifacts=asyncio.run(run_session_artifact_worker_once("m8-audio-action-artifacts","deterministic",audio_action_internal))
         assert artifacts["outcome"]=="completed",artifacts
         promote.assert_not_awaited()
     audio_action=get_client_session(audio_action_id)
     assert audio_action["state"]=="completed",audio_action
     assert audio_action["capture_result"]["resolved_intent"]=="archive",audio_action
-    assert audio_action["capture_result"]["action_status"] in {"pending_execution","pending_clarification"},audio_action
+    assert audio_action["capture_result"]["action_status"]=="pending_clarification",audio_action
+    assert audio_action["capture_result"]["actions"]==[],audio_action
     assert len(audio_action["capture_result"]["reference_resolutions"])==1,audio_action
 
     _cleanup_test_records()

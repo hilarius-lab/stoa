@@ -445,7 +445,7 @@ static bool record_memo(bool diagnostic) {
     char payload[JOURNAL_MAX_PAYLOAD],session_id[JOURNAL_UUID_CHARS];
     journal_uuid(session_id,memo_queue_random);
     if(!note(journal,payload,journal_build_session(payload,sizeof(payload),session_id,
-            "memo",MEMO_FIRMWARE,
+            "auto",MEMO_FIRMWARE,
             (uint64_t)(esp_timer_get_time()/1000),NULL,false))) {
         free(journal); return false;
     }

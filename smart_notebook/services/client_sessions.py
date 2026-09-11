@@ -310,6 +310,8 @@ async def finalize_client_session_with_knowledge(client_session_id,promotion_mod
                                                        preflight_artifact_ids,promotion_mode)
             from .mutation_targets import ensure_session_mutation_target_resolutions
             await ensure_session_mutation_target_resolutions(item["ingestion_session_id"],intent_parts,promotion_mode)
+            from .mutation_actions import ensure_session_mutation_actions
+            await ensure_session_mutation_actions(item["ingestion_session_id"],intent_parts,promotion_mode)
         if not promotion_deferred and promotion_ids!=[]:
             if promotion_ids is None:
                 await promote_session_artifacts(item["ingestion_session_id"],promotion_mode)
@@ -369,8 +371,18 @@ def _materialize_capture_result(client_session_id):
                     public_mutation_target_resolutions)
                 resolutions=get_session_mutation_target_resolutions(item["ingestion_session_id"])
                 result["reference_resolutions"]=public_mutation_target_resolutions(resolutions)
-                result["action_status"]=("pending_execution" if resolutions and
-                    all(entry["status"]=="resolved" for entry in resolutions) else "pending_clarification")
+                from .mutation_actions import get_session_mutation_actions,public_mutation_actions
+                actions=get_session_mutation_actions(item["ingestion_session_id"])
+                result["actions"]=public_mutation_actions(actions)
+                if not resolutions or any(entry["status"]!="resolved" for entry in resolutions):
+                    result["action_status"]="pending_clarification"
+                elif any(entry["status"]=="clarification_required" for entry in actions):
+                    result["action_status"]="pending_clarification"
+                elif actions and all(entry["status"]=="completed" for entry in actions):
+                    result["action_status"]="completed"
+                elif any(entry["status"]=="failed" for entry in actions):
+                    result["action_status"]="failed"
+                else:result["action_status"]="pending_execution"
             if len(intent_parts)>1:result["interpretation_status"]="split_completed"
             from .knowledge_preflight import get_session_knowledge_preflights,public_knowledge_preflights
             assessments=get_session_knowledge_preflights(item["ingestion_session_id"])

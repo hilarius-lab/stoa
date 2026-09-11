@@ -49,7 +49,7 @@ Content-Type: application/json
 
 {
   "client_session_id": "<persistierte UUID>",
-  "capture_mode": "memo",
+  "capture_mode": "auto",
   "sequence_base": 0,
   "source_type": "esp32_epaper_audio",
   "device_metadata": {
@@ -59,6 +59,9 @@ Content-Type: application/json
 }
 ```
 
+Eine neue BOOT-Aufnahme verwendet `auto`: Das Gerät liefert ausschließlich
+Audio, während Intent, Zielauflösung und Aktion im Backend bleiben. Historisch
+adoptierte Audiodateien ohne ursprünglichen Modus bleiben konservativ `memo`.
 Das Create ist mit derselben UUID wiederholbar. Das unveränderliche Top-Level-
 Feld `sequence_base=0` erklärt dem gemeinsamen Backend die 0-basierte Wire-Sicht
 des ESP; die interne und die Android-Sequenzierung bleiben davon unabhängig.

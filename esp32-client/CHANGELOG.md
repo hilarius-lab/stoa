@@ -1,5 +1,17 @@
 # Änderungen
 
+## 2026-09-11 – BOOT-Aufnahmen an den Backend-Auto-Modus angebunden
+
+- Neue Aufnahmen persistieren `capture_mode=auto`, damit A02–A07 Intent,
+  Zielreferenz und erlaubte Objektaktion serverseitig entscheiden können.
+- Die Firmware klassifiziert weiterhin keine Sprache. Alte, nur anhand ihrer
+  Audiodateien adoptierte Sessions bleiben konservativ `memo`; vorhandene
+  Journale behalten ihren bereits gespeicherten Modus unverändert.
+- Firmwarekennung: `h4-auto`.
+- ESP-IDF-Build und Flash auf COM9 sind grün; der stabile serielle Status
+  meldete `compatible=1` und `gate_ok=1`. Die physische Audio-Mutationsprobe
+  bleibt die letzte Live-Abnahme.
+
 ## 2026-09-10 – Neue Aufnahmen vor Historienpflege
 
 - Die A05-Liveprobe fand bei 35 lokalen Journalen zwei sichere `ready`-

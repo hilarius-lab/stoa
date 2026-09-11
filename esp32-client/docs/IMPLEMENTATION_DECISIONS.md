@@ -417,7 +417,12 @@ beschriftete Statuszeile entsteht in H3 zusammen mit den übrigen Indikatoren.
 - `MEMO_FIRMWARE` benennt die tatsächlich implementierte Roadmapstufe und wird
   mit jeder Stufe angehoben. Der Wert geht in Enrollment und `device_metadata`;
   eine stehengebliebene Kennung würde dem Server eine falsche Firmwareversion
-  melden. Aktueller Wert: `h4-home`.
+  melden. Aktueller Wert: `h4-auto`.
+- Neue BOOT-Aufnahmen werden als `capture_mode=auto` journalisiert. Das ist
+  keine lokale Klassifikation: Die Firmware überträgt weiterhin nur Audio und
+  der Server entscheidet zwischen Memo, Frage und fachlicher Aktion. Bereits
+  vorhandene oder erst nachträglich adoptierte Altaufnahmen behalten `memo`,
+  damit ein Firmwareupdate ihre ursprüngliche Bedeutung nicht umdeutet.
 - Der Uploadworker bearbeitet je Durchlauf höchstens acht Sessionverzeichnisse.
   Er liest vor der Auswahl die lokalen Journale und lässt tatsächlich
   zustellbare `ready`-Sessions dieses Fenster zuerst füllen; das hängt beim

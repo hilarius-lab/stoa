@@ -621,6 +621,28 @@ MIGRATIONS=[
         CHECK(status='resolved' OR clarification_question_id IS NOT NULL))""",
         "CREATE INDEX mutation_target_resolution_session_idx ON mutation_target_resolutions(session_id,id)",
     ]),
+    ("0047_mutation_action_execution","Persist and audit idempotent A07 object actions",[
+        "ALTER TABLE notes ADD COLUMN archived_at TIMESTAMPTZ",
+        "ALTER TABLE notes ADD COLUMN archive_reason TEXT",
+        """CREATE TABLE mutation_action_executions(
+        id BIGSERIAL PRIMARY KEY,session_id BIGINT NOT NULL REFERENCES ingestion_sessions(id) ON DELETE CASCADE,
+        intent_part_id BIGINT NOT NULL UNIQUE REFERENCES session_intent_parts(id) ON DELETE CASCADE,
+        target_resolution_id BIGINT NOT NULL UNIQUE REFERENCES mutation_target_resolutions(id) ON DELETE CASCADE,
+        operation TEXT,payload JSONB NOT NULL DEFAULT '{}'::jsonb,status TEXT NOT NULL,
+        confidence DOUBLE PRECISION NOT NULL,reason_codes JSONB NOT NULL DEFAULT '[]'::jsonb,
+        decision_source TEXT NOT NULL,before_state JSONB,after_state JSONB,
+        clarification_question_id BIGINT REFERENCES session_questions(id) ON DELETE SET NULL,
+        executed_at TIMESTAMPTZ,error_code TEXT,created_at TIMESTAMPTZ NOT NULL,updated_at TIMESTAMPTZ NOT NULL,
+        CHECK(operation IS NULL OR operation IN('note_update','note_archive','task_update','task_complete','task_reopen',
+        'task_archive','list_rename','list_add_item','list_archive','list_item_update','list_item_complete',
+        'list_item_reopen','list_item_archive')),
+        CHECK(status IN('planned','completed','clarification_required','failed')),
+        CHECK(confidence BETWEEN 0 AND 1),
+        CHECK((status='clarification_required')=(clarification_question_id IS NOT NULL)),
+        CHECK(status='clarification_required' OR operation IS NOT NULL),
+        CHECK(status<>'completed' OR (before_state IS NOT NULL AND after_state IS NOT NULL AND executed_at IS NOT NULL)))""",
+        "CREATE INDEX mutation_action_execution_session_idx ON mutation_action_executions(session_id,id)",
+    ]),
 ]
 
 

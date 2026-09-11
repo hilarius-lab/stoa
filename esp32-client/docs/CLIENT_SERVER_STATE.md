@@ -1051,3 +1051,29 @@ deshalb eine Minute Transportreserve. Manueller Sync bleibt bestehen, und nur
 `screen_snapshot_received` nach vollständiger JSON-/Schemaannahme erneuert das
 in der Kopfzeile gezeigte Abrufalter. Die finale reale Probe nahm den nächsten
 Snapshot nach rund 244 Sekunden vollständig an. Firmware: `h4-ui-refresh`.
+
+## A07-Sprachaktionen und ESP-Auto-Modus — Arbeitsstand 11. September
+
+Neue BOOT-Aufnahmen werden im Journal mit `capture_mode=auto` angelegt. Die
+Firmware bleibt dabei ein verlustfreier Audio-/Projektionsclient und trifft
+keine Intent- oder Mutationsentscheidung. Bereits vorhandene Journale behalten
+ihren gespeicherten Modus; lediglich ohne Journal adoptierte Altdateien bleiben
+konservativ `memo`. Firmwarekennung: `h4-auto`.
+
+Backendseitig erzeugt A07 nach A05-Suche und eindeutiger A06-Zielauflösung pro
+Intentteil einen persistenten Aktionsdatensatz. Regelgebundene Erledigungs- und
+Archivierungsabsichten sowie streng strukturierte Änderungspläne können Notes,
+Tasks, Listen und Listeneinträge ändern. Archivieren ist reversibel und kein
+physisches Löschen. Unsichere, ungültige oder veraltete Pläne fragen nach. Ziel,
+Mutation und Vorher-/Nachher-Audit werden transaktional gesichert; abgeschlossene
+Aktionen werden bei Wiederholung nicht erneut ausgeführt.
+
+Das dedizierte A07-DB-Gate und das vollständige M8-Release-Gate mit 23 Prüfungen
+einschließlich logischem Vier-Stunden-Soak sind grün. Reale strukturierte
+Modellproben planten `Brot` als Listeneintrag und `Reiseideen` als Note-Update;
+„Lösche die Liste Herbsturlaub“ wurde als Archivierungsabsicht erkannt und auf
+den passenden Listenkandidaten aufgelöst, jedoch in dieser isolierten
+Modellprobe nicht ausgeführt. ESP-IDF-Build und Flash auf COM9 sind grün; der
+serielle Status meldete nach dem Verbindungsaufbau `compatible=1`, `gate_ok=1`.
+Eine vollständige echte Audio→Worker→DB→ESP-Mutationsprobe bleibt als letzte
+Live-Abnahme offen.
