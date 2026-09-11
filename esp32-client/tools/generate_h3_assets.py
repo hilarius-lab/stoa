@@ -54,6 +54,11 @@ startup_assets={
     "connected":startup("Verbunden","Das Notebook ist online.\nDas Dashboard wird geladen."),
     "saved":startup("Gespeichert","Die Einrichtung wurde uebernommen.\nDas Geraet startet anschliessend neu."),
 }
+# sleep.png/.bin are deliberately NOT generated here: that screen is a
+# hand-designed image, packed from an arbitrary source PNG with
+# tools/pack_image_asset.py. Regenerating everything in this script must not
+# silently overwrite it with a placeholder.
+
 setup_image=Image.new("1",(LW,LH),1);d=ImageDraw.Draw(setup_image)
 d.text((24,40),"NOTEBOOK EINRICHTEN",font=font(25,True),fill=0)
 d.text((24,86),"1. WLAN-QR scannen",font=font(18,True),fill=0)

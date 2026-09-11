@@ -5,7 +5,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define SETTINGS_ITEM_COUNT 4
+#define SETTINGS_ITEM_COUNT 6
 
 typedef struct {
     const char *firmware;
@@ -24,8 +24,8 @@ typedef struct {
     bool space_block;
 } settings_diagnostics;
 
-/* Main shell. Focus 0 is Back, 1..4 are Add WLAN, Diagnostics, SD logs
- * and Timezone. Returns SETTINGS_ITEM_COUNT. */
+/* Main shell. Focus 0 is Back, 1..6 are Add WLAN, Diagnostics, SD logs,
+ * Timezone, Restart and Shut down. Returns SETTINGS_ITEM_COUNT. */
 int settings_draw(unsigned char *canvas, int top, int bottom, int scroll,
                   int focus, bool network_connected, bool logs_available);
 int settings_scroll_for(int top, int bottom, int focus, int current_scroll);
@@ -33,6 +33,17 @@ int settings_scroll_for(int top, int bottom, int focus, int current_scroll);
 /* The diagnostics child has a single focused Back action. */
 void settings_diagnostics_draw(unsigned char *canvas, int top, int bottom,
                                const settings_diagnostics *state);
+
+/* Restart and shut down each require an explicit second confirmation before
+ * they act, so a stray middle-button press on the settings row cannot
+ * trigger either. Focus 0 is Back/No; focus 1 is the confirming Yes row,
+ * only offered while `locked` is false. `locked` covers recording and any
+ * in-flight critical SD write (recorder_busy()): a restart or shutdown
+ * during that window would race the file it is writing, so the view shows
+ * why it is refusing instead of the Yes row. */
+void settings_confirm_draw(unsigned char *canvas, int top, int bottom,
+                           const char *title, const char *confirm_label,
+                           bool locked, int focus);
 
 /* The log viewer receives only the already-sanitized fixed-vocabulary text
  * from diagnostic_log. It has one focused Back action; up/down scroll lines. */

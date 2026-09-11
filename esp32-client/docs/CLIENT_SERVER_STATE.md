@@ -1238,3 +1238,46 @@ echter Leere. Im Quellcode auf `16384` korrigiert, mit Kommentar zur
 Invariante. `screen.c` liegt außerhalb der Hosttest-Abdeckung (braucht
 FreeRTOS/`heap_caps`); Build, Flash auf COM9 und reale Sichtprobe sind
 bestanden — die Verlaufsansicht zeigt die Einträge wieder.
+
+**Neustart/Herunterfahren mit Sleep-Bildschirm und Akku-Auto-Sleep
+(2026-09-11):** Zwei neue Settings-Zeilen mit zweistufiger Ja/Nein-
+Bestätigung, gesperrt mit sichtbarem Grund während `recorder_busy()`.
+Neustart teilt sich Sperre und `esp_restart()`-Sequenz mit dem bestehenden
+seriellen `reboot`-Befehl. Herunterfahren schreibt bewusst kein
+PMIC-Register (`battery.h`s Read-only-Grenze bleibt unangetastet, auf
+Nutzerentscheidung) und nutzt stattdessen `esp_deep_sleep_start()` mit
+Aufwachen über BOOT (GPIO0). Dabei gefunden: `EPD_Sleep()` — ein eigener
+Tiefschlafbefehl an den Panel-Controller — existierte in `epaper_port.h`,
+wurde aber nirgends aufgerufen; jeder bisherige Deep Sleep ließ den
+Panel-Chip unnötig unter Strom. Jetzt Teil der Sleep-Sequenz: eigener
+`SCREEN_SLEEP`-Bildschirm mit vollem sauberem Refresh, dann `EPD_Sleep()`,
+dann `esp_deep_sleep_start()` — das E-Paper hält das Bild danach stromlos.
+Zusätzlich auf Nutzerwunsch: automatischer Sleep bei ≤5 % Akkustand ohne
+USB (`battery.c`, alle 5 s neu geprüft, verschiebt sich einfach auf die
+nächste Messung, statt eine laufende Aufnahme zu unterbrechen), damit ein
+leerlaufender Akku nicht als unklar eingefrorenes Bild endet.
+
+Das Sleep-Bild selbst ist ein vom Nutzer gestaltetes PNG (schlafender
+Roboter mit „Zzz“), gepackt über das neue `tools/pack_image_asset.py`. Dabei
+ein echter Fehler im Skript selbst gefunden und behoben, bevor er auslieferte:
+Es zielte zuerst auf die 800×480-Querformat-Zielgröße, aber jeder Bildschirm
+in diesem Projekt wird im 480×800-Hochformat entworfen und erst am Ende
+gedreht; das Nutzerbild (971×1619, Seitenverhältnis 0,600, passt nahezu exakt
+auf 480×800) wäre sonst zu einem schmalen Streifen zwischen breiten weißen
+Rändern geschrumpft. Auf das Hochformat-Canvas mit anschließender Drehung
+umgestellt, jetzt volle Bildfläche ohne Zuschnitt. `generate_h3_assets.py`
+erzeugt „sleep“ nicht mehr mit, damit ein künftiger Sammel-Regenerierungslauf
+das handgestaltete Bild nicht wieder durch einen Platzhaltertext ersetzt.
+
+`screen.c`, `screen.h` und `battery.c` liegen außerhalb der Hosttest-
+Abdeckung (FreeRTOS/ESP-IDF); nur `settings.c` wurde dabei auch wirklich
+kompiliert (lokaler `gcc` per `scoop install gcc` nachgerüstet, weil in
+dieser Umgebung zunächst kein Compiler verfügbar war) — das deckte einen
+echten, sonst übersehenen Kompilierfehler auf (`settings_confirm_draw` nutzte
+den Parameter `bottom` nicht, `-Werror` schlägt fehl), behoben mit denselben
+Bounds-Checks wie `settings_diagnostics_draw`. Zwei Build/Flash-Runden vom
+Nutzer real bestätigt: die erste (Neustart/Herunterfahren ohne Sleep-Bild)
+direkt, die zweite (mit finalem Sleep-Bild) als „perfekt“. Ein realer
+Niedrigakku-Durchlauf für den 5-%-Auto-Sleep lässt sich nicht gezielt
+herbeiführen und bleibt offen, bis der Akku im normalen Betrieb dort
+ankommt.

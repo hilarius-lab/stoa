@@ -28,10 +28,14 @@
 #include "recorder.h"
 #include "freertos/semphr.h"
 #include "esp_heap_caps.h"
+#include "esp_system.h"
+#include "esp_sleep.h"
+#include "driver/gpio.h"
 extern const unsigned char ready[] asm("_binary_ready_bin_start");
 extern const unsigned char recording[] asm("_binary_recording_bin_start");
 extern const unsigned char memo_saved[] asm("_binary_memo_saved_bin_start");
 extern const unsigned char error[] asm("_binary_error_bin_start");
+extern const unsigned char sleep_screen[] asm("_binary_sleep_bin_start");
 extern const unsigned char setup[] asm("_binary_setup_bin_start");
 extern const unsigned char connecting[] asm("_binary_connecting_bin_start");
 extern const unsigned char connected[] asm("_binary_connected_bin_start");
@@ -188,8 +192,12 @@ static bool tasks_open, lists_open;
 static int tasks_focus = -1, tasks_scroll;
 static int lists_focus = -1, lists_scroll;
 /* The fifth view is device-local. Focus 0 is its explicit Back row; the
- * diagnostics child keeps that row as its only action. */
+ * diagnostics child keeps that row as its only action. Restart and shut
+ * down are the same shape as diagnostics/logs (a settings child with its
+ * own state), but need their own two-row focus for the Yes/No confirm. */
 static bool settings_open, diagnostics_open, logs_open;
+static bool restart_open, shutdown_open;
+static int confirm_focus;
 static int settings_focus, settings_scroll, settings_return_view;
 #define SETTINGS_LOG_TEXT_MAX 2048
 static char settings_log_text[SETTINGS_LOG_TEXT_MAX];
@@ -619,6 +627,18 @@ static void draw_settings(unsigned char *buffer) {
                            settings_log_first);
         return;
     }
+    if (restart_open) {
+        settings_confirm_draw(buffer, BODY_TOP, BODY_BOTTOM, "Neustart",
+                              "Ja, neu starten", recorder_busy(),
+                              confirm_focus);
+        return;
+    }
+    if (shutdown_open) {
+        settings_confirm_draw(buffer, BODY_TOP, BODY_BOTTOM, "Herunterfahren",
+                              "Ja, herunterfahren", recorder_busy(),
+                              confirm_focus);
+        return;
+    }
     if (!diagnostics_open) {
         settings_draw(buffer, BODY_TOP, BODY_BOTTOM, settings_scroll,
                       settings_focus, atomic_load(&status_network),
@@ -655,6 +675,16 @@ static void move_settings_focus(int delta) {
                                           settings_scroll);
 }
 
+/* The confirm view is Back/No at 0 and Yes at 1 — but Yes only exists while
+ * the action is not locked, so a locked view cannot be moved onto it. */
+static void move_confirm_focus(int delta) {
+    int next = confirm_focus + delta;
+    int limit = recorder_busy() ? 0 : 1;
+    if (next < 0) next = 0;
+    if (next > limit) next = limit;
+    confirm_focus = next;
+}
+
 static void move_settings_logs(int delta) {
     settings_log_first = settings_log_scroll_for(
         settings_log_text, BODY_TOP, BODY_BOTTOM, settings_log_first, delta);
@@ -664,14 +694,48 @@ static void move_settings_logs(int delta) {
 
 static void leave_settings(void) {
     settings_open = diagnostics_open = logs_open = false;
+    restart_open = shutdown_open = false;
     history_open = settings_return_view == 3;
     tasks_open = settings_return_view == 1;
     lists_open = settings_return_view == 2;
 }
 
+/* Same shape as the serial console's `reboot` command in main.c: refused
+ * while recorder_busy(), a short delay so the log line reaches the UART
+ * before the reset, then esp_restart(). Two entry points, one behavior. */
+static void perform_restart(void) {
+    ESP_LOGI("settings", "restart confirmed; rebooting");
+    vTaskDelay(pdMS_TO_TICKS(100));
+    esp_restart();
+}
+
+/* No PMIC register is ever written here — battery.h documents that boundary
+ * for the whole firmware, and a shutdown feature is not the place to cross
+ * it. Deep sleep is the software-only equivalent: the ESP32 core stops and
+ * draws minimal current, and only the same BOOT press that starts a
+ * recording wakes it again, landing back on READY like any other boot. The
+ * actual EPD_Sleep()/esp_deep_sleep_start() calls live in screen_task's draw
+ * dispatch, once the sleep image has actually reached the panel — calling
+ * activate_settings() is already on that same task, but mid-message, with
+ * the wrong frame still in the buffer. */
+static void perform_shutdown(void) {
+    ESP_LOGI("settings", "shutdown confirmed; requesting sleep screen");
+    screen_enter_sleep_if_safe();
+}
+
 static void activate_settings(void) {
     if (logs_open) {
         logs_open = false;
+        return;
+    }
+    if (restart_open) {
+        if (confirm_focus == 1 && !recorder_busy()) perform_restart();
+        else restart_open = false;
+        return;
+    }
+    if (shutdown_open) {
+        if (confirm_focus == 1 && !recorder_busy()) perform_shutdown();
+        else shutdown_open = false;
         return;
     }
     if (diagnostics_open) {
@@ -698,6 +762,16 @@ static void activate_settings(void) {
     }
     if (settings_focus == 1) {
         atomic_store(&network_setup_requested, true);
+        return;
+    }
+    if (settings_focus == 5) {
+        confirm_focus = 0;
+        restart_open = true;
+        return;
+    }
+    if (settings_focus == 6) {
+        confirm_focus = 0;
+        shutdown_open = true;
         return;
     }
     ESP_LOGI("settings", "row %d is visible but not implemented in this slice",
@@ -738,12 +812,14 @@ static void activate_selector(void) {
             tasks_open = lists_open = history_open = history_waiting = false;
             settings_open = true;
             diagnostics_open = logs_open = false;
+            restart_open = shutdown_open = false;
             settings_focus = 0;
             settings_scroll = 0;
         }
         return;
     }
     settings_open = diagnostics_open = logs_open = false;
+    restart_open = shutdown_open = false;
     if (selector_focus == 3) {
         if (!history_open) open_history();
         return;
@@ -989,6 +1065,8 @@ static void screen_task(void *unused) {
                 else if (session_open) { /* nothing to move: one page, back only */ }
                 else if (settings_open) {
                     if (logs_open) move_settings_logs(message.focus_delta);
+                    else if (restart_open || shutdown_open)
+                        move_confirm_focus(message.focus_delta);
                     else if (!diagnostics_open)
                         move_settings_focus(message.focus_delta);
                 }
@@ -1230,11 +1308,18 @@ static void screen_task(void *unused) {
             continue;
         }
         if (message.force_full) message.state = previous_state;
+        /* Set only after the substitution above, so the explicit sleep
+         * request is never discarded in favor of previous_state. Forcing it
+         * here guarantees both the no-visual-change skip below and the full-
+         * refresh branch fire even in the unlikely case the sleep background
+         * matches what was already on the panel. */
+        if (message.state == SCREEN_SLEEP) message.force_full = true;
         const unsigned char *background =
             (message.state == SCREEN_SETUP || message.state == SCREEN_SETUP_TEMP) ? setup :
             message.state == SCREEN_CONNECTING ? connecting : message.state == SCREEN_CONNECTED ? connected :
             message.state == SCREEN_READY ? ready : message.state == SCREEN_RECORDING ? recording :
-            message.state == SCREEN_MEMO_SAVED ? memo_saved : message.state == SCREEN_ERROR ? error : saved;
+            message.state == SCREEN_MEMO_SAVED ? memo_saved : message.state == SCREEN_ERROR ? error :
+            message.state == SCREEN_SLEEP ? sleep_screen : saved;
         memcpy(buffer, background, 48000);
         if (message.state == SCREEN_ERROR) {
             /* The operating backgrounds are blank now, so this line is drawn
@@ -1251,7 +1336,11 @@ static void screen_task(void *unused) {
          * (above) already says what changed; hiding the dashboard underneath
          * it no longer serves a purpose, so the body stays exactly as it
          * would in SCREEN_READY. */
-        if(message.state>=SCREEN_READY){
+        /* Sleep is its own full-screen goodbye image, not an operating state:
+         * numerically last so it sorts after SCREEN_ERROR, but explicitly
+         * excluded here so the status bar, header and dashboard never draw
+         * over it. */
+        if(message.state>=SCREEN_READY && message.state!=SCREEN_SLEEP){
             draw_status(buffer);
             draw_header(buffer);
             if(message.state==SCREEN_READY || message.state==SCREEN_RECORDING ||
@@ -1315,6 +1404,18 @@ static void screen_task(void *unused) {
             EPD_Init(); EPD_Display_Base(buffer); initialized=true; partial_count=0;
             ESP_LOGI("screen","full update state=%d in %lld ms",message.state,
                      (esp_timer_get_time()-started)/1000);
+            if (message.state == SCREEN_SLEEP) {
+                /* The sleep image is now on the panel and, being e-paper, it
+                 * stays there with the panel itself unpowered. Put the panel
+                 * controller to sleep before the MCU: EPD_Sleep exists but
+                 * was never called anywhere before this feature, so every
+                 * earlier deep sleep left the controller chip powered. */
+                ESP_LOGI("screen", "sleep image shown; EPD_Sleep then MCU deep sleep");
+                EPD_Sleep();
+                esp_sleep_enable_ext0_wakeup(GPIO_NUM_0, 0);
+                vTaskDelay(pdMS_TO_TICKS(100));
+                esp_deep_sleep_start();
+            }
         } else {
             int width=right-left+1;
             int64_t started = esp_timer_get_time();
@@ -1384,6 +1485,13 @@ void screen_status_time(unsigned minutes_since_midnight, unsigned day,
 void screen_memo(screen_state state,unsigned seconds) {
     screen_message message={.state=state,.seconds=seconds};
     post(&message);
+}
+void screen_enter_sleep_if_safe(void) {
+    if (recorder_busy()) {
+        ESP_LOGI("screen", "sleep request refused: recorder busy");
+        return;
+    }
+    screen_memo(SCREEN_SLEEP, 0);
 }
 void screen_start(void) {
     atomic_store(&status_clock, 0);

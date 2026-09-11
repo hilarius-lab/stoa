@@ -448,6 +448,21 @@ static void settings_view(void) {
             if (ink_at(x, y) && (y < 100 || y >= 792)) outside++;
     check(outside == 0, "settings renderer stays inside its body");
 
+    clear();
+    settings_draw(canvas, 100, 792, 0, 5, true, true);
+    settings_draw(canvas, 100, 792, 0, 6, true, true);
+    settings_confirm_draw(canvas, 100, 792, "Neustart", "Ja, neu starten",
+                          false, 1);
+    settings_confirm_draw(canvas, 100, 792, "Herunterfahren",
+                          "Ja, herunterfahren", true, 0);
+    outside = 0;
+    for (int y = 0; y < 800; y++)
+        for (int x = 0; x < 480; x++)
+            if (ink_at(x, y) && (y < 100 || y >= 792)) outside++;
+    check(outside == 0,
+          "restart/shutdown rows and their locked/unlocked confirm views "
+          "stay inside the body");
+
     check(dashboard_refresh_interval_s(0) == 240,
           "dashboard fallback leaves a minute for the five-minute success target");
     check(dashboard_refresh_interval_s(7200) == 240,

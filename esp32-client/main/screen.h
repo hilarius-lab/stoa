@@ -1,9 +1,17 @@
 #pragma once
 typedef enum { SCREEN_SETUP, SCREEN_SETUP_TEMP, SCREEN_CONNECTING, SCREEN_CONNECTED, SCREEN_SAVED,
-    SCREEN_READY, SCREEN_RECORDING, SCREEN_MEMO_SAVED, SCREEN_ERROR } screen_state;
+    SCREEN_READY, SCREEN_RECORDING, SCREEN_MEMO_SAVED, SCREEN_ERROR, SCREEN_SLEEP } screen_state;
 void screen_start(void);
 void screen_show(screen_state state, const char *password);
 void screen_memo(screen_state state, unsigned seconds);
+/* Draws the sleep background with a full refresh, puts the panel controller
+ * itself to sleep (EPD_Sleep — never called before this, so the chip used to
+ * stay powered through every prior deep sleep), then enters ESP32 deep sleep
+ * with BOOT (GPIO0) as the sole wake source. Never returns on success.
+ * Refused while recorder_busy(): the confirmed Settings "Herunterfahren"
+ * action and a critically low, non-charging battery reading both call this,
+ * and neither may cut power out from under an active recording or SD write. */
+void screen_enter_sleep_if_safe(void);
 // Local queue indication drawn into the top-right corner of the idle screens.
 // Provisional glyph badges until H3 designs the real status line.
 void screen_status(unsigned pending, unsigned attention, bool storage_low);

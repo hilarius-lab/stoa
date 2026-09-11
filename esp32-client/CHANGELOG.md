@@ -1,5 +1,31 @@
 # Änderungen
 
+## 2026-09-11 – Neustart/Herunterfahren, Sleep-Bildschirm, Akku-Auto-Sleep
+
+- Neue Settings-Aktionen „Neustart“ und „Herunterfahren“ mit zweistufiger
+  Ja/Nein-Bestätigung, gesperrt mit sichtbarem Grund während `recorder_busy()`
+  (Aufnahme oder kritischer SD-Schreibvorgang). Neustart teilt sich Sperre und
+  `esp_restart()`-Sequenz mit dem bestehenden seriellen `reboot`-Befehl.
+- Herunterfahren schreibt bewusst kein PMIC-Register (`battery.h`s Read-only-
+  Grenze bleibt unangetastet) und nutzt `esp_deep_sleep_start()` mit Aufwachen
+  über BOOT (GPIO0). `EPD_Sleep()` — ein eigener Tiefschlafbefehl an den
+  Panel-Controller, vorher nirgends aufgerufen — ist jetzt Teil der Sequenz:
+  eigener `SCREEN_SLEEP`-Bildschirm mit vollem Refresh, dann `EPD_Sleep()`,
+  dann MCU-Tiefschlaf.
+- Automatischer Sleep bei ≤5 % Akkustand ohne USB, alle 5 s neu geprüft;
+  verschiebt sich auf die nächste Messung statt eine laufende Aufnahme zu
+  unterbrechen.
+- Sleep-Bild ist ein vom Nutzer gestaltetes PNG, gepackt über das neue
+  `tools/pack_image_asset.py` (Hochformat-Canvas wie jeder andere Bildschirm,
+  letterboxed, gedithert, mit Drehung auf die Panel-Ausrichtung).
+- Lokaler `gcc` nachgerüstet und `settings.c` real kompiliert statt nur
+  gelesen — deckte einen echten `-Werror`-Fehler auf (`bottom` ungenutzt in
+  `settings_confirm_draw`), behoben. `screen.c`/`battery.c` bleiben außerhalb
+  der Hosttest-Abdeckung, nur manuell geprüft.
+- Zwei Build/Flash-Runden real bestätigt, die zweite mit dem finalen
+  Sleep-Bild. Ein realer Niedrigakku-Durchlauf bleibt offen, bis der Akku im
+  normalen Betrieb dort ankommt.
+
 ## 2026-09-11 – W05-Wissenspfad live bestanden, Verlaufsansicht-Fix
 
 - Reale W05-Wissensprobe bestanden: eine rein deklarative Korrekturaussage

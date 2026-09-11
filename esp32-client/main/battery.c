@@ -12,6 +12,12 @@
 
 #define BATTERY_I2C_ADDRESS 0x34
 #define BATTERY_SAMPLE_INTERVAL_MS 5000
+/* Below this, and not on USB power, the device puts itself to sleep with the
+ * recognizable sleep screen rather than risk a brownout that just freezes
+ * whatever the panel happened to show. Re-checked every sample, so a
+ * recording in progress simply defers it to the next 5 s tick instead of
+ * being interrupted. */
+#define BATTERY_AUTO_SLEEP_PERCENT 5
 
 static i2c_master_dev_handle_t power_device;
 static atomic_bool communication_ok, compatible, battery_present;
@@ -66,6 +72,13 @@ static bool take_sample(void) {
              "read-only PMIC sample compatible=%d present=%d usb=%d charging=%d gauge=%d soc=%u voltage=%umV",
              family_match, present, (status1 & 0x20) != 0,
              ((status2 >> 5) & 0x03) == 1, gauge, soc, millivolts);
+    bool on_usb = (status1 & 0x20) != 0;
+    if (plausible && present && !on_usb && soc <= BATTERY_AUTO_SLEEP_PERCENT) {
+        ESP_LOGW("battery", "soc=%u%% at or below the auto-sleep threshold "
+                 "(%u%%) and not on USB; requesting sleep", soc,
+                 BATTERY_AUTO_SLEEP_PERCENT);
+        screen_enter_sleep_if_safe();
+    }
     return plausible;
 }
 

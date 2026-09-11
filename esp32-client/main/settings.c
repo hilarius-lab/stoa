@@ -44,6 +44,8 @@ int settings_draw(unsigned char *canvas, int top, int bottom, int scroll,
         {"Diagnose", "anzeigen"},
         {"SD-Logs", NULL},
         {"Zeitzone", "Europe/Berlin"},
+        {"Neustart", NULL},
+        {"Herunterfahren", NULL},
     };
     static const char title[] = "Einstellungen";
     text_draw(canvas, &text_font_title, LEFT + PAD, top + 4,
@@ -135,6 +137,25 @@ void settings_diagnostics_draw(unsigned char *canvas, int top, int bottom,
         if (y + ROW_HEIGHT > bottom) break;
         row_draw(canvas, y, rows[index].label, rows[index].value, false);
     }
+}
+
+void settings_confirm_draw(unsigned char *canvas, int top, int bottom,
+                           const char *title, const char *confirm_label,
+                           bool locked, int focus) {
+    text_draw(canvas, &text_font_title, LEFT + PAD, top + 4,
+              title, strlen(title));
+    int y = content_top(top);
+    if (y + ROW_HEIGHT > bottom) return;
+    row_draw(canvas, y, "Zurück", NULL, focus == 0);
+    y += ROW_HEIGHT + ROW_GAP;
+    if (y + ROW_HEIGHT > bottom) return;
+    if (locked) {
+        static const char reason[] = "Gesperrt: SD-Karte beschäftigt.";
+        text_draw(canvas, &text_font_preview, LEFT + PAD, y + 14,
+                  reason, strlen(reason));
+        return;
+    }
+    row_draw(canvas, y, confirm_label, NULL, focus == 1);
 }
 
 int settings_log_line_count(const char *text) {
