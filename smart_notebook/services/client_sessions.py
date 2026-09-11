@@ -264,6 +264,49 @@ async def settle_client_session_for_ingestion(ingestion_session_id,mode="llm"):
         return None
 
 
+def claim_attention_required_client_sessions_for_night_repair(limit=100):
+    """Claim up to `limit` attention_required sessions for one retry each.
+
+    A11: unlike processing_jobs.parked (jobs.py::queue_parked_jobs_for_night_repair),
+    client_sessions.attention_required from capture_intent_failed,
+    knowledge_finalization_failed or clarification_answer_failed had no
+    retry at all -- nothing ever called finalize_client_session_with_knowledge
+    again on its own. Mirrors that job-repair shape: one attempt per session,
+    ever, gated by night_repair_attempts, so a session that fails again after
+    its repair escalates and stays attention_required for good rather than
+    being retried forever.
+    """
+    now=datetime.now(TIMEZONE);limit=max(1,min(limit,1000))
+    with get_db_connection() as c:
+        rows=c.execute("""WITH candidates AS(SELECT client_session_id FROM client_sessions
+        WHERE state='attention_required' AND night_repair_attempts=0 AND ingestion_session_id IS NOT NULL
+        ORDER BY updated_at,client_session_id FOR UPDATE SKIP LOCKED LIMIT %s)
+        UPDATE client_sessions cs SET night_repair_attempts=1,updated_at=%s FROM candidates ca
+        WHERE cs.client_session_id=ca.client_session_id
+        RETURNING cs.client_session_id,cs.ingestion_session_id""",(limit,now)).fetchall();c.commit()
+    return [{"client_session_id":r[0],"ingestion_session_id":r[1]} for r in rows]
+
+
+async def retry_attention_required_client_sessions_for_night_repair(limit=100,mode="llm"):
+    """Run the one claimed repair attempt for each session, synchronously.
+
+    There is no separate worker pool for client_sessions the way processing_jobs
+    has one; settle_client_session_for_ingestion already owns the retry's error
+    handling (ClientSessionConflict / generic exceptions both leave the session
+    in attention_required, now with night_repair_attempts=1) and its own
+    transactions, so each claimed session is retried directly here.
+    """
+    claimed=claim_attention_required_client_sessions_for_night_repair(limit)
+    results=[]
+    for item in claimed:
+        await settle_client_session_for_ingestion(item["ingestion_session_id"],mode)
+        after=get_client_session(item["client_session_id"])
+        results.append({"client_session_id":item["client_session_id"],
+                         "ingestion_session_id":item["ingestion_session_id"],
+                         "state":after["state"] if after else None})
+    return results
+
+
 async def finalize_client_session_with_knowledge(client_session_id,promotion_mode="llm",allow_text_only_compatibility=False):
     """Run the knowledge barrier before marking a client session complete."""
     item=get_client_session(client_session_id)

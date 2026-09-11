@@ -680,6 +680,10 @@ MIGRATIONS=[
         CHECK(status<>'completed' OR resolution IS NOT NULL))""",
         "CREATE INDEX knowledge_clarification_session_idx ON knowledge_clarification_resolutions(session_id,id)",
     ]),
+    ("0050_client_session_night_repair","One nightly retry for client_sessions stuck in attention_required",[
+        "ALTER TABLE client_sessions ADD COLUMN night_repair_attempts INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE client_sessions ADD CONSTRAINT client_sessions_night_repair_attempts_check CHECK(night_repair_attempts>=0 AND night_repair_attempts<=1)",
+    ]),
 ]
 
 

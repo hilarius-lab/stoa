@@ -226,8 +226,11 @@ weiterhin die bestehende Oberfläche und behauptet nicht den H5-Meetingmodus.
 Die auswählbare IANA-Zeitzone ist ein späteres Komfortfeature. Bis dahin bleibt
 die verifizierte `Europe/Berlin`-Regel bewusst fest eingebaut. A01–A07 sind
 umgesetzt und live abgenommen; A08 ist ebenfalls strukturell und physisch grün.
-W05 ist inzwischen auch live bestanden. Danach bleiben insbesondere
-A09-Claim-Aktivierung, A11-Recovery und A12-Gesamtresultat offen.
+W05 ist inzwischen auch live bestanden. A11 ist für
+`client_sessions.attention_required` seit 2026-09-11 geschlossen (ein
+nächtlicher Wiederholungsversuch statt liegenbleibender Sessions); der
+allgemeine Chat-/Promotion-Teil bleibt offen. Danach bleiben insbesondere
+A09-Claim-Aktivierung und A12-Gesamtresultat offen.
 
 Historische Messwerte und Fehleranalysen stehen im `CHANGELOG.md` und in
 `CLIENT_SERVER_STATE.md`; diese Datei beschreibt nur den aktuellen Übergabestand.
