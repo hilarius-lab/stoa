@@ -66,8 +66,9 @@ Ingestion-Session kaskadierend einschließlich Chunks, Transcripten, Artifacts u
 sowie die referenzierten Audio-Blobs; erhalten bleiben Client-UUID, Zeitpunkt, Grund
 und ein inhaltsfreier Auditdatensatz.
 
-Quick-Memos mit `capture_mode=memo` dürfen Segmente unmittelbar nach `create`
-hochladen; `start` bleibt für steuerbare Meeting-Sessions erforderlich. Clients,
+Quick-Captures mit `capture_mode=memo|auto` dürfen Segmente unmittelbar nach
+`create` hochladen; `start` bleibt für steuerbare Meeting-Sessions
+erforderlich. Clients,
 die im Top-Level-Feld `sequence_base` den Wert `0` deklarieren, verwenden auf
 dem Wire durchgängig Sequenzen `0..N`. Das Backend übersetzt diese an der
 API-Grenze in die bestehende 1-basierte interne Verarbeitung und liefert ACK,

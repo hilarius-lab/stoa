@@ -1,6 +1,6 @@
 # Projektstand
 
-Stand: 2026-09-11, A07 strukturell verifiziert und `h4-auto` geflasht
+Stand: 2026-09-11, A07 live abgenommen und `h4-auto` geflasht
 
 ## Nachgewiesen am realen Gerät
 
@@ -70,8 +70,10 @@ Stand: 2026-09-11, A07 strukturell verifiziert und `h4-auto` geflasht
   ändern/umbenennen, Listeneintrag ergänzen, Task oder Item erledigen,
   kontextgebunden wieder öffnen und Note, Task, Liste oder Item archivieren.
   Das vollständige Backend-M8-Release-Gate mit 23 Prüfungen einschließlich
-  logischem Vier-Stunden-Soak ist grün; die physische Audio-Mutationsprobe ist
-  noch nicht als Nutzerabnahme protokolliert.
+  logischem Vier-Stunden-Soak ist grün. Die reale Audioabnahme fragte bei „den
+  Urlaub“ wegen zweier plausibler Listen nach und archivierte bei „den
+  Herbsturlaub“ ausschließlich die richtige Liste; die zweite blieb aktiv und
+  die ESP-Projektion aktualisierte sich.
 
 ## Systemgrenze
 
@@ -193,9 +195,9 @@ weiterhin die bestehende Oberfläche und behauptet nicht den H5-Meetingmodus.
   ESP-Projektion. Vollständiges M8 ist grün.
 
 Die auswählbare IANA-Zeitzone ist ein späteres Komfortfeature. Bis dahin bleibt
-die verifizierte `Europe/Berlin`-Regel bewusst fest eingebaut. A01–A06 sind
-umgesetzt; A07 ist strukturell vollständig verifiziert und wartet nur noch auf
-die physische Audio-Mutationsprobe. Danach folgt A08.
+die verifizierte `Europe/Berlin`-Regel bewusst fest eingebaut. A01–A07 sind
+umgesetzt; A07 ist einschließlich der sicheren Mehrdeutigkeitsrückfrage und
+der physischen Audio-Mutationsprobe bestätigt. Danach folgt A08.
 
 Historische Messwerte und Fehleranalysen stehen im `CHANGELOG.md` und in
 `CLIENT_SERVER_STATE.md`; diese Datei beschreibt nur den aktuellen Übergabestand.

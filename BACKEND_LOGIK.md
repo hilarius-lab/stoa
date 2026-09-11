@@ -1369,5 +1369,15 @@ Modellpfad löste „Lösche die Liste Herbsturlaub“ als Listenarchivierung au
 Das vollständige M8-Release-Gate mit 23 Prüfungen einschließlich logischem
 Vier-Stunden-Soak lief grün. Die ESP-Firmware `h4-auto` sendet neue
 BOOT-Aufnahmen als `capture_mode=auto`; Build, Flash auf COM9 und serieller
-Contractstatus `compatible=1`, `gate_ok=1` sind bestätigt. Eine physische
-Audio-Mutation wird erst nach Neustart des geänderten Workers protokolliert.
+Contractstatus `compatible=1`, `gate_ok=1` sind bestätigt.
+
+Die erste reale Audio-Mutationsprobe legte die neue `auto`-Session an, traf
+aber vor A07 auf HTTP 409: Der Quick-Upload aus `created` war serverseitig nur
+für `memo` freigegeben. Der Endpoint akzeptiert deshalb nun ausdrücklich
+`memo|auto`; die Client-Session-Regression prüft beide 0-basierten Modi ohne
+Meeting-`start`, und das vollständige M8-Gate blieb grün. Die anschließenden
+Sessions 690/691 bestätigten den gesamten Pfad: „den Urlaub“ blieb wegen zweier
+Kandidaten mit Zielkonfidenz `0.40` ohne Mutation und erzeugte die passende
+Rückfrage; „den Herbsturlaub“ band mit `0.98` ausschließlich Liste 110 und
+archivierte sie. Liste 111 „Nach dem Herbsturlaub“ blieb aktiv, die sichtbare
+ESP-Projektion aktualisierte sich. A07 ist damit auch fachlich live abgenommen.

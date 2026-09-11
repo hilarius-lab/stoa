@@ -99,33 +99,35 @@ def main():
     assert all(item["client_session_id"]!=sid for item in client.get("/api/client/v1/sessions").json())
 
     # The ESP exposes zero-based wire sequences while the established Android
-    # and processing model remains one-based internally.  Quick memos upload
-    # directly from `created`, without the meeting-only start transition.
-    esp_sid=str(uuid4())
-    _CLEANUP_SESSION_IDS.append(esp_sid)
-    esp_create={"client_session_id":esp_sid,"source_type":"esp32_epaper_audio","capture_mode":"memo",
-                "device_metadata":{"client":"waveshare-esp32-s3-epaper-3.97","firmware_version":"test",
-                                   "sequence_base":0}}
-    created=client.post("/api/client/v1/sessions",json=esp_create)
-    assert created.status_code==201 and created.json()["state"]=="created",created.text
-    assert created.json()["sequence_base"]==0
-    esp_chunk_id=str(uuid4())
-    esp_upload=client.post(f"/api/client/v1/sessions/{esp_sid}/audio-chunks",
-        files={"audio":("segment.m4a",b"esp32-contract-audio","audio/mp4")},
-        data={"sequence":"0","client_chunk_id":esp_chunk_id,"duration_ms":"10000",
-              "source_start_ms":"0","source_end_ms":"10000","codec":"aac-lc",
-              "sample_rate_hz":"48000","channels":"1"})
-    assert esp_upload.status_code==201,esp_upload.text
-    assert esp_upload.json()["chunk"]["sequence"]==0 and esp_upload.json()["durable_ack"] is True
-    esp_rec=client.get(f"/api/client/v1/sessions/{esp_sid}/reconciliation")
-    assert esp_rec.status_code==200 and esp_rec.json()["received_sequences"]==[0],esp_rec.text
-    esp_finish=client.post(f"/api/client/v1/sessions/{esp_sid}/finish",
-                           json={"final_sequence":0,"final_source_end_ms":10000})
-    assert esp_finish.status_code==200,esp_finish.text
-    assert esp_finish.json()["reconciliation"]["upload_complete"] is True
-    assert esp_finish.json()["reconciliation"]["expected_final_sequence"]==0
-    assert client.post(f"/api/client/v1/sessions/{esp_sid}/abort",
-                       json={"reason":"ESP contract test cleanup"}).status_code==200
+    # and processing model remains one-based internally. Quick memo and auto
+    # captures upload directly from `created`, without the meeting-only start
+    # transition. Testing both protects adopted legacy memos and h4-auto.
+    for quick_mode in ("memo","auto"):
+        esp_sid=str(uuid4())
+        _CLEANUP_SESSION_IDS.append(esp_sid)
+        esp_create={"client_session_id":esp_sid,"source_type":"esp32_epaper_audio","capture_mode":quick_mode,
+                    "device_metadata":{"client":"waveshare-esp32-s3-epaper-3.97","firmware_version":"test",
+                                       "sequence_base":0}}
+        created=client.post("/api/client/v1/sessions",json=esp_create)
+        assert created.status_code==201 and created.json()["state"]=="created",created.text
+        assert created.json()["sequence_base"]==0
+        esp_chunk_id=str(uuid4())
+        esp_upload=client.post(f"/api/client/v1/sessions/{esp_sid}/audio-chunks",
+            files={"audio":("segment.m4a",b"esp32-contract-audio","audio/mp4")},
+            data={"sequence":"0","client_chunk_id":esp_chunk_id,"duration_ms":"10000",
+                  "source_start_ms":"0","source_end_ms":"10000","codec":"aac-lc",
+                  "sample_rate_hz":"48000","channels":"1"})
+        assert esp_upload.status_code==201,esp_upload.text
+        assert esp_upload.json()["chunk"]["sequence"]==0 and esp_upload.json()["durable_ack"] is True
+        esp_rec=client.get(f"/api/client/v1/sessions/{esp_sid}/reconciliation")
+        assert esp_rec.status_code==200 and esp_rec.json()["received_sequences"]==[0],esp_rec.text
+        esp_finish=client.post(f"/api/client/v1/sessions/{esp_sid}/finish",
+                               json={"final_sequence":0,"final_source_end_ms":10000})
+        assert esp_finish.status_code==200,esp_finish.text
+        assert esp_finish.json()["reconciliation"]["upload_complete"] is True
+        assert esp_finish.json()["reconciliation"]["expected_final_sequence"]==0
+        assert client.post(f"/api/client/v1/sessions/{esp_sid}/abort",
+                           json={"reason":"ESP contract test cleanup"}).status_code==200
     home=client.get("/api/client/v1/dashboard");assert home.status_code==200 and home.json()["mode"] in ("live","idle")
     print("M8 CLIENT SESSION TEST: PASS")
 

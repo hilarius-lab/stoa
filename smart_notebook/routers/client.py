@@ -379,7 +379,7 @@ async def upload_v1_audio(client_session_id:UUID,audio:UploadFile=File(...),sequ
         sample_rate_hz:int|None=Form(None),channels:int|None=Form(None)):
     item=_session_or_404(client_session_id)
     if item["state"] not in ("recording","paused","draining") and not (
-            item["state"]=="created" and item["capture_mode"]=="memo"):
+            item["state"]=="created" and item["capture_mode"] in ("memo","auto")):
         raise ClientAPIError(409,"SESSION_STATE_CONFLICT",f"audio is not accepted in state {item['state']}","user_action")
     if sequence<(0 if _zero_based(item) else 1) or duration_ms<=0 or source_start_ms<0 or source_end_ms<=source_start_ms:
         raise ClientAPIError(422,"AUDIO_METADATA_INVALID","Audio sequence, duration or source range is invalid.","never")

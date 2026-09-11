@@ -1075,5 +1075,26 @@ Modellproben planten `Brot` als Listeneintrag und `Reiseideen` als Note-Update;
 den passenden Listenkandidaten aufgelöst, jedoch in dieser isolierten
 Modellprobe nicht ausgeführt. ESP-IDF-Build und Flash auf COM9 sind grün; der
 serielle Status meldete nach dem Verbindungsaufbau `compatible=1`, `gate_ok=1`.
-Eine vollständige echte Audio→Worker→DB→ESP-Mutationsprobe bleibt als letzte
-Live-Abnahme offen.
+Zu diesem Zwischenstand war eine vollständige echte
+Audio→Worker→DB→ESP-Mutationsprobe noch als letzte Live-Abnahme offen.
+
+Die erste Aufnahme dieser Live-Abnahme erzeugte zwar die `auto`-Session 654,
+der Chunk blieb aber lokal vollständig mit `server_conflict`: Der Audioendpoint
+erlaubte den Quick-Upload direkt aus `created` historisch nur für `memo`. Das
+war nach der Firmwareumstellung auf `auto` inkonsistent. Der Backendguard
+akzeptiert nun `memo|auto`; `m8_client_session_test.py` prüft beide Modi mit
+0-basiger ESP-Sequenz ohne Meeting-`start`, und das vollständige M8-Gate blieb
+grün. Die betroffene Audiodatei wurde nicht gelöscht und bleibt bis zu einer
+bewussten Nutzerentscheidung als `attention` auf der SD-Karte.
+
+Die wiederholte reale Probe lief danach vollständig: Session 690 verstand
+„Lösche die Liste den Urlaub“, fand zwei plausible Kandidaten, blieb mit
+Zielkonfidenz `0.40` mutationsfrei und erzeugte die sichtbare Rückfrage nach
+„den Herbsturlaub“ oder „nach dem Herbsturlaub“. Session 691 verstand „Lösche
+die Liste den Herbsturlaub“, wählte trotz derselben zwei Kandidaten die Liste
+„Den Herbsturlaub“ mit `0.98` und schloss `list_archive` ab. In der DB trägt nur
+Liste 110 `archived=true`/`user_requested`; Liste 111 „Nach dem Herbsturlaub“
+mit „Fotos sortieren“ blieb aktiv. Der Nutzer bestätigte das Verschwinden der
+richtigen Liste auf dem ESP. A07 ist damit live abgenommen. Der in W05 geplante
+Antwortkreislauf aus der geöffneten Rückfragedetailansicht ist davon getrennt
+und weiterhin offen.

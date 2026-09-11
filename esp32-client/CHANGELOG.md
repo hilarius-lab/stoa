@@ -9,8 +9,15 @@
   Journale behalten ihren bereits gespeicherten Modus unverändert.
 - Firmwarekennung: `h4-auto`.
 - ESP-IDF-Build und Flash auf COM9 sind grün; der stabile serielle Status
-  meldete `compatible=1` und `gate_ok=1`. Die physische Audio-Mutationsprobe
-  bleibt die letzte Live-Abnahme.
+  meldete `compatible=1` und `gate_ok=1`.
+- Die erste Liveprobe deckte eine Backendgrenze auf: Direkt aus `created`
+  hochladende Quick-Sessions waren nur für `memo`, nicht für das neue `auto`
+  freigegeben. Der Server akzeptiert nun beide Modi; der gemeinsame
+  Sessionvertrag testet beide ohne Meeting-`start`.
+- Die anschließende reale Audioabnahme erzeugte für „den Urlaub“ wegen zweier
+  plausibler Listen korrekt eine Rückfrage und archivierte bei „den
+  Herbsturlaub“ nur die passende Liste. Die andere Urlaubsliste blieb aktiv
+  und die ESP-Projektion aktualisierte sich.
 
 ## 2026-09-10 – Neue Aufnahmen vor Historienpflege
 

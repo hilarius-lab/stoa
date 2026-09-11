@@ -62,6 +62,8 @@ Content-Type: application/json
 Eine neue BOOT-Aufnahme verwendet `auto`: Das Gerät liefert ausschließlich
 Audio, während Intent, Zielauflösung und Aktion im Backend bleiben. Historisch
 adoptierte Audiodateien ohne ursprünglichen Modus bleiben konservativ `memo`.
+Beide Quick-Modi `memo|auto` dürfen unmittelbar aus `created` hochladen; nur
+steuerbare Meeting-Sessions benötigen vorher `start`.
 Das Create ist mit derselben UUID wiederholbar. Das unveränderliche Top-Level-
 Feld `sequence_base=0` erklärt dem gemeinsamen Backend die 0-basierte Wire-Sicht
 des ESP; die interne und die Android-Sequenzierung bleiben davon unabhängig.
