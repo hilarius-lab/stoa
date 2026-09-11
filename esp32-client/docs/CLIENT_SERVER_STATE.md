@@ -1140,7 +1140,7 @@ Für A08-Bestätigungen mit genau einem A05-Kandidaten darf der Server zusätzli
 fokussierbar. Nur der Mitteldruck speichert die Auswahl mit einer einmaligen
 Capture-ID in NVS; Transportfehler oder Neustart wiederholen dieselbe
 idempotente Anfrage. Ein bloß sichtbarer oder fokussierter Vorschlag erzeugt
-keine Antwort. Die Firmwarekennung ist `h4-w05`.
+keine Antwort. Der erste reale Pfad lief mit Firmwarekennung `h4-w05`.
 
 Backendseitig ordnet `clarifications.py` die öffentliche Question-ID exakt zu,
 persistiert jeden Antwortversuch samt Quelle und nutzt ausschließlich den
@@ -1156,7 +1156,15 @@ der ESP-IDF-Build sind grün. Flash auf COM9 sowie der anschließende Status
 konnte auf diesem Windows-Host
 erneut nicht gestartet werden, diesmal bereits wegen einer verweigerten
 Git-Bash-Signal-Pipe; der IDF-Build kompiliert die geänderten Journalquellen.
-Noch offen sind je eine reale Probe des „Ja“- sowie des freien Audioantwortwegs.
+Die erste reale „Ja“-Probe beantwortete Frage 73 als `suggested_answer` und
+archivierte ausschließlich die abhängige Testliste. Der ergänzte Quellstand
+`h4-w05.1` entfernt die beantwortete Karte unmittelbar nach ihrer lokalen
+Journalbestätigung aus dem aktuellen Snapshot. Jeder spätere Server-Snapshot
+bleibt autoritativ und kann dieselbe oder eine neue Rückfrage wieder zeigen.
+Build, Flash und Contractstatus sind grün. Die reale freie BOOT-Antwort „Nein“
+auf Frage 46 wurde als `audio_capture` gespeichert, brach ausschließlich die
+gebundene Aktion ab, ließ die beiden möglichen Listen unverändert und blendete
+die Karte unmittelbar aus.
 Die allgemeine Wissensneubewertung für andere
 Question-Arten und die freie nachträgliche Zuordnung einer kontextlosen Memo
 bleiben spätere W05-Arbeit.

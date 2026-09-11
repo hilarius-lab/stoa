@@ -1441,7 +1441,7 @@ schon persistierten A05-Kandidatensnapshot, aktualisiert denselben A06-/A07-
 Datensatz und führt abgeschlossene Aktionen bei Wiederholung nicht erneut aus.
 Das ursprüngliche Capture-Ergebnis wird anschließend neu materialisiert.
 
-Die ESP-Firmware `h4-w05` persistiert den Question-Kontext im Audiojournal und
+Die ESP-Firmware ab `h4-w05` persistiert den Question-Kontext im Audiojournal und
 sendet vorgeschlagene Antworten mit einer über Neustarts stabilen Capture-ID.
 Das dedizierte Gate prüft vorgeschlagenes „Ja“, freie Korrektur zwischen zwei
 Listen, Frageabschluss, Eltern-/Kindresultate und Idempotenz; das vollständige

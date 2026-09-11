@@ -636,6 +636,7 @@ static bool record_memo(bool diagnostic) {
     unsigned attention=journal_count_state(journal,CHUNK_ATTENTION);
     free(journal);
     if(sequence && context_id[0]) {
+        screen_clarification_answered(context_id);
         portENTER_CRITICAL(&context_lock);
         if(strcmp(clarification_context_id,context_id)==0)
             clarification_context_id[0]=0;

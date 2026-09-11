@@ -15,7 +15,11 @@
   Geschwisteraktionen werden nicht wiederholt.
 - Dediziertes W05-Gate, vollständiges M8 mit 25 Prüfungen, ESP-IDF-Build, Flash
   auf COM9 und `compatible=1`/`gate_ok=1` sind grün. Firmwarekennung:
-  `h4-w05`. Reale Probe von Vorschlag plus freier Audioantwort steht noch aus;
+  `h4-w05.1`. Der erste reale Vorschlag mit `h4-w05` schloss Frage und Aktion
+  korrekt; `h4-w05.1` blendet die lokal dauerhaft beantwortete Karte sofort
+  aus, während spätere Server-Snapshots autoritativ bleiben. Eine reale freie
+  BOOT-Antwort „Nein“ wurde korrekt gebunden, brach nur die abhängige Aktion ab
+  und ließ die möglichen Zielobjekte unverändert;
   allgemeine Nicht-Mutationsfragen bleiben
   ein späterer W05-Teil.
 

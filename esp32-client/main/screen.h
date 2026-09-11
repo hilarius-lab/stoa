@@ -69,6 +69,9 @@ void screen_focus_move(int delta);
 void screen_focus_activate(void);
 /* The entity for an open detail arrived, or NULL if the fetch failed. */
 void screen_entity_received(const char *json);
+/* A bound answer has reached durable local storage. Hide that one card now;
+ * later server snapshots may show any still-required clarification again. */
+void screen_clarification_answered(const char *question_id);
 /* The session list for the history view arrived, or NULL if the fetch failed. */
 void screen_history_received(const char *json);
 /* A session dashboard requested by a server-driven card arrived, or NULL. The

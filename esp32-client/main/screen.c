@@ -56,6 +56,7 @@ typedef struct {
     bool card_demo;
     bool focus_move;
     bool focus_activate;
+    bool hide_question;
     /* An ambient redraw rather than a user action; see queue_redraw. */
     bool ambient;
     int focus_delta;
@@ -280,6 +281,23 @@ static bool entity_take(char *into, size_t capacity) {
     return into[0] != 0;
 }
 
+/* The answer is already durable before this runs. Remove only the answered
+ * card from the currently displayed projection; every later server snapshot
+ * remains authoritative and may show a new or still-needed clarification. */
+static void optimistically_hide_question(const char *question_id) {
+    if (!question_id || strlen(question_id) != 36 || !snapshot_lock ||
+        xSemaphoreTake(snapshot_lock, pdMS_TO_TICKS(500)) != pdTRUE) return;
+    bool removed = dashboard_remove_entity(snapshot_json, SNAPSHOT_MAX,
+                                           "question", question_id);
+    /* A snapshot that arrived just before the button message must not restore
+     * the stale card when apply_pending_snapshot runs on the next redraw. */
+    if (atomic_load(&snapshot_pending))
+        dashboard_remove_entity(pending_snapshot_json, SNAPSHOT_MAX,
+                                "question", question_id);
+    xSemaphoreGive(snapshot_lock);
+    if (removed) ESP_LOGI("detail", "answered question hidden locally");
+}
+
 static bool prepare_list_detail(const char *copy) {
     if (!detail_list_mode) return false;
     if (detail_list_initialized) return true;
@@ -402,6 +420,7 @@ static bool activate_detail_action(void) {
             return false;
         }
         memset(content, 0, sizeof(content));
+        optimistically_hide_question(question_id);
         detail_open = detail_waiting = false;
         recorder_set_clarification_context(NULL);
         return true;
@@ -876,6 +895,14 @@ static void screen_task(void *unused) {
     while (xQueueReceive(queue, &message, portMAX_DELAY)) {
         if (message.ambient) atomic_store(&redraw_pending, false);
         apply_pending_snapshot();
+        if (message.hide_question) {
+            optimistically_hide_question(message.sample);
+            if (detail_open && strcmp(detail_entity_id, message.sample) == 0)
+                detail_open = detail_waiting = false;
+            recorder_set_clarification_context(NULL);
+            message.state = previous_state;
+            message.hide_question = false;
+        }
         /* Setup has no status bar and its QR payload password lives only in
          * the explicit setup message. Re-rendering an ambient clock/queue
          * update as the previous setup state would therefore generate a new
@@ -1491,6 +1518,12 @@ void screen_show(screen_state state, const char *password) {
     }
     screen_message message={.state=state};
     if(password) strncpy(message.password,password,sizeof(message.password)-1);
+    post(&message);
+}
+void screen_clarification_answered(const char *question_id) {
+    if (!question_id || strlen(question_id) != 36) return;
+    screen_message message = {.hide_question=true};
+    snprintf(message.sample, sizeof(message.sample), "%s", question_id);
     post(&message);
 }
 void screen_network_setup_end(void) {

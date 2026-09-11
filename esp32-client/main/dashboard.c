@@ -323,6 +323,50 @@ bool dashboard_entity_suggested_capture(const char *json, char *content,
     return valid;
 }
 
+bool dashboard_remove_entity(char *json, size_t capacity,
+                             const char *type, const char *id) {
+    if (!json || !capacity || !type || !id) return false;
+    cJSON *root = cJSON_Parse(json);
+    cJSON *sections = cJSON_GetObjectItemCaseSensitive(root, "sections");
+    if (!cJSON_IsObject(root) || !cJSON_IsArray(sections)) {
+        cJSON_Delete(root);
+        return false;
+    }
+    bool removed = false;
+    for (int section_index = 0; section_index < cJSON_GetArraySize(sections);) {
+        cJSON *section = cJSON_GetArrayItem(sections, section_index);
+        cJSON *items = cJSON_GetObjectItemCaseSensitive(section, "items");
+        if (cJSON_IsArray(items)) {
+            for (int item_index = 0; item_index < cJSON_GetArraySize(items);) {
+                cJSON *item = cJSON_GetArrayItem(items, item_index);
+                cJSON *entity = cJSON_GetObjectItemCaseSensitive(item, "entity_ref");
+                if (cJSON_IsObject(entity) && string_of(entity, "type") &&
+                    string_of(entity, "id") &&
+                    strcmp(string_of(entity, "type"), type) == 0 &&
+                    strcmp(string_of(entity, "id"), id) == 0) {
+                    cJSON_DeleteItemFromArray(items, item_index);
+                    removed = true;
+                    continue;
+                }
+                item_index++;
+            }
+        }
+        if (cJSON_IsArray(items) && cJSON_GetArraySize(items) == 0) {
+            cJSON_DeleteItemFromArray(sections, section_index);
+            continue;
+        }
+        section_index++;
+    }
+    if (removed) {
+        char *updated = cJSON_PrintUnformatted(root);
+        if (!updated || strlen(updated) >= capacity) removed = false;
+        else snprintf(json, capacity, "%s", updated);
+        cJSON_free(updated);
+    }
+    cJSON_Delete(root);
+    return removed;
+}
+
 int dashboard_entity_draw(unsigned char *canvas, const char *json,
                           int top, int bottom, int line_offset, int *page,
                           bool action_focused) {

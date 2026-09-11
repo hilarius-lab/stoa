@@ -1,6 +1,6 @@
 # Projektstand
 
-Stand: 2026-09-11, W05-Mutationsantwort strukturell gebaut; reale Abnahme offen
+Stand: 2026-09-11, W05-Mutationsantwort real abgenommen
 
 ## Nachgewiesen am realen Gerät
 
@@ -64,8 +64,9 @@ Stand: 2026-09-11, W05-Mutationsantwort strukturell gebaut; reale Abnahme offen
   und erst nach passender `200`-Antwort entfernt. Toggle, Zurücktoggeln,
   Verlassen und das serverseitige Verschwinden von „Hafermilch“ sind physisch
   abgenommen.
-- Der letzte Firmwarebuild (`h4-w05`) und Flash auf COM9 waren grün. Der
-  serielle Endstatus meldete `compatible=1` und `gate_ok=1`.
+- Der letzte geflashte Firmwarebuild (`h4-w05.1`) war grün. Der
+  serielle Endstatus meldete `compatible=1` und einen weiterhin grünen
+  Contract-Gate-Zähler.
 - A07 führt eindeutig aufgelöste Sprachmutationen serverseitig idempotent aus:
   ändern/umbenennen, Listeneintrag ergänzen, Task oder Item erledigen,
   kontextgebunden wieder öffnen und Note, Task, Liste oder Item archivieren.
@@ -82,13 +83,16 @@ Stand: 2026-09-11, W05-Mutationsantwort strukturell gebaut; reale Abnahme offen
   M8-Gate mit 24 Prüfungen belegt. Session 766 erledigte den sicheren Taskteil,
   ließ die tentative Liste aktiv und erzeugte die sichtbare Rückfrage. Die
   bisherige Live-Abnahme lief noch mit `h4-auto`.
-- W05 bindet in `h4-w05` eine aus der geöffneten Rückfragedetailansicht
+- W05 bindet ab `h4-w05` eine aus der geöffneten Rückfragedetailansicht
   gestartete BOOT-Aufnahme über die öffentliche Question-ID an genau diese
   Frage. Bei einer eindeutigen A08-Bestätigung erscheint alternativ der
   ausdrückliche Vorschlag „Ja“. Dieser wird mit stabiler Capture-ID in NVS
   journalisiert und bis zur passenden Serverantwort wiederholt. Vollständiges
   M8-Gate mit 25 Prüfungen, ESP-IDF-Build, Flash und Contractstatus sind grün;
-  beide realen Bedienwege stehen aus.
+  der „Ja“-Weg schloss Frage und Aktion real. `h4-w05.1` blendet eine lokal
+  dauerhaft beantwortete Karte sofort aus; Build, Flash, Contractstatus und
+  der freie Audioweg „Nein“ sind real bestätigt. Die Antwort brach nur die
+  gebundene Aktion ab und ließ beide Zielobjekte unverändert.
 
 ## Systemgrenze
 
@@ -188,7 +192,7 @@ einem zweiten realen Netz funktionieren; der Live-Wechsel erhält das bereits
 geladene Dashboard. Der Logsink ist gebaut, geflasht und auf der realen
 SD-Karte beschrieben; Inhalt und Rückkehr sind sichtbar, Scrollen erhält mit
 diesem Build eine eindeutig sichtbare Fensterposition. Der aktuelle
-Firmwarebezeichner ist `h4-w05`; die Akkuanzeige ergänzt
+Firmwarebezeichner im Quellstand ist `h4-w05.1`; die Akkuanzeige ergänzt
 weiterhin die bestehende Oberfläche und behauptet nicht den H5-Meetingmodus.
 
 ## Noch offen bis zum produktiven Betrieb

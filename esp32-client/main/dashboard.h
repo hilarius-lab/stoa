@@ -52,3 +52,9 @@ bool dashboard_entity_capture_context(const char *json, char *question_id,
 bool dashboard_entity_suggested_capture(const char *json, char *content,
                                         size_t content_capacity,
                                         char *question_id, size_t id_capacity);
+
+/* Remove matching cards from a mutable snapshot and prune sections that become
+ * empty. Used only for the short-lived optimistic UI after a durable answer;
+ * the next accepted server snapshot remains authoritative. */
+bool dashboard_remove_entity(char *json, size_t capacity,
+                             const char *type, const char *id);
