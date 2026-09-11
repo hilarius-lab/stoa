@@ -95,8 +95,11 @@ Stand: 2026-09-11, W05-Mutationsantwort real abgenommen
   gebundene Aktion ab und ließ beide Zielobjekte unverändert.
   `h4-w05.2` ergänzt bis zu drei vertikal auswählbare Serveroptionen: „Ja/Nein“
   bei Bestätigungen oder unterscheidbare A05-Kandidaten bei Mehrdeutigkeit.
-  Vollständiges M8, Build, Flash und Contractstatus sind grün; die reale
-  Sicht-/Auswahlprobe dieser Ergänzung steht noch aus.
+  Vollständiges M8, Build, Flash und Contractstatus sind grün. Die reale Probe
+  zeigte zwei Zieloptionen, archivierte ausschließlich die gewählte Testliste,
+  kehrte direkt zum Dashboard zurück und ließ die Frage sofort verschwinden.
+  Die zunächst umgekehrte Hoch-/Runterrichtung wurde korrigiert, neu geflasht
+  und an einem Aktionsdetail real bestätigt.
 
 ## Systemgrenze
 
@@ -149,8 +152,7 @@ zeigte zwei Aufgaben und die Einkaufsliste unter „Als Nächstes“; der Fokus 
 beim verzögert einsetzenden erzwungenen Sync erhalten. Für das weitere
 Dashboard fehlen:
 
-1. reale Abnahme der beiden neuen W05-Antwortwege und später die allgemeine
-   Wissensneubewertung für Nicht-Mutationsfragen;
+1. allgemeine W05-Wissensneubewertung für Nicht-Mutationsfragen;
 2. echtes Controllerfenster im regulären Zeichenpfad sowie später SSE.
 
 Der Verlauf zeigt den technischen Sessionzustand nun vollständig in jeder

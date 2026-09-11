@@ -9,8 +9,11 @@
   bewegt den Fokus, Mitteldruck journalisiert ausschließlich die gewählte
   Antwort; BOOT bleibt jederzeit die freie kontextgebundene Alternative.
 - Gezieltes W05-Gate, vollständiges M8 mit 25 Prüfungen, ESP-IDF-Build, Flash
-  auf COM9 und Contractstatus sind grün. Firmwarekennung: `h4-w05.2`; die reale
-  Sicht-/Auswahlprobe steht noch aus.
+  auf COM9 und Contractstatus sind grün. Firmwarekennung: `h4-w05.2`. Zwei
+  konkrete Zieloptionen, die gewählte Einzelmutation, sofortige Rückkehr und
+  das Ausblenden der Frage wurden real bestätigt. Die dabei gefundene
+  umgekehrte Hoch-/Runterrichtung ist korrigiert, neu geflasht und ebenfalls
+  am Gerät abgenommen; alle Testobjekte wurden danach entfernt.
 
 ## 2026-09-11 – W05-Antworten aus der Rückfragedetailansicht
 

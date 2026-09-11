@@ -1172,7 +1172,15 @@ unterscheidbare Bezeichnungen aus dem persistierten A05-Snapshot an; interne
 Kandidaten-IDs verlassen das Backend nicht. Der erste Eintrag bleibt zusätzlich
 in den bisherigen Einzelfeldern erhalten, damit ältere Firmware degradiert
 nutzbar bleibt. Gezieltes Gate, vollständiges M8, Firmwarebuild, Flash und
-Contractstatus sind grün; die reale Sicht-/Auswahlprobe steht noch aus.
+Contractstatus sind grün.
+Die reale Probe zeigte „W05 Auswahltest Nord“ und „W05 Auswahltest Sued“
+untereinander. Die Auswahl von „Sued“ wurde als `suggested_answer` gebunden,
+archivierte ausschließlich dieses Ziel, blendete die Frage sofort aus und
+kehrte direkt zum Dashboard zurück. Der erste Build bewegte den Fokus entgegen
+der physischen Tastenrichtung; die korrigierte Addition des Fokusdeltas wurde
+neu gebaut, geflasht und real als „unten = nächster Eintrag, oben = vorheriger
+Eintrag“ bestätigt. Sämtliche Testlisten, Identitäten und die Testsitzung sind
+anschließend entfernt worden.
 Die allgemeine Wissensneubewertung für andere
 Question-Arten und die freie nachträgliche Zuordnung einer kontextlosen Memo
 bleiben spätere W05-Arbeit.

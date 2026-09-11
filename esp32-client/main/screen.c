@@ -968,7 +968,7 @@ static void screen_task(void *unused) {
                         int action_count = copy && entity_take(copy, ENTITY_MAX)
                             ? dashboard_entity_action_count(copy) : 0;
                         free(copy);
-                        int next = detail_action_focus - message.focus_delta;
+                        int next = detail_action_focus + message.focus_delta;
                         if (next < 0) next = 0;
                         if (next > action_count) next = action_count;
                         detail_action_focus = next;
