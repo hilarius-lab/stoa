@@ -643,6 +643,26 @@ MIGRATIONS=[
         CHECK(status<>'completed' OR (before_state IS NOT NULL AND after_state IS NOT NULL AND executed_at IS NOT NULL)))""",
         "CREATE INDEX mutation_action_execution_session_idx ON mutation_action_executions(session_id,id)",
     ]),
+    ("0048_clarification_answer_loop","Persist source-bound W05 answers and resumable mutation outcomes",[
+        "ALTER TABLE mutation_target_resolutions DROP CONSTRAINT mutation_target_resolutions_status_check",
+        "ALTER TABLE mutation_target_resolutions ADD CONSTRAINT mutation_target_resolutions_status_check CHECK(status IN('resolved','ambiguous','unresolved','cancelled'))",
+        "ALTER TABLE mutation_action_executions DROP CONSTRAINT mutation_action_executions_status_check",
+        "ALTER TABLE mutation_action_executions ADD CONSTRAINT mutation_action_executions_status_check CHECK(status IN('planned','completed','clarification_required','failed','cancelled'))",
+        "ALTER TABLE mutation_action_executions DROP CONSTRAINT mutation_action_executions_check",
+        "ALTER TABLE mutation_action_executions ADD CONSTRAINT mutation_action_executions_check CHECK(status<>'clarification_required' OR clarification_question_id IS NOT NULL)",
+        "ALTER TABLE mutation_action_executions DROP CONSTRAINT mutation_action_executions_check1",
+        "ALTER TABLE mutation_action_executions ADD CONSTRAINT mutation_action_executions_check1 CHECK(status NOT IN('planned','completed') OR operation IS NOT NULL)",
+        "ALTER TABLE client_text_captures DROP CONSTRAINT client_text_captures_resolved_intent_check",
+        "ALTER TABLE client_text_captures ADD CONSTRAINT client_text_captures_resolved_intent_check CHECK(resolved_intent IN('memo','query','change','complete','archive','clarification'))",
+        """CREATE TABLE clarification_answer_attempts(
+        id BIGSERIAL PRIMARY KEY,question_id BIGINT NOT NULL REFERENCES session_questions(id) ON DELETE CASCADE,
+        answer_session_id BIGINT NOT NULL UNIQUE REFERENCES ingestion_sessions(id) ON DELETE CASCADE,
+        answer_text TEXT NOT NULL,answer_source TEXT NOT NULL,status TEXT NOT NULL,
+        result JSONB NOT NULL DEFAULT '{}'::jsonb,created_at TIMESTAMPTZ NOT NULL,updated_at TIMESTAMPTZ NOT NULL,
+        CHECK(answer_text<>''),CHECK(answer_source IN('audio_capture','text_capture','suggested_answer')),
+        CHECK(status IN('processing','completed','cancelled','needs_clarification','failed')))""",
+        "CREATE INDEX clarification_answer_question_idx ON clarification_answer_attempts(question_id,id)",
+    ]),
 ]
 
 

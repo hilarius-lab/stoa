@@ -34,6 +34,8 @@
 #include "battery.h"
 
 static atomic_bool held, busy, test_requested, queue_rescan_requested;
+static portMUX_TYPE context_lock=portMUX_INITIALIZER_UNLOCKED;
+static char clarification_context_id[JOURNAL_UUID_CHARS];
 static atomic_bool export_requested;
 static char diagnostic_dir[40];
 static unsigned diagnostic_segments;
@@ -443,9 +445,13 @@ static bool record_memo(bool diagnostic) {
     if(!journal) { ESP_LOGE("memo","no memory for the session journal"); return false; }
     journal_session_init(journal,dir);
     char payload[JOURNAL_MAX_PAYLOAD],session_id[JOURNAL_UUID_CHARS];
+    char context_id[JOURNAL_UUID_CHARS];
+    portENTER_CRITICAL(&context_lock);
+    snprintf(context_id,sizeof(context_id),"%s",clarification_context_id);
+    portEXIT_CRITICAL(&context_lock);
     journal_uuid(session_id,memo_queue_random);
-    if(!note(journal,payload,journal_build_session(payload,sizeof(payload),session_id,
-            "auto",MEMO_FIRMWARE,
+    if(!note(journal,payload,journal_build_session_context(payload,sizeof(payload),session_id,
+            "auto",context_id[0]?"clarification":NULL,context_id[0]?context_id:NULL,MEMO_FIRMWARE,
             (uint64_t)(esp_timer_get_time()/1000),NULL,false))) {
         free(journal); return false;
     }
@@ -629,6 +635,12 @@ static bool record_memo(bool diagnostic) {
     unsigned ready=journal_count_state(journal,CHUNK_READY);
     unsigned attention=journal_count_state(journal,CHUNK_ATTENTION);
     free(journal);
+    if(sequence && context_id[0]) {
+        portENTER_CRITICAL(&context_lock);
+        if(strcmp(clarification_context_id,context_id)==0)
+            clarification_context_id[0]=0;
+        portEXIT_CRITICAL(&context_lock);
+    }
     if(ok && diagnostic) { strcpy(diagnostic_dir,dir); diagnostic_segments=sequence; }
     memo_queue_update_space();
     space=memo_queue_get();
@@ -707,6 +719,11 @@ void recorder_start(void) {
     }
 }
 void recorder_hold(bool value) { atomic_store(&held,value); }
+void recorder_set_clarification_context(const char *question_id) {
+    portENTER_CRITICAL(&context_lock);
+    snprintf(clarification_context_id,sizeof(clarification_context_id),"%s",question_id?question_id:"");
+    portEXIT_CRITICAL(&context_lock);
+}
 void recorder_test(void) { if(!atomic_load(&busy)) atomic_store(&test_requested,true); }
 void recorder_export_test(void) { if(!atomic_load(&busy)) atomic_store(&export_requested,true); }
 void recorder_discard_all(unsigned expected) {

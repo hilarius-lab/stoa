@@ -248,13 +248,39 @@ static const char *kind_word(const char *type) {
     return type;
 }
 
-/* "Erledigt" is the only label this build knows; any other action.type is
- * inert here, same convention as an unimplemented action on a dashboard
- * card — present in the response, not acted on. */
+static const cJSON *capture_params_for(const cJSON *root) {
+    const cJSON *action = cJSON_GetObjectItemCaseSensitive(root, "action");
+    const char *type = action ? string_of(action, "type") : NULL;
+    const cJSON *params = action ? cJSON_GetObjectItemCaseSensitive(action, "params") : NULL;
+    return type && strcmp(type, "submit_capture") == 0 && cJSON_IsObject(params)
+        ? params : NULL;
+}
+
+static bool capture_context_for(const cJSON *root, const char **id) {
+    const cJSON *params = capture_params_for(root);
+    const cJSON *context = params
+        ? cJSON_GetObjectItemCaseSensitive(params, "context_ref") : NULL;
+    const char *type = context ? string_of(context, "type") : NULL;
+    const char *value = context ? string_of(context, "id") : NULL;
+    if (!cJSON_IsObject(context) || !type || strcmp(type, "clarification") != 0 ||
+        !value || strlen(value) != 36) return false;
+    if (id) *id = value;
+    return true;
+}
+
+/* Action labels are server-owned, but only for the closed action vocabulary
+ * this build implements. A bare submit_capture is intentionally not focusable:
+ * it binds BOOT recording, while a label plus fixed content makes a selectable
+ * suggested answer. */
 static const char *action_label_for(const cJSON *root) {
     const cJSON *action = cJSON_GetObjectItemCaseSensitive(root, "action");
     const char *type = action ? string_of(action, "type") : NULL;
     if (type && strcmp(type, "complete_task") == 0) return "Erledigt";
+    const cJSON *params = capture_params_for(root);
+    const char *label = params ? string_of(params, "label") : NULL;
+    const char *content = params ? string_of(params, "content") : NULL;
+    if (label && label[0] && content && content[0] && capture_context_for(root, NULL))
+        return label;
     return NULL;
 }
 
@@ -263,6 +289,38 @@ bool dashboard_entity_has_action(const char *json) {
     bool has = cJSON_IsObject(root) && action_label_for(root) != NULL;
     cJSON_Delete(root);
     return has;
+}
+
+bool dashboard_entity_capture_context(const char *json, char *question_id,
+                                      size_t capacity) {
+    if (!question_id || capacity < 37) return false;
+    question_id[0] = 0;
+    cJSON *root = cJSON_Parse(json);
+    const char *id = NULL;
+    bool valid = cJSON_IsObject(root) && capture_context_for(root, &id);
+    if (valid) snprintf(question_id, capacity, "%s", id);
+    cJSON_Delete(root);
+    return valid;
+}
+
+bool dashboard_entity_suggested_capture(const char *json, char *content,
+                                        size_t content_capacity,
+                                        char *question_id, size_t id_capacity) {
+    if (!content || !content_capacity || !question_id || !id_capacity) return false;
+    content[0] = question_id[0] = 0;
+    cJSON *root = cJSON_Parse(json);
+    const cJSON *params = cJSON_IsObject(root) ? capture_params_for(root) : NULL;
+    const char *value = params ? string_of(params, "content") : NULL;
+    const char *id = NULL;
+    bool valid = value && value[0] && strlen(value) < content_capacity &&
+                 id_capacity >= 37 && action_label_for(root) &&
+                 capture_context_for(root, &id);
+    if (valid) {
+        snprintf(content, content_capacity, "%s", value);
+        snprintf(question_id, id_capacity, "%s", id);
+    }
+    cJSON_Delete(root);
+    return valid;
 }
 
 int dashboard_entity_draw(unsigned char *canvas, const char *json,

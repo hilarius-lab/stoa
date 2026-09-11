@@ -32,6 +32,7 @@
  * is how the two would eventually disagree. */
 #define JOURNAL_SEQUENCE_BASE 0
 #define JOURNAL_SHA_CHARS 65  /* 64 lowercase hex characters plus terminator */
+#define JOURNAL_CONTEXT_TYPE_CHARS 16
 
 typedef enum {
     CHUNK_UNKNOWN = 0, /* referenced by no record; never persisted */
@@ -62,6 +63,8 @@ typedef struct {
     char directory[64];
     char session_id[JOURNAL_UUID_CHARS];
     char capture_mode[12];
+    char context_type[JOURNAL_CONTEXT_TYPE_CHARS];
+    char context_id[JOURNAL_UUID_CHARS];
     uint64_t next_record;   /* record number to use for the next append */
     uint64_t valid_bytes;   /* journal length up to the last intact record */
     unsigned chunk_count;
@@ -93,6 +96,11 @@ void journal_uuid(char *out, journal_random_fn random_source);
 int journal_build_session(char *out, size_t capacity, const char *session_id,
                           const char *capture_mode, const char *firmware,
                           uint64_t monotonic_ms, const char *captured_at, bool adopted);
+int journal_build_session_context(char *out, size_t capacity, const char *session_id,
+                                  const char *capture_mode, const char *context_type,
+                                  const char *context_id, const char *firmware,
+                                  uint64_t monotonic_ms, const char *captured_at,
+                                  bool adopted);
 int journal_build_chunk_open(char *out, size_t capacity, unsigned sequence,
                              const char *chunk_id, const char *file, uint64_t source_start_ms);
 int journal_build_chunk_ready(char *out, size_t capacity, const journal_chunk *chunk);

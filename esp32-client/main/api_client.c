@@ -137,6 +137,77 @@ static list_action_store list_actions;
 static SemaphoreHandle_t list_actions_lock;
 static void publish_queue_status(void);
 
+/* One suggested clarification answer can wait durably beside the audio
+ * journal. Its UUID is created once and reused until the server acknowledges
+ * the idempotent capture; a lost response therefore cannot duplicate the
+ * answer. This contains only the server-proposed fixed answer, never a spoken
+ * transcript. */
+#define CLARIFICATION_CAPTURE_MAGIC 0x43415031u
+#define CLARIFICATION_CONTENT_MAX 192
+typedef struct {
+    uint32_t magic;
+    uint8_t pending;
+    uint8_t reserved[3];
+    char capture_id[37];
+    char question_id[37];
+    char content[CLARIFICATION_CONTENT_MAX];
+} clarification_capture_store;
+static clarification_capture_store clarification_capture;
+static SemaphoreHandle_t clarification_capture_lock;
+
+static bool clarification_capture_save_locked(void) {
+    nvs_handle_t n;
+    if (nvs_open("notebook", NVS_READWRITE, &n) != ESP_OK) return false;
+    esp_err_t result = nvs_set_blob(n, "clarify_cap", &clarification_capture,
+                                    sizeof(clarification_capture));
+    if (result == ESP_OK) result = nvs_commit(n);
+    nvs_close(n);
+    if (result != ESP_OK)
+        ESP_LOGW("api", "clarification capture journal save failed: %s",
+                 esp_err_to_name(result));
+    return result == ESP_OK;
+}
+
+static void clarification_capture_load(void) {
+    clarification_capture_lock = xSemaphoreCreateMutex();
+    memset(&clarification_capture, 0, sizeof(clarification_capture));
+    clarification_capture.magic = CLARIFICATION_CAPTURE_MAGIC;
+    if (!clarification_capture_lock) return;
+    nvs_handle_t n;
+    size_t size = sizeof(clarification_capture);
+    if (nvs_open("notebook", NVS_READONLY, &n) == ESP_OK) {
+        if (nvs_get_blob(n, "clarify_cap", &clarification_capture, &size) != ESP_OK ||
+            size != sizeof(clarification_capture) ||
+            clarification_capture.magic != CLARIFICATION_CAPTURE_MAGIC ||
+            clarification_capture.pending > 1 ||
+            (clarification_capture.pending &&
+             (strnlen(clarification_capture.capture_id,
+                      sizeof(clarification_capture.capture_id)) != 36 ||
+              strnlen(clarification_capture.question_id,
+                      sizeof(clarification_capture.question_id)) != 36 ||
+              strnlen(clarification_capture.content,
+                      sizeof(clarification_capture.content)) == 0 ||
+              strnlen(clarification_capture.content,
+                      sizeof(clarification_capture.content)) >=
+                      sizeof(clarification_capture.content)))) {
+            memset(&clarification_capture, 0, sizeof(clarification_capture));
+            clarification_capture.magic = CLARIFICATION_CAPTURE_MAGIC;
+        }
+        nvs_close(n);
+    }
+    if (clarification_capture.pending)
+        ESP_LOGI("api", "recovered one suggested clarification answer");
+}
+
+static bool clarification_capture_is_pending(void) {
+    if (!clarification_capture_lock ||
+        xSemaphoreTake(clarification_capture_lock, pdMS_TO_TICKS(200)) != pdTRUE)
+        return false;
+    bool pending = clarification_capture.pending != 0;
+    xSemaphoreGive(clarification_capture_lock);
+    return pending;
+}
+
 static bool list_actions_save_locked(void) {
     nvs_handle_t n;
     if (nvs_open("notebook", NVS_READWRITE, &n) != ESP_OK) return false;
@@ -523,7 +594,9 @@ static void publish_queue_status(void) {
     memo_queue_status queued = memo_queue_get();
     diagnostic_log_event(DIAG_EVENT_QUEUE, (int)queued.ready,
                          (int)queued.acked, (int)queued.attention);
-    screen_status(queued.ready + list_action_count(false), queued.attention, queued.space_low);
+    screen_status(queued.ready + list_action_count(false) +
+                  (clarification_capture_is_pending() ? 1u : 0u),
+                  queued.attention, queued.space_low);
     screen_status_storage_block(queued.space_block);
     if (!recorder_busy()) screen_memo(SCREEN_READY, 0);
 }
@@ -564,10 +637,16 @@ static void fetch_dashboard(void) {
     memset(body,0,API_RESPONSE_MAX);free(body);
 }
 
-static bool response_matches_session(const char *text, const char *session_id) {
+static bool response_matches_session(const char *text, const journal_session *session) {
     cJSON *root = cJSON_Parse(text);
     cJSON *state = cJSON_GetObjectItemCaseSensitive(root, "state");
-    bool valid = cJSON_IsObject(root) && string_is(root, "client_session_id", session_id) &&
+    cJSON *context = cJSON_GetObjectItemCaseSensitive(root, "context_ref");
+    bool context_valid = session->context_id[0]
+        ? cJSON_IsObject(context) && string_is(context, "type", session->context_type) &&
+          string_is(context, "id", session->context_id)
+        : !context || cJSON_IsNull(context);
+    bool valid = cJSON_IsObject(root) &&
+        string_is(root, "client_session_id", session->session_id) && context_valid &&
         cJSON_IsString(state) && cJSON_HasObjectItem(root, "device_metadata") &&
         cJSON_HasObjectItem(root, "capture_mode") && cJSON_HasObjectItem(root, "created_at") &&
         cJSON_HasObjectItem(root, "updated_at") &&
@@ -604,6 +683,13 @@ static bool create_session(journal_session *session) {
     cJSON_AddStringToObject(metadata, "client", "waveshare-esp32-s3-epaper-3.97");
     cJSON_AddStringToObject(metadata, "firmware_version", MEMO_FIRMWARE);
     cJSON_AddItemToObject(request, "device_metadata", metadata);
+    if (session->context_id[0]) {
+        cJSON *context = cJSON_CreateObject();
+        if (!context) { cJSON_Delete(request); return false; }
+        cJSON_AddStringToObject(context, "type", session->context_type);
+        cJSON_AddStringToObject(context, "id", session->context_id);
+        cJSON_AddItemToObject(request, "context_ref", context);
+    }
     char *json = cJSON_PrintUnformatted(request);
     cJSON_Delete(request);
     if (!json) return false;
@@ -612,7 +698,7 @@ static bool create_session(journal_session *session) {
     int http = 0;
     bool reached = call(HTTP_METHOD_POST, "/api/client/v1/sessions", json,
                         body, API_RESPONSE_MAX, &http);
-    bool ok = reached && http == 201 && response_matches_session(body, session->session_id);
+    bool ok = reached && http == 201 && response_matches_session(body, session);
     status.last_http = http;
     /* Mark only on a definitive answer from the server, never on a transport
      * failure — a DNS or connectivity gap must not light this up, or it would
@@ -1409,6 +1495,79 @@ static void list_action_acked(const list_action *sent) {
     xSemaphoreGive(list_actions_lock);
 }
 
+static bool clarification_capture_next(clarification_capture_store *out) {
+    if (!out || !clarification_capture_lock ||
+        xSemaphoreTake(clarification_capture_lock, pdMS_TO_TICKS(200)) != pdTRUE)
+        return false;
+    bool found = clarification_capture.pending != 0;
+    if (found) *out = clarification_capture;
+    xSemaphoreGive(clarification_capture_lock);
+    return found;
+}
+
+static void clarification_capture_acked(const clarification_capture_store *sent) {
+    if (!sent || !clarification_capture_lock ||
+        xSemaphoreTake(clarification_capture_lock, pdMS_TO_TICKS(500)) != pdTRUE)
+        return;
+    if (clarification_capture.pending &&
+        strcmp(clarification_capture.capture_id, sent->capture_id) == 0) {
+        memset(&clarification_capture, 0, sizeof(clarification_capture));
+        clarification_capture.magic = CLARIFICATION_CAPTURE_MAGIC;
+        clarification_capture_save_locked();
+    }
+    xSemaphoreGive(clarification_capture_lock);
+    publish_queue_status();
+}
+
+static void submit_clarification_capture(void) {
+    clarification_capture_store pending;
+    if (!clarification_capture_next(&pending)) return;
+    cJSON *request = cJSON_CreateObject();
+    cJSON *context = cJSON_CreateObject();
+    if (!request || !context) {
+        cJSON_Delete(request);
+        cJSON_Delete(context);
+        return;
+    }
+    cJSON_AddStringToObject(request, "client_capture_id", pending.capture_id);
+    cJSON_AddStringToObject(request, "mode", "auto");
+    cJSON_AddStringToObject(request, "content", pending.content);
+    cJSON_AddStringToObject(context, "type", "clarification");
+    cJSON_AddStringToObject(context, "id", pending.question_id);
+    cJSON_AddStringToObject(context, "answer_source", "suggested");
+    cJSON_AddItemToObject(request, "context_ref", context);
+    char *json = cJSON_PrintUnformatted(request);
+    cJSON_Delete(request);
+    char *body = malloc(API_RESPONSE_MAX);
+    int http = 0;
+    bool ok = json && body &&
+        call(HTTP_METHOD_POST, "/api/client/v1/captures", json,
+             body, API_RESPONSE_MAX, &http) && http == 202;
+    if (ok) {
+        cJSON *root = cJSON_Parse(body);
+        cJSON *remote_context = cJSON_GetObjectItemCaseSensitive(root, "context_ref");
+        cJSON *remote_status = cJSON_GetObjectItemCaseSensitive(root, "status");
+        ok = cJSON_IsObject(root) && string_is(root, "id", pending.capture_id) &&
+             cJSON_IsString(remote_status) && cJSON_IsObject(remote_context) &&
+             string_is(remote_context, "type", "clarification") &&
+             string_is(remote_context, "id", pending.question_id);
+        cJSON_Delete(root);
+    }
+    status.last_http = http;
+    ESP_LOGI("api", "suggested clarification answer %s http=%d",
+             ok ? "accepted" : "pending", http);
+    if (json) {
+        memset(json, 0, strlen(json));
+        cJSON_free(json);
+    }
+    if (body) {
+        memset(body, 0, API_RESPONSE_MAX);
+        free(body);
+    }
+    if (ok) clarification_capture_acked(&pending);
+    memset(&pending, 0, sizeof(pending));
+}
+
 static void submit_list_actions(void) {
     list_action action;
     while (list_action_next(&action)) {
@@ -1512,6 +1671,7 @@ static void synchronize(void) {
      * check therefore disappears from both the following list detail and the
      * overview snapshot in the same synchronization pass. */
     submit_list_actions();
+    submit_clarification_capture();
     /* The dashboard comes first, before any housekeeping. What the user sees
      * must not wait behind the session sweep: over TLS a pass costs seconds per
      * request, and with a card full of recordings the panel stayed empty for
@@ -1650,7 +1810,8 @@ static void api_task(void *unused) {
          * queue until another recording or WLAN reconnect happens. */
         memo_queue_status queued = memo_queue_get();
         TickType_t wait;
-        if (queued.ready || list_action_count(true) || atomic_load(&entity_pending) ||
+        if (queued.ready || list_action_count(true) || clarification_capture_is_pending() ||
+            atomic_load(&entity_pending) ||
             atomic_load(&history_pending) || atomic_load(&session_pending))
             wait = pdMS_TO_TICKS(5000);
         else if (retry_ms)
@@ -1709,6 +1870,7 @@ void api_client_start(const char *base_url) {
                         "audio travel unencrypted");
     auth_load();
     list_actions_load();
+    clarification_capture_load();
     while (strlen(base) && base[strlen(base)-1] == '/') base[strlen(base)-1] = 0;
     /* Priority 1, below the display task and level with the input loop in
      * app_main. It used to be 3, which put background housekeeping above the
@@ -1749,6 +1911,34 @@ void api_client_open_session(const char *session_id) {
     snprintf(session_id_wanted, sizeof(session_id_wanted), "%s", session_id);
     atomic_store(&session_pending, true);
     if (worker) xTaskNotifyGive(worker);
+}
+
+bool api_client_submit_capture(const char *content, const char *question_id) {
+    if (!content || !content[0] || strlen(content) >= CLARIFICATION_CONTENT_MAX ||
+        !question_id || strlen(question_id) != 36 || !clarification_capture_lock ||
+        xSemaphoreTake(clarification_capture_lock, pdMS_TO_TICKS(500)) != pdTRUE)
+        return false;
+    if (clarification_capture.pending) {
+        bool same = strcmp(clarification_capture.question_id, question_id) == 0 &&
+                    strcmp(clarification_capture.content, content) == 0;
+        xSemaphoreGive(clarification_capture_lock);
+        return same;
+    }
+    clarification_capture_store before = clarification_capture;
+    journal_uuid(clarification_capture.capture_id, memo_queue_random);
+    snprintf(clarification_capture.question_id,
+             sizeof(clarification_capture.question_id), "%s", question_id);
+    snprintf(clarification_capture.content,
+             sizeof(clarification_capture.content), "%s", content);
+    clarification_capture.pending = 1;
+    bool saved = clarification_capture_save_locked();
+    if (!saved) clarification_capture = before;
+    xSemaphoreGive(clarification_capture_lock);
+    if (saved) {
+        publish_queue_status();
+        if (worker) xTaskNotifyGive(worker);
+    }
+    return saved;
 }
 
 api_client_diagnostic api_client_get_diagnostic(void) {

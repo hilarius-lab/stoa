@@ -184,19 +184,38 @@ static void test_crc_and_uuid(void) {
 static void test_round_trip(void) {
     printf("record round trip\n");
     char payload[JOURNAL_MAX_PAYLOAD];
-    int n = journal_build_chunk_open(payload, sizeof(payload), 7,
-                                     "0f9a1c2b-3d4e-4f60-8a1b-2c3d4e5f6071", "00000007.M4A", 70000);
+    int n = journal_build_session_context(
+        payload, sizeof(payload), "0f9a1c2b-3d4e-4f60-8a1b-2c3d4e5f6071", "auto",
+        "clarification", "11111111-2222-4333-8444-555555555555",
+        "test", 42, NULL, false);
+    check(n > 0, "context session built");
+    check(strcmp(payload, "{\"cm\":\"auto\",\"ci\":\"11111111-2222-4333-8444-555555555555\","
+                          "\"ct\":\"clarification\",\"fw\":\"test\","
+                          "\"sid\":\"0f9a1c2b-3d4e-4f60-8a1b-2c3d4e5f6071\","
+                          "\"t\":\"session\",\"tm\":42}") == 0,
+          "context session canonical form");
+    uint8_t record[JOURNAL_MAX_RECORD];
+    int framed = journal_frame(record, sizeof(record), 1, payload, (size_t)n);
+    journal_session *s = malloc(sizeof(journal_session));
+    journal_session_init(s, "/tmp");
+    size_t consumed = 0;
+    journal_apply_buffer(s, record, (size_t)framed, &consumed);
+    check(strcmp(s->context_type, "clarification") == 0, "context type replays");
+    check(strcmp(s->context_id, "11111111-2222-4333-8444-555555555555") == 0,
+          "context id replays");
+
+    n = journal_build_chunk_open(payload, sizeof(payload), 7,
+                                 "0f9a1c2b-3d4e-4f60-8a1b-2c3d4e5f6071",
+                                 "00000007.M4A", 70000);
     check(n > 0, "chunk_open built");
     check(strstr(payload, "\"seq\":7") != NULL, "sequence present");
     /* keys must be emitted in ascending order for a stable serialisation */
     check(strcmp(payload, "{\"cid\":\"0f9a1c2b-3d4e-4f60-8a1b-2c3d4e5f6071\",\"f\":\"00000007.M4A\","
                           "\"s0\":70000,\"seq\":7,\"t\":\"chunk_open\"}") == 0, "canonical form");
-    uint8_t record[JOURNAL_MAX_RECORD];
-    int framed = journal_frame(record, sizeof(record), 1, payload, (size_t)n);
+    framed = journal_frame(record, sizeof(record), 1, payload, (size_t)n);
     check(framed == JOURNAL_HEADER_BYTES + n + JOURNAL_TRAILER_BYTES, "framed length");
-    journal_session *s = malloc(sizeof(journal_session));
     journal_session_init(s, "/tmp");
-    size_t consumed = 0;
+    consumed = 0;
     journal_apply_buffer(s, record, (size_t)framed, &consumed);
     check(consumed == (size_t)framed, "whole record consumed");
     check(s->chunk_count == 1 && s->chunks[0].sequence == 7, "chunk applied");

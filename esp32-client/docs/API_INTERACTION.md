@@ -254,9 +254,10 @@ die dauerhafte Queue versucht den Zustand weiter zuzustellen.
 
 Ein kurzer Mitteldruck auf eine fokussierte Karte führt deren erlaubte
 `open_entity`-, `open_conversation`-, `open_session`- oder
-`open_clarification`-Navigation aus. In der ersten ESP-Ausbaustufe werden
-`open_entity`, für eine offene Task `complete_task` und für Listendetails
-`set_list_item_status` umgesetzt; andere nicht implementierte erlaubte Aktionen bleiben sichtbar,
+`open_clarification`-Navigation aus. Umgesetzt sind `open_entity`, für eine
+offene Task `complete_task`, für Listendetails `set_list_item_status` und für
+eine geöffnete Rückfrage der geschlossene `submit_capture`-Pfad; andere nicht
+implementierte erlaubte Aktionen bleiben sichtbar,
 werden aber nicht ausgeführt. In der Detailansicht ist ein Kurzdruck auf das
 fokussierte Element „Zurück" lokal und löst keine Servermutation aus; ein
 Kurzdruck auf ein fokussiertes `complete_task`-Element tut es ausdrücklich.
@@ -279,3 +280,19 @@ Serverantworten, offene Rückfragen und Verarbeitungszustände erscheinen über 
 Dashboard. Falls Textcaptures später benötigt werden, verwendet das Gerät
 `POST /api/client/v1/captures` mit stabiler `client_capture_id`, `content` und
 `mode=memo|query|auto`. Audio bleibt beim beschriebenen Session-/Chunkpfad.
+
+Eine offene Question-Detailantwort liefert bei `submit_capture` immer
+`params.context_ref={type:"clarification",id:…}`. Die Firmware bindet damit
+die nächste gültige BOOT-Aufnahme bereits im SD-Journal an genau diese Frage;
+zu kurze verworfene Aufnahmen verbrauchen die Bindung nicht. Optional kann die
+Aktion zusätzlich ein festes `label` und `content` enthalten. Nur dann ist sie
+mit den Hoch-/Runtertasten neben „Zurück“ fokussierbar und wird per Mitteldruck
+ausdrücklich abgesendet. Der aktuelle sichere Vorschlag lautet „Ja“.
+
+Vorgeschlagene Antworten werden vor dem Schließen der Detailansicht mit einer
+einmal erzeugten `client_capture_id` in NVS gespeichert. Der Worker wiederholt
+denselben `POST /api/client/v1/captures` mit `mode=auto` und dem unveränderten
+Clarification-Kontext bis zu einer passend validierten `202`-Antwort. Eine
+Audioantwort benutzt dagegen unverändert Session/Chunk/Finish; deren
+`context_ref` wird beim Session-Create mit der journalisierten Bindung
+abgeglichen. Die Firmware interpretiert weder Antwort noch Frage.

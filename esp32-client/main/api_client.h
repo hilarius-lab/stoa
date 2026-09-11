@@ -28,6 +28,9 @@ void api_client_open_entity(const char *type, const char *id);
  * action) comes back through the same screen_entity_received the detail view
  * already redraws from. */
 void api_client_complete_task(const char *task_id);
+/* Durably queue a fixed server-proposed answer for one clarification. The
+ * generated capture id is retained across retries, so POST remains idempotent. */
+bool api_client_submit_capture(const char *content, const char *question_id);
 /* Persist one list item's locally selected desired state. Staging never sends:
  * the list detail may toggle it back before the reader leaves. Committing
  * marks all staged changes ready for idempotent background delivery. A staged

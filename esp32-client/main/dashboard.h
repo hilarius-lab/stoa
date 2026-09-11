@@ -10,6 +10,7 @@
 // a second source of truth about how tall the content is, and the two would
 // eventually disagree.
 #include <stdbool.h>
+#include <stddef.h>
 #include "dashboard_map.h"
 
 /* Walk the snapshot. With `canvas` set, the visible part is drawn between the
@@ -31,8 +32,8 @@ int dashboard_remap_focus(const char *old_json, const char *new_json,
 /* Draw an entity response as the detail view. Returns the number of body text
  * lines, and reports through `page` how many of them fit at once. Both come
  * from the same layout the drawing uses. `action_focused` only matters when
- * the entity's own `action.type` is one the ESP implements (currently
- * `complete_task`); the caller owns that focus, not this function. */
+ * the entity's own `action.type` is one the ESP implements (`complete_task`
+ * or a fixed suggested `submit_capture`); the caller owns that focus. */
 int dashboard_entity_draw(unsigned char *canvas, const char *json,
                           int top, int bottom, int line_offset, int *page,
                           bool action_focused);
@@ -41,3 +42,13 @@ int dashboard_entity_draw(unsigned char *canvas, const char *json,
  * caller can decide whether the up/down buttons pick between "Zurück" and the
  * action instead of paging — see docs/API_INTERACTION.md. */
 bool dashboard_entity_has_action(const char *json);
+
+/* Extract the closed clarification context announced by a question detail.
+ * A context without a suggested answer still binds the next BOOT recording;
+ * a suggested capture additionally returns the fixed text for the middle
+ * button. Nothing here infers business meaning from the question text. */
+bool dashboard_entity_capture_context(const char *json, char *question_id,
+                                      size_t capacity);
+bool dashboard_entity_suggested_capture(const char *json, char *content,
+                                        size_t content_capacity,
+                                        char *question_id, size_t id_capacity);

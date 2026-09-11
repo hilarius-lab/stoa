@@ -157,9 +157,11 @@ static chunk_state state_from_name(const char *name) {
 /* Keys are emitted in ascending order so the same state always serialises to
  * the same bytes. That keeps the CRC meaningful as an integrity check rather
  * than an artefact of key ordering. */
-int journal_build_session(char *out, size_t capacity, const char *session_id,
-                          const char *capture_mode, const char *firmware,
-                          uint64_t monotonic_ms, const char *captured_at, bool adopted) {
+int journal_build_session_context(char *out, size_t capacity, const char *session_id,
+                                  const char *capture_mode, const char *context_type,
+                                  const char *context_id, const char *firmware,
+                                  uint64_t monotonic_ms, const char *captured_at,
+                                  bool adopted) {
     size_t at = 0;
     bool ok = write_raw(out, capacity, &at, "{");
     bool first = true;
@@ -168,6 +170,10 @@ int journal_build_session(char *out, size_t capacity, const char *session_id,
         first = false;
     }
     if (ok) { ok = write_text_field(out, capacity, &at, "cm", capture_mode, first); first = false; }
+    if (ok && context_id && context_id[0])
+        ok = write_text_field(out, capacity, &at, "ci", context_id, false);
+    if (ok && context_type && context_type[0])
+        ok = write_text_field(out, capacity, &at, "ct", context_type, false);
     if (ok) ok = write_text_field(out, capacity, &at, "fw", firmware, false);
     if (ok && adopted) ok = write_number_field(out, capacity, &at, "og", 1, false);
     if (ok) ok = write_text_field(out, capacity, &at, "sid", session_id, false);
@@ -175,6 +181,14 @@ int journal_build_session(char *out, size_t capacity, const char *session_id,
     if (ok) ok = write_number_field(out, capacity, &at, "tm", monotonic_ms, false);
     if (ok) ok = write_raw(out, capacity, &at, "}");
     return ok ? (int)at : -1;
+}
+
+int journal_build_session(char *out, size_t capacity, const char *session_id,
+                          const char *capture_mode, const char *firmware,
+                          uint64_t monotonic_ms, const char *captured_at, bool adopted) {
+    return journal_build_session_context(out, capacity, session_id, capture_mode,
+                                         NULL, NULL, firmware, monotonic_ms,
+                                         captured_at, adopted);
 }
 
 int journal_build_chunk_open(char *out, size_t capacity, unsigned sequence,
@@ -303,6 +317,8 @@ static void apply_payload(journal_session *session, const char *json) {
     if (strcmp(type, "session") == 0) {
         read_text(json, "sid", session->session_id, sizeof(session->session_id));
         read_text(json, "cm", session->capture_mode, sizeof(session->capture_mode));
+        read_text(json, "ct", session->context_type, sizeof(session->context_type));
+        read_text(json, "ci", session->context_id, sizeof(session->context_id));
         uint64_t adopted = 0;
         if (read_number(json, "og", &adopted)) session->adopted = adopted != 0;
         return;

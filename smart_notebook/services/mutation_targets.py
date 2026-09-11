@@ -6,6 +6,7 @@ the actual change remains A07's responsibility.
 """
 from datetime import datetime
 import json
+import re
 from uuid import UUID
 
 import httpx
@@ -19,11 +20,13 @@ from .intelligence import create_question
 from .knowledge_preflight import get_session_knowledge_preflights
 
 
-STATUSES={"resolved","ambiguous","unresolved"}
+STATUSES={"resolved","ambiguous","unresolved","cancelled"}
+MODEL_STATUSES=STATUSES-{"cancelled"}
 TARGET_TYPES={"note","task","list","list_item"}
 REASON_CODES={"context_reference","single_candidate","model_selection","no_candidates",
               "ambiguous_candidates","low_confidence","incompatible_context","stale_context",
-              "weak_reference","low_intent_confidence"}
+              "weak_reference","low_intent_confidence","clarification_answer",
+              "insufficient_clarification","user_cancelled"}
 INTENT_TARGETS={"change":TARGET_TYPES,"complete":{"task","list_item"},
                 "archive":TARGET_TYPES}
 
@@ -106,7 +109,7 @@ def _validate_model_result(raw,candidate_count):
     if not isinstance(raw,dict):raise ValueError("Target resolution response must be an object")
     status=raw.get("status");index=raw.get("selected_candidate_index");confidence=raw.get("confidence")
     reasons=raw.get("reason_codes")
-    if status not in STATUSES:raise ValueError("Unknown target resolution status")
+    if status not in MODEL_STATUSES:raise ValueError("Unknown target resolution status")
     if isinstance(index,bool) or not isinstance(index,int) or index<0 or index>candidate_count:
         raise ValueError("Target resolution contains an unknown candidate index")
     if (status=="resolved")!=(index>0):raise ValueError("Only a resolved target may select a candidate")
@@ -128,19 +131,22 @@ def _validate_model_result(raw,candidate_count):
             "reason_codes":reasons}
 
 
-async def _resolve_with_llm(part,candidates):
+async def _resolve_with_llm(part,candidates,clarification_answer=None):
     profile=get_ai_task_profile("capture.target_resolution")
     schema={"type":"object","properties":{
-        "status":{"type":"string","enum":sorted(STATUSES)},
+        "status":{"type":"string","enum":sorted(MODEL_STATUSES)},
         "selected_candidate_index":{"type":"integer","minimum":0},
         "confidence":{"type":"number"},
         "reason_codes":{"type":"array","items":{"type":"string","enum":sorted(REASON_CODES)},"maxItems":8}},
         "required":["status","selected_candidate_index","confidence","reason_codes"],"additionalProperties":False}
     system=("Löse ausschließlich die Referenz einer erkannten Änderungsabsicht auf. Wähle genau einen der nummerierten "
         "Kandidaten nur wenn die Eingabe ihn eindeutig meint. Bei mehreren plausiblen Zielen antworte ambiguous, bei keinem "
-        "belegbaren Ziel unresolved. selected_candidate_index ist nur bei resolved 1-basiert, sonst 0. Führe keine Änderung aus.")
+        "belegbaren Ziel unresolved. Eine clarification_answer ist die ausdrücklich an diese Rückfrage gebundene spätere "
+        "Nutzerauskunft und darf den ursprünglichen Zielbezug präzisieren. selected_candidate_index ist nur bei resolved "
+        "1-basiert, sonst 0. Führe keine Änderung aus.")
     context={"intent":{"kind":part["primary_intent"],"target_type":part["target_type"],
         "target_text":part["target_text"],"source_text":part["source_text"]},
+        "clarification_answer":clarification_answer,
         "candidates":[{"index":index,"type":item["type"],"title":item.get("title"),
                        "content":item.get("content"),"parent":item.get("parent")}
                       for index,item in enumerate(candidates,start=1)]}
@@ -151,6 +157,80 @@ async def _resolve_with_llm(part,candidates):
         response=await client.post(profile["endpoint"],json=payload)
         if response.is_error:raise RuntimeError(f"LLM request failed with HTTP {response.status_code}: {response.text[:1000]}")
     return _validate_model_result(json.loads(response.json()["choices"][0]["message"]["content"]),len(candidates)),f"{profile['provider']}:{profile['model']}"
+
+
+def _normalized(value):
+    return " ".join(re.sub(r"[^\wäöüß]+"," ",(value or "").casefold()).split())
+
+
+def _answer_is_negative(answer):
+    return _normalized(answer) in {"nein","nein danke","nicht machen","abbrechen","lass es","lasse es"}
+
+
+def _answer_is_affirmative(answer):
+    return _normalized(answer) in {"ja","ja bitte","bestätigen","bestaetigen","mach das","mache das"}
+
+
+async def resume_mutation_target_resolution(question_id,answer,mode="llm"):
+    """Apply one source-bound clarification answer to its existing A06 snapshot."""
+    resolutions=[item for item in get_session_mutation_target_resolutions_for_question(question_id)]
+    if not resolutions:return None
+    resolution=resolutions[0]
+    if resolution["status"] in {"resolved","cancelled"}:return resolution
+    from .capture_intent import get_session_intent_parts
+    part=next((item for item in get_session_intent_parts(resolution["session_id"])
+               if item["id"]==resolution["intent_part_id"]),None)
+    assessment=next((item for item in get_session_knowledge_preflights(resolution["session_id"])
+                     if item["id"]==resolution["preflight_assessment_id"]),None)
+    if not part or not assessment:raise ValueError("Clarification dependency is incomplete")
+    allowed=set(resolution["candidate_keys"])
+    candidates=[item for item in assessment["candidate_refs"]
+                if item["key"] in allowed and _compatible(part,item["type"])]
+    if _answer_is_negative(answer):
+        decision={"status":"cancelled","selected_candidate_index":0,"confidence":1.0,
+                  "reason_codes":["user_cancelled","clarification_answer"]};source="clarification"
+    else:
+        normalized=_normalized(answer)
+        matches=[]
+        for index,candidate in enumerate(candidates,start=1):
+            label=_normalized(_candidate_label(candidate))
+            if label and (label in normalized or (len(normalized)>=4 and normalized in label)):
+                matches.append(index)
+        if len(matches)==1:
+            decision={"status":"resolved","selected_candidate_index":matches[0],"confidence":1.0,
+                      "reason_codes":["clarification_answer"]};source="clarification"
+        elif _answer_is_affirmative(answer) and "low_intent_confidence" in resolution["reason_codes"] and len(candidates)==1:
+            decision={"status":"resolved","selected_candidate_index":1,"confidence":1.0,
+                      "reason_codes":["clarification_answer"]};source="clarification"
+        elif mode=="deterministic":
+            decision={"status":"ambiguous" if len(candidates)>1 else "unresolved",
+                      "selected_candidate_index":0,"confidence":0.0,
+                      "reason_codes":["insufficient_clarification"]};source="deterministic_test"
+        elif mode=="llm":
+            decision,source=await _resolve_with_llm(part,candidates,clarification_answer=answer)
+            decision["reason_codes"]=list(dict.fromkeys(decision["reason_codes"]+["clarification_answer"]))
+        else:raise ValueError("Target resolution mode must be llm or deterministic")
+        if decision["status"]=="resolved" and decision["confidence"]<MUTATION_TARGET_MIN_CONFIDENCE:
+            decision={"status":"ambiguous" if len(candidates)>1 else "unresolved","selected_candidate_index":0,
+                      "confidence":decision["confidence"],
+                      "reason_codes":list(dict.fromkeys(decision["reason_codes"]+["low_confidence"]))}
+    target=(candidates[decision["selected_candidate_index"]-1]
+            if decision["status"]=="resolved" else None)
+    now=datetime.now(TIMEZONE)
+    with get_db_connection() as c:
+        c.execute("""UPDATE mutation_target_resolutions SET status=%s,target_type=%s,target_id=%s,target_key=%s,
+        confidence=%s,reason_codes=%s,decision_source=%s,updated_at=%s WHERE id=%s""",
+        (decision["status"],target["type"] if target else None,target["id"] if target else None,
+         target["key"] if target else None,decision["confidence"],Jsonb(decision["reason_codes"]),source,now,
+         resolution["id"]));c.commit()
+        row=c.execute(RESOLUTION_SELECT+" WHERE r.id=%s",(resolution["id"],)).fetchone()
+    return _item(row)
+
+
+def get_session_mutation_target_resolutions_for_question(question_id):
+    with get_db_connection() as c:
+        rows=c.execute(RESOLUTION_SELECT+" WHERE r.clarification_question_id=%s ORDER BY r.id",(question_id,)).fetchall()
+    return [_item(row) for row in rows]
 
 
 def _clarification_text(part,candidates,decision):
@@ -233,5 +313,5 @@ def public_mutation_target_resolutions(resolutions):
     return [{"ordinal":item["ordinal"],"intent":item["intent"],"status":item["status"],
              "target_type":item["target_type"],"confidence":item["confidence"],
              "candidate_count":len(item["candidate_keys"]),
-             "clarification_required":item["status"]!="resolved","reason_codes":item["reason_codes"]}
+             "clarification_required":item["status"] not in {"resolved","cancelled"},"reason_codes":item["reason_codes"]}
             for item in resolutions]

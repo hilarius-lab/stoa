@@ -23,7 +23,8 @@ CHANGE_OPERATIONS={
 }
 VALUE_OPERATIONS={"note_update","task_update","list_rename","list_add_item","list_item_update"}
 REASON_CODES={"intent_complete","intent_archive","content_update","add_item","reopen","model_selection",
-              "low_confidence","unclear_operation","invalid_value","stale_target"}
+              "low_confidence","unclear_operation","invalid_value","stale_target","clarification_answer",
+              "user_cancelled"}
 
 
 ACTION_SELECT="""SELECT a.id,a.session_id,a.intent_part_id,a.target_resolution_id,a.operation,a.payload,
@@ -47,6 +48,12 @@ def _item(row):
 def get_session_mutation_actions(session_id):
     with get_db_connection() as c:
         rows=c.execute(ACTION_SELECT+" WHERE a.session_id=%s ORDER BY p.ordinal,a.id",(session_id,)).fetchall()
+    return [_item(row) for row in rows]
+
+
+def get_session_mutation_actions_for_question(question_id):
+    with get_db_connection() as c:
+        rows=c.execute(ACTION_SELECT+" WHERE a.clarification_question_id=%s ORDER BY a.id",(question_id,)).fetchall()
     return [_item(row) for row in rows]
 
 
@@ -319,6 +326,46 @@ async def ensure_session_mutation_actions(session_id,intent_parts,mode="llm"):
     return results
 
 
+async def resume_mutation_action(question_id,answer,mode="llm"):
+    """Replan an existing A07 clarification without creating a second action."""
+    actions=get_session_mutation_actions_for_question(question_id)
+    if not actions:return None
+    action=actions[0]
+    if action["status"] in {"completed","cancelled"}:return action
+    normalized=" ".join(re.sub(r"[^\wäöüß]+"," ",answer.casefold()).split())
+    if normalized in {"nein","nein danke","nicht machen","abbrechen","lass es","lasse es"}:
+        now=datetime.now(TIMEZONE)
+        with get_db_connection() as c:
+            c.execute("""UPDATE mutation_action_executions SET operation=NULL,payload='{}'::jsonb,status='cancelled',
+            confidence=1.0,reason_codes=%s,decision_source='clarification',error_code=NULL,updated_at=%s WHERE id=%s""",
+            (Jsonb(list(dict.fromkeys(action["reason_codes"]+["user_cancelled","clarification_answer"]))),now,
+             action["id"]));c.commit()
+            row=c.execute(ACTION_SELECT+" WHERE a.id=%s",(action["id"],)).fetchone()
+        return _item(row)
+    if action["intent"]!="change":return action
+    from .capture_intent import get_session_intent_parts
+    part=next((item for item in get_session_intent_parts(action["session_id"])
+               if item["id"]==action["intent_part_id"]),None)
+    resolution=next((item for item in get_session_mutation_target_resolutions(action["session_id"])
+                     if item["id"]==action["target_resolution_id"]),None)
+    if not part or not resolution:raise ValueError("Clarification action dependency is incomplete")
+    with get_db_connection() as c:current=_state(c,resolution["target_type"],resolution["target_id"])
+    if not current:return action
+    answered={**part,"source_text":part["source_text"]+"\nAntwort: "+answer}
+    if mode=="deterministic":plan,source=_deterministic_change_plan(answered,resolution)
+    elif mode=="llm":plan,source=await _plan_change_with_llm(answered,resolution,current)
+    else:raise ValueError("Mutation action mode must be llm or deterministic")
+    plan["reason_codes"]=list(dict.fromkeys(plan["reason_codes"]+["clarification_answer"]))
+    now=datetime.now(TIMEZONE)
+    with get_db_connection() as c:
+        c.execute("""UPDATE mutation_action_executions SET operation=%s,payload=%s,status=%s,confidence=%s,
+        reason_codes=%s,decision_source=%s,error_code=NULL,updated_at=%s WHERE id=%s""",
+        (plan["operation"],Jsonb(plan["payload"]),plan["status"],plan["confidence"],
+         Jsonb(plan["reason_codes"]),source,now,action["id"]));c.commit()
+        row=c.execute(ACTION_SELECT+" WHERE a.id=%s",(action["id"],)).fetchone()
+    return await _execute(_item(row),answered)
+
+
 def public_mutation_actions(actions):
     return [{"ordinal":item["ordinal"],"intent":item["intent"],"operation":item["operation"],
              "target_type":item["target_type"],"status":item["status"],"confidence":item["confidence"],
@@ -341,6 +388,7 @@ def public_mutation_part_outcomes(intent_parts,resolutions,actions):
             confidences.append(action["confidence"]);reasons.extend(action["reason_codes"])
             status={"clarification_required":"pending_clarification","planned":"pending_execution"}.get(
                 action["status"],action["status"])
+        elif resolution and resolution["status"]=="cancelled":status="cancelled"
         elif resolution and resolution["status"]!="resolved":status="pending_clarification"
         elif resolution:status="pending_execution"
         else:status="pending_resolution"
@@ -357,6 +405,7 @@ def mutation_action_status(outcomes):
     statuses=[item["status"] for item in outcomes]
     if statuses and all(status=="completed" for status in statuses):return "completed"
     if "completed" in statuses:return "partially_completed"
+    if statuses and all(status=="cancelled" for status in statuses):return "cancelled"
     if "failed" in statuses:return "failed"
     if "pending_clarification" in statuses:return "pending_clarification"
     if "pending_resolution" in statuses:return "pending_resolution"

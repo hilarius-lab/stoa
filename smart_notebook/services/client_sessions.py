@@ -288,6 +288,15 @@ async def finalize_client_session_with_knowledge(client_session_id,promotion_mod
             # release and remains the explicit D03 exception.
             if audio_count==0 and job_count==0:return finalize_client_session(client_session_id)
         raise ClientSessionConflict(str(exc)) from exc
+    context=item["context_ref"] if isinstance(item["context_ref"],dict) else None
+    if context and context.get("type")=="clarification":
+        text=_stabilized_text(item["ingestion_session_id"])
+        from .clarifications import resolve_clarification_answer
+        try:await resolve_clarification_answer(item["ingestion_session_id"],context,text,promotion_mode)
+        except Exception as exc:
+            _mark_client_finalization_attention(client_session_id,"clarification_answer_failed",exc)
+            raise
+        return finalize_client_session(client_session_id)
     intent_decision=None;intent_parts=[]
     if item["capture_mode"]=="auto":
         try:
@@ -333,15 +342,30 @@ def _mark_client_finalization_attention(client_session_id,reason,exc):
             c.commit()
 
 
+def _stabilized_text(ingestion_session_id):
+    with get_db_connection() as c:
+        rows=c.execute("SELECT text FROM ingestion_chunks WHERE session_id=%s ORDER BY sequence",
+                       (ingestion_session_id,)).fetchall()
+    return " ".join(r[0].strip() for r in rows if r[0].strip()).strip()
+
+
 def _materialize_capture_result(client_session_id):
     item=get_client_session(client_session_id)
     if not item or item["capture_result"] is not None:return item["capture_result"] if item else None
     if item["capture_mode"]=="meeting":result={"resolved_intent":"meeting"}
     else:
-        with get_db_connection() as c:rows=c.execute("SELECT text FROM ingestion_chunks WHERE session_id=%s ORDER BY sequence",(item["ingestion_session_id"],)).fetchall()
-        text=" ".join(r[0].strip() for r in rows if r[0].strip()).strip()
+        text=_stabilized_text(item["ingestion_session_id"])
         if not text:raise ClientSessionConflict("stabilized transcript is empty; capture cannot be materialized")
-        mode=item["capture_mode"];intent_decision=None;intent_parts=[]
+        context=item["context_ref"] if isinstance(item["context_ref"],dict) else None
+        if context and context.get("type")=="clarification":
+            from .clarifications import get_clarification_attempt
+            attempt=get_clarification_attempt(item["ingestion_session_id"])
+            if not attempt or attempt["status"] in {"processing","failed"}:
+                raise ClientSessionConflict("clarification answer is not materialized")
+            result={"resolved_intent":"clarification","transcript_text":text,
+                    "clarification":attempt["result"]}
+            intent_decision=None;intent_parts=[];mode="clarification"
+        else:mode=item["capture_mode"];intent_decision=None;intent_parts=[]
         if mode=="auto":
             from .capture_intent import (get_session_intent_decision,get_session_intent_parts,
                 public_intent_decision,public_intent_parts)
@@ -357,7 +381,8 @@ def _materialize_capture_result(client_session_id):
         query_text=("\n".join(part["source_text"].strip() for part in intent_parts
                               if part["primary_intent"]=="query") if intent_parts else
                     (text if mode=="query" else ""))
-        if query_text:
+        if mode=="clarification":pass
+        elif query_text:
             from uuid import UUID,uuid5
             from .client_chat import create_conversation
             namespace=UUID(str(client_session_id));chat=create_conversation(uuid5(namespace,"conversation"),uuid5(namespace,"message:1"),uuid5(namespace,"turn:1"),query_text)
@@ -384,6 +409,17 @@ def _materialize_capture_result(client_session_id):
             if assessments:result["knowledge_assessments"]=public_knowledge_preflights(assessments)
     with get_db_connection() as c:c.execute("UPDATE client_sessions SET capture_result=%s,updated_at=%s WHERE client_session_id=%s",(Jsonb(result),datetime.now(TIMEZONE),client_session_id));c.commit()
     return result
+
+
+def refresh_capture_result_for_ingestion(ingestion_session_id):
+    """Re-materialize a completed parent after a clarification resumed its action."""
+    with get_db_connection() as c:
+        row=c.execute("SELECT client_session_id FROM client_sessions WHERE ingestion_session_id=%s",
+                      (ingestion_session_id,)).fetchone()
+        if not row:return None
+        c.execute("UPDATE client_sessions SET capture_result=NULL,updated_at=%s WHERE client_session_id=%s",
+                  (datetime.now(TIMEZONE),row[0]));c.commit()
+    return _materialize_capture_result(row[0])
 
 
 def abort_client_session(client_session_id,reason=None):

@@ -2,6 +2,9 @@
 #include <stdbool.h>
 void recorder_start(void);
 void recorder_hold(bool held);
+/* Bind the next accepted recording to an open clarification. Passing NULL
+ * clears the context; a too-short or empty recording leaves it armed. */
+void recorder_set_clarification_context(const char *question_id);
 void recorder_test(void);
 void recorder_export_test(void);
 void recorder_files(const char *id);

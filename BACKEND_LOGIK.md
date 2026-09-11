@@ -206,7 +206,7 @@ Eine Quelle, ein Zitat und die daraus extrahierte Aussage sind unterschiedliche 
 
 **Grenze:** A08 trennt unabhängige sichere und unsichere Mutationsteile, beantwortet aber keine Rückfrage und setzt deren zurückgestellte Aktion noch nicht fort; das bleibt W05. Ein vollständiger allgemeiner Recovery-/Nachtlauf über Capture-, Chat- und Promotionsfehler bleibt A11/W06. Archivieren ist fachlich reversibel und kein physisches Löschen.
 
-`context_ref` wird gespeichert und gehört zur Capture-Identität. A06 versteht einen gültigen Kontext vom Typ `note|task|list|list_item` als ausdrücklichen Objektbezug. Der davon getrennte Kontexttyp `clarification` wird weiterhin noch keinem offenen Rückfrage-Antwortkreislauf zugeordnet; diese W05-Lücke bleibt bestehen.
+`context_ref` wird gespeichert und gehört zur Capture-Identität. A06 versteht einen gültigen Kontext vom Typ `note|task|list|list_item` als ausdrücklichen Objektbezug. Der getrennte Kontexttyp `clarification` bindet Audio- und Textantworten inzwischen an genau eine öffentliche Frage. Für A06/A07-Mutationsfragen wird der bestehende Kandidatensnapshot erneut bewertet und nur der abhängige Teil fortgesetzt; die allgemeinere Neubewertung von Wissen bei Nicht-Mutationsfragen bleibt in W05 offen.
 
 ### 5.3 Verarbeitung eines direkten Text-Captures
 
@@ -648,7 +648,7 @@ Die Nutzerauskunft wird quellengebunden gespeichert. Sie schließt die Rückfrag
 | Budget | Session und optionale Topic-Zuordnung | Standardmäßig 12 offene Fragen je Session und 4 je Topic-Bezug | Implementiert; Budgetüberschreitung ergibt einen Fehler. |
 | Antwort / Reopen | Question-ID und Antwortquelle | `answered` mit Text bzw. erneut `open` | Separate API. |
 | Implizite Frage | Zum Beispiel fehlender Verantwortlicher, unentschiedener Sachverhalt oder unklarer Mutationsbezug | Aus einer materiellen Wissenslücke eine konkrete Frage bilden | A06 erzeugt sie automatisch für fehlende, mehrdeutige, inkompatible oder zu schwache Mutationsziele; die allgemeine automatische Ableitung bleibt offen. |
-| Clarification-Capture | `context_ref` mit Clarification-ID | Gewünscht: neue Erfassung als Antwort auf offene Rückfrage zuordnen | Vertraglich beschrieben; Capture-Verarbeitung nutzt den Bezug nicht durchgängig. |
+| Clarification-Capture | `context_ref` mit Clarification-ID | Neue Audio-/Texterfassung als Antwort auf genau eine offene Rückfrage zuordnen | Für A06/A07-Mutationsfragen einschließlich Antwortpersistenz und Fortsetzung implementiert; allgemeine Wissensneubewertung bleibt offen. |
 | Selbstständige Beantwortung | Offene Frage plus Wissensbestand | Gewünscht: suchen, Evidence prüfen, beantworten oder gezielt nachfragen | Such- und Antwortbausteine vorhanden, kein geschlossener automatischer Kreislauf. |
 
 Die KI-Registry enthält `questions.detect` und `questions.resolve`; diese Einträge belegen keinen produktiven Aufruf. Offene Decisions sind ebenfalls nicht automatisch erzeugte implizite Questions.
@@ -661,7 +661,7 @@ Nicht blockierende Unklarheiten werden als offene Dashboard-Fragen gesammelt. Ei
 
 ### 12.2 Beschlossen: Rückfrage auswählen und direkt in ihrem Kontext antworten
 
-**Status: Beschlossen / Umsetzung offen.** Der bevorzugte Ablauf benötigt keine nachträgliche semantische Suche nach der gemeinten Frage:
+**Status: Beschlossen / Mutationspfad strukturell umgesetzt.** Der bevorzugte Ablauf benötigt keine nachträgliche semantische Suche nach der gemeinten Frage:
 
 | Reihenfolge | Input / Nutzeraktion | Verarbeitung | Output |
 |---|---|---|---|
@@ -925,7 +925,7 @@ Die folgende Liste konsolidiert das Gespräch und den tatsächlichen Integration
 | W02 | Gemeinsamer Suchzugriff auf Notes und Fact-Claims | Frage oder neue Information → relevante Inhalte auch nach Note-Fact-Promotion. |
 | W03 | Korrektes Client-Gesprächsgedächtnis | Conversation-ID und Folgeeingabe → eigene vorherige Turns und referenzierte Entitäten im Kontext. |
 | W04 | Konflikte vor bzw. bei Antworten und Änderungen berücksichtigen | Widerspruch → belegte Korrektur, zeitliche Ablösung oder ungelöster Konflikt statt stiller Wahrheitsersetzung. |
-| W05 | Question-/Clarification-Kreislauf | Ausgewählte Dashboard-Frage → gebundene Text-/Audiomemo oder ausdrücklich abgesendeter Antwortvorschlag → Wissen aktualisieren und abhängige Aktion fortsetzen; siehe 12.2. Freie Memos behalten einen separaten Zuordnungsfallback. |
+| W05 | Question-/Clarification-Kreislauf — **Mutationspfad seit 2026-09-11 strukturell umgesetzt:** ausgewählte ESP-Frage bindet die nächste gültige BOOT-Aufnahme; ein sicherer Vorschlag kann ausdrücklich per `submit_capture` gesendet werden. Antwortversuch und Quelle werden persistiert, das bestehende A06-Ziel mit dem A05-Snapshot präzisiert, die A07-Aktion idempotent fortgesetzt und das Elternresultat erneuert. Reale Geräteabnahme und allgemeine Wissensfragen bleiben offen. | Ausgewählte Dashboard-Frage → gebundene Text-/Audiomemo oder ausdrücklich abgesendeter Antwortvorschlag → Wissen aktualisieren und abhängige Aktion fortsetzen; siehe 12.2. Freie Memos behalten einen separaten Zuordnungsfallback. |
 | W06 | Offene Vorgänge nachts nachholen | Zurückgestellte Kandidaten und Fehler → erneute Prüfung mit gespeichertem Kontext. |
 | W07 | Kalendergrenze und Fehlerisolation der Wartung korrigieren | Seit letztem Erfolg offene Events → vollständige Nachholung; Ausfall eines Schritts blockiert nicht dauerhaft Retention/Reparatur. |
 | W08 | Jobzustände und Abschlussbarriere vereinheitlichen — **Abschlussbarriere seit Re-Audit 2026-09-08 geschlossen:** Im normalen Client-/Worker-Abschluss blockiert jeder Zustand ungleich `done` fachlichen und technischen Abschluss; problematische Zustände blockieren die Audiofreigabe. Der ausdrücklich erzwungene direkte Ingestion-Finalize bleibt ein Diagnose-/Reparaturweg ohne Client-Audiofreigabe. Offen bleibt ein allgemeiner autonomer Retry/Reconciler für die Wiederaufnahme. | failed/parked/attention_required und offene Steps → konsistenter Sessionzustand ohne vorzeitige Freigabe. |
@@ -1060,7 +1060,7 @@ Diese Übersicht dokumentiert die Abweichungen, ohne ältere normative Dateien s
 | W02 | Offen | `retrieval.py::search_knowledge` erlaubt weiterhin nur Note, Task, List und List Item, keine Fact-Claims. |
 | W03 | Offen | `client_chat.py::run_chat_turn_once` ruft `chat.py::ask_llm`; `chat.py::get_recent_conversation` liest Legacy-Events statt Conversation-Nachrichten. |
 | W04 | Offen | `claims.py::run_changed_conflict_scan` läuft separat/nachts und ist kein allgemeiner Guard vor Antworten oder Mutationen. |
-| W05 | Offen | A06 wertet öffentliche Objektkontexte aus. Ein `context_ref` vom Typ `clarification` wird aber weiterhin keiner offenen Frage zugeordnet und setzt keine abhängige Aktion fort. |
+| W05 | Teilweise geschlossen | `clarifications.py` ordnet `context_ref.type=clarification` exakt über die öffentliche Question-ID zu, persistiert Antwortversuche und setzt A06/A07-Mutationsabhängigkeiten idempotent fort. Die Question-Detailprojektion liefert stets den Aufnahmekontext und bei genau einem schwach formulierten Ziel optional „Ja“ als ausdrücklich abzusendenden `submit_capture`. Die Firmware `h4-w05` journalisiert Audio-Kontext und vorgeschlagene Antwort ausfallsicher; `m8_clarification_loop_test.py` prüft Bestätigung, freie Zielkorrektur, Fortsetzung, Eltern-/Kindresultat und Idempotenz. Offen bleiben reale Geräteabnahme, allgemeine Wissensneubewertung und der freie Zuordnungsfallback ohne Kontext. |
 | W06 | Offen | `jobs.py::queue_parked_jobs_for_night_repair` deckt nur Processing-Jobs ab; Capture-/Chat-/Promotionsfehler besitzen keinen gemeinsamen Nacht-Nachholer. |
 | W07 | Offen | `consolidation.py::get_today_unarchived_events` beginnt weiterhin bei 00:00 des Aufruftags; `maintenance.py::run_daily_maintenance` bricht bei Schrittfehlern ab. |
 | W08 | Teilweise geschlossen | `intelligence.py::finalize_session` ohne `force` und `client_sessions.py::finalize_client_session` verlangen nun ausschließlich `done`; autonome Reaktivierung aller Problemzustände bleibt offen. |
@@ -1428,3 +1428,23 @@ wurde sichtbar. Das STT verstand den Listennamen als „Silberarbeit“ statt
 nicht und bleibt Teil des späteren STT-Unsicherheitsblocks. Der Nutzer
 bestätigte beide sichtbaren Ergebnisse. Das Beantworten der Rückfrage und die
 Fortsetzung ihres abhängigen Teils bleiben ausdrücklich W05.
+
+**Codeänderung 2026-09-11 (W05-Mutationspfad, strukturell):**
+
+Question-Details tragen für offene Fragen eine bestehende `submit_capture`-
+Aktion mit öffentlichem `clarification`-Kontext. Bei einer A08-Bestätigung mit
+genau einem gespeicherten Kandidaten darf der Server zusätzlich den festen
+Vorschlag „Ja“ liefern; ohne festen Vorschlag bleibt die gebundene freie
+Audioantwort verfügbar. `clarification_answer_attempts` hält Antwortsession,
+Quelle, Ergebnis und Wiederholungszustand. Die Auflösung verwendet nur den
+schon persistierten A05-Kandidatensnapshot, aktualisiert denselben A06-/A07-
+Datensatz und führt abgeschlossene Aktionen bei Wiederholung nicht erneut aus.
+Das ursprüngliche Capture-Ergebnis wird anschließend neu materialisiert.
+
+Die ESP-Firmware `h4-w05` persistiert den Question-Kontext im Audiojournal und
+sendet vorgeschlagene Antworten mit einer über Neustarts stabilen Capture-ID.
+Das dedizierte Gate prüft vorgeschlagenes „Ja“, freie Korrektur zwischen zwei
+Listen, Frageabschluss, Eltern-/Kindresultate und Idempotenz; das vollständige
+M8-Gate mit 25 Prüfungen, Firmwarebuild, Flash auf COM9 und Contractstatus sind
+grün. Die reale Bedienabnahme und die allgemeine Wissensneubewertung für
+Nicht-Mutationsfragen bleiben offen.

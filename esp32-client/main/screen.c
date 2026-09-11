@@ -25,6 +25,7 @@
 #include "cJSON.h"
 #include "api_client.h"
 #include "memo_queue.h"
+#include "recorder.h"
 #include "freertos/semphr.h"
 #include "esp_heap_caps.h"
 extern const unsigned char ready[] asm("_binary_ready_bin_start");
@@ -359,9 +360,10 @@ static void activate_list_detail(void) {
         /* UI exit is immediate. The durable queue owns delivery and retries;
          * the next dashboard fetched after success no longer contains the
          * completed items. */
-        if (api_client_commit_list_items())
+        if (api_client_commit_list_items()) {
             detail_open = detail_waiting = false;
-        else
+            recorder_set_clarification_context(NULL);
+        } else
             ESP_LOGW("detail", "list changes could not be committed");
         return;
     }
@@ -387,6 +389,27 @@ static bool detail_current_has_action(void) {
     return has;
 }
 
+static bool activate_detail_action(void) {
+    char *copy = heap_caps_malloc(ENTITY_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!copy || !entity_take(copy, ENTITY_MAX)) { free(copy); return false; }
+    char content[192], question_id[40];
+    bool suggested = dashboard_entity_suggested_capture(
+        copy, content, sizeof(content), question_id, sizeof(question_id));
+    free(copy);
+    if (suggested) {
+        if (!api_client_submit_capture(content, question_id)) {
+            ESP_LOGW("detail", "suggested answer could not be journaled");
+            return false;
+        }
+        memset(content, 0, sizeof(content));
+        detail_open = detail_waiting = false;
+        recorder_set_clarification_context(NULL);
+        return true;
+    }
+    api_client_complete_task(detail_entity_id);
+    return true;
+}
+
 static void open_detail(void) {
     dashboard_plan plan = {0};
     if (snapshot_json && snapshot_lock &&
@@ -400,6 +423,7 @@ static void open_detail(void) {
         ESP_LOGW("detail", "focused card has no entity reference");
         return;
     }
+    recorder_set_clarification_context(NULL);
     /* Follow the card's own action rather than assuming every reference is an
      * entity. A session card names `open_session` and points at a session,
      * which the entity endpoint does not serve and answers with 404 — the
@@ -944,9 +968,11 @@ static void screen_task(void *unused) {
                 if (detail_list_mode)
                     activate_list_detail();
                 else if (detail_action_focus == 1 && detail_current_has_action())
-                    api_client_complete_task(detail_entity_id);
-                else
+                    activate_detail_action();
+                else {
                     detail_open = detail_waiting = false;   /* back to the overview */
+                    recorder_set_clarification_context(NULL);
+                }
             } else if (session_open) {
                 /* Back to whatever opened it: the history list or, since a
                  * session card follows its own action, the dashboard. Closing
@@ -1387,6 +1413,11 @@ void screen_entity_received(const char *json) {
         xSemaphoreGive(entity_lock);
     }
     detail_waiting = false;
+    char question_id[40];
+    if (json && dashboard_entity_capture_context(json, question_id, sizeof(question_id)))
+        recorder_set_clarification_context(question_id);
+    else
+        recorder_set_clarification_context(NULL);
     /* Redraw through the queue so the display task stays the only writer. */
     screen_message message = {.focus_move=true, .focus_delta=0};
     post(&message);

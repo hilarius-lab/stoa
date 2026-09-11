@@ -340,4 +340,12 @@ def get_dashboard_entity(entity_type,public_id):
                     "items":[{"id":str(x[0]),"content":_clip(x[1],DETAIL_MAX),"status":"active"} for x in items],
                     "created_at":r[2].isoformat(),"updated_at":r[3].isoformat()}
         r=c.execute("SELECT question_text,question_kind,status,confidence,priority,answer_text,answer_source,created_at,updated_at FROM session_questions WHERE id=%s",(internal_id,)).fetchone()
-        return {"id":str(public_id),"type":"question","question":_clip(r[0],DETAIL_MAX),"question_kind":r[1],"status":r[2],"confidence":r[3],"priority":r[4],"answer":_clip(r[5],DETAIL_MAX),"answer_source":r[6],"created_at":r[7].isoformat(),"updated_at":r[8].isoformat()} if r else None
+        if not r:return None
+        result={"id":str(public_id),"type":"question","question":_clip(r[0],DETAIL_MAX),
+                "question_kind":r[1],"status":r[2],"confidence":r[3],"priority":r[4],
+                "answer":_clip(r[5],DETAIL_MAX),"answer_source":r[6],
+                "created_at":r[7].isoformat(),"updated_at":r[8].isoformat()}
+        from .clarifications import clarification_detail_action
+        action=clarification_detail_action(internal_id,public_id,r[2])
+        if action:result["action"]=action
+        return result

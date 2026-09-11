@@ -1,5 +1,24 @@
 # Änderungen
 
+## 2026-09-11 – W05-Antworten aus der Rückfragedetailansicht
+
+- Offene Question-Details tragen einen festen `clarification`-Kontext. Eine
+  dort gestartete BOOT-Aufnahme schreibt ihn vor dem Mikrofonstart ins
+  SD-Journal und sendet ihn beim idempotenten Session-Create mit.
+- Ein sicherer serverseitiger Antwortvorschlag wie „Ja“ erscheint als
+  fokussierbare Detailaktion. Erst der Mitteldruck journalisiert die Auswahl
+  in NVS; dieselbe Capture-ID wird bis zur passend validierten `202`-Antwort
+  wiederverwendet. Anzeige oder bloßer Fokus antworten nicht.
+- Das Backend persistiert Antwortversuche, präzisiert nur gegen den bestehenden
+  A05-Kandidatensnapshot, setzt den betroffenen A06/A07-Datensatz fort und
+  materialisiert das ursprüngliche Capture-Ergebnis neu. Bereits erledigte
+  Geschwisteraktionen werden nicht wiederholt.
+- Dediziertes W05-Gate, vollständiges M8 mit 25 Prüfungen, ESP-IDF-Build, Flash
+  auf COM9 und `compatible=1`/`gate_ok=1` sind grün. Firmwarekennung:
+  `h4-w05`. Reale Probe von Vorschlag plus freier Audioantwort steht noch aus;
+  allgemeine Nicht-Mutationsfragen bleiben
+  ein späterer W05-Teil.
+
 ## 2026-09-11 – BOOT-Aufnahmen an den Backend-Auto-Modus angebunden
 
 - Neue Aufnahmen persistieren `capture_mode=auto`, damit A02–A07 Intent,

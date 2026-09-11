@@ -1124,3 +1124,39 @@ genau eine segmentgebundene Rückfrage erschien auf dem ESP. Das STT hatte
 korrekt. Der Nutzer bestätigte sowohl die Erledigung als auch die Rückfrage.
 A08 ist damit live abgenommen. Rückfrageantwort und Fortsetzung des
 zurückgestellten Teils bleiben der separate W05-Block.
+
+## W05-Mutationsantwort — Arbeitsstand 11. September
+
+Der explizite, bereits beschlossene Dashboardpfad ist strukturell geschlossen:
+Die Entity-Antwort jeder offenen Question liefert eine `submit_capture`-Aktion
+mit ihrer öffentlichen ID als `clarification`-Kontext. Die Firmware übernimmt
+diesen Kontext beim Öffnen der Detailansicht. Eine danach gestartete gültige
+BOOT-Aufnahme persistiert ihn im Sessionjournal und überträgt ihn beim
+Session-Create; ein verworfener Kurzdruck unter 1,5 Sekunden verbraucht die
+Bindung nicht. Verlassen der Ansicht löscht den lokalen Kontext.
+
+Für A08-Bestätigungen mit genau einem A05-Kandidaten darf der Server zusätzlich
+`label=Ja` und `content=Ja` liefern. Das Feld ist dann neben „Zurück“
+fokussierbar. Nur der Mitteldruck speichert die Auswahl mit einer einmaligen
+Capture-ID in NVS; Transportfehler oder Neustart wiederholen dieselbe
+idempotente Anfrage. Ein bloß sichtbarer oder fokussierter Vorschlag erzeugt
+keine Antwort. Die Firmwarekennung ist `h4-w05`.
+
+Backendseitig ordnet `clarifications.py` die öffentliche Question-ID exakt zu,
+persistiert jeden Antwortversuch samt Quelle und nutzt ausschließlich den
+bereits vorhandenen A05-Kandidatensnapshot. Derselbe A06-Zieldatensatz und
+derselbe A07-Aktionsdatensatz werden fortgesetzt; abgeschlossene Aktionen
+bleiben No-ops. Erfolgreiche oder ausdrücklich verneinte Antworten schließen
+die Frage und aktualisieren das Eltern-Capture-Resultat. Eine weiterhin
+mehrdeutige Antwort lässt die Frage offen.
+
+`m8_clarification_loop_test.py`, das vollständige M8-Gate mit 25 Prüfungen und
+der ESP-IDF-Build sind grün. Flash auf COM9 sowie der anschließende Status
+`compatible=1`, `gate_ok=1` sind ebenfalls bestätigt. Der reine C-Hosttest
+konnte auf diesem Windows-Host
+erneut nicht gestartet werden, diesmal bereits wegen einer verweigerten
+Git-Bash-Signal-Pipe; der IDF-Build kompiliert die geänderten Journalquellen.
+Noch offen sind je eine reale Probe des „Ja“- sowie des freien Audioantwortwegs.
+Die allgemeine Wissensneubewertung für andere
+Question-Arten und die freie nachträgliche Zuordnung einer kontextlosen Memo
+bleiben spätere W05-Arbeit.

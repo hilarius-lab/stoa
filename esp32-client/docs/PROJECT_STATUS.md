@@ -1,6 +1,6 @@
 # Projektstand
 
-Stand: 2026-09-11, A08 vollständig einschließlich Live-Abnahme geschlossen
+Stand: 2026-09-11, W05-Mutationsantwort strukturell gebaut; reale Abnahme offen
 
 ## Nachgewiesen am realen Gerät
 
@@ -64,7 +64,7 @@ Stand: 2026-09-11, A08 vollständig einschließlich Live-Abnahme geschlossen
   und erst nach passender `200`-Antwort entfernt. Toggle, Zurücktoggeln,
   Verlassen und das serverseitige Verschwinden von „Hafermilch“ sind physisch
   abgenommen.
-- Der letzte Firmwarebuild (`h4-auto`) und Flash auf COM9 waren grün. Der
+- Der letzte Firmwarebuild (`h4-w05`) und Flash auf COM9 waren grün. Der
   serielle Endstatus meldete `compatible=1` und `gate_ok=1`.
 - A07 führt eindeutig aufgelöste Sprachmutationen serverseitig idempotent aus:
   ändern/umbenennen, Listeneintrag ergänzen, Task oder Item erledigen,
@@ -81,7 +81,14 @@ Stand: 2026-09-11, A08 vollständig einschließlich Live-Abnahme geschlossen
   dediziertem DB-Test, echtem strukturiertem Modellaufruf und vollständigem
   M8-Gate mit 24 Prüfungen belegt. Session 766 erledigte den sicheren Taskteil,
   ließ die tentative Liste aktiv und erzeugte die sichtbare Rückfrage. Die
-  Firmware bleibt unverändert `h4-auto`.
+  bisherige Live-Abnahme lief noch mit `h4-auto`.
+- W05 bindet in `h4-w05` eine aus der geöffneten Rückfragedetailansicht
+  gestartete BOOT-Aufnahme über die öffentliche Question-ID an genau diese
+  Frage. Bei einer eindeutigen A08-Bestätigung erscheint alternativ der
+  ausdrückliche Vorschlag „Ja“. Dieser wird mit stabiler Capture-ID in NVS
+  journalisiert und bis zur passenden Serverantwort wiederholt. Vollständiges
+  M8-Gate mit 25 Prüfungen, ESP-IDF-Build, Flash und Contractstatus sind grün;
+  beide realen Bedienwege stehen aus.
 
 ## Systemgrenze
 
@@ -134,7 +141,8 @@ zeigte zwei Aufgaben und die Einkaufsliste unter „Als Nächstes“; der Fokus 
 beim verzögert einsetzenden erzwungenen Sync erhalten. Für das weitere
 Dashboard fehlen:
 
-1. der Antwortkreislauf für ausgewählte Rückfragen;
+1. reale Abnahme der beiden neuen W05-Antwortwege und später die allgemeine
+   Wissensneubewertung für Nicht-Mutationsfragen;
 2. echtes Controllerfenster im regulären Zeichenpfad sowie später SSE.
 
 Der Verlauf zeigt den technischen Sessionzustand nun vollständig in jeder
@@ -180,12 +188,12 @@ einem zweiten realen Netz funktionieren; der Live-Wechsel erhält das bereits
 geladene Dashboard. Der Logsink ist gebaut, geflasht und auf der realen
 SD-Karte beschrieben; Inhalt und Rückkehr sind sichtbar, Scrollen erhält mit
 diesem Build eine eindeutig sichtbare Fensterposition. Der aktuelle
-Firmwarebezeichner ist `h4-auto`; die Akkuanzeige ergänzt
+Firmwarebezeichner ist `h4-w05`; die Akkuanzeige ergänzt
 weiterhin die bestehende Oberfläche und behauptet nicht den H5-Meetingmodus.
 
 ## Noch offen bis zum produktiven Betrieb
 
-- Rückfragen-Antwortkreislauf
+- W05 außerhalb von Mutationsrückfragen sowie dessen reale Geräteabnahme
 - automatische Credentialrotation und vollständige persistierte Retry-/Backoff-
   Klassen
 - verschlüsseltes NVS und verschlüsselte Audiodateien
@@ -205,8 +213,8 @@ weiterhin die bestehende Oberfläche und behauptet nicht den H5-Meetingmodus.
 Die auswählbare IANA-Zeitzone ist ein späteres Komfortfeature. Bis dahin bleibt
 die verifizierte `Europe/Berlin`-Regel bewusst fest eingebaut. A01–A07 sind
 umgesetzt und live abgenommen; A08 ist ebenfalls strukturell und physisch grün.
-Danach bleiben insbesondere
-A09-Claim-Aktivierung, A11-Recovery, A12-Gesamtresultat und W05 offen.
+Danach bleiben insbesondere A09-Claim-Aktivierung, A11-Recovery,
+A12-Gesamtresultat und der allgemeine W05-Wissenspfad offen.
 
 Historische Messwerte und Fehleranalysen stehen im `CHANGELOG.md` und in
 `CLIENT_SERVER_STATE.md`; diese Datei beschreibt nur den aktuellen Übergabestand.
