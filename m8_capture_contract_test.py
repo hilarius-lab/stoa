@@ -148,7 +148,8 @@ def main():
 
     # A03 splits independent intents in source order. Only artifacts supported
     # exclusively by memo parts are offered to ordinary knowledge promotion;
-    # the mutation stays pending and the query turn contains only its own span.
+    # the mutation is resolved or turned into a clarification without being
+    # executed, and the query turn contains only its own span.
     mixed_content="Atlas ist ein internes Projekt. Den Anruf bei Paul habe ich erledigt. Was weißt du über Atlas?"
     mixed_id=uuid4();_CLEANUP_CAPTURE_IDS.append(mixed_id)
     with patch("smart_notebook.services.client_capture.CLIENT_TEXT_CAPTURE_SOURCE_TYPE","_contract_test_client_text_capture"):
@@ -171,7 +172,10 @@ def main():
     assert "".join(part["source_text"] for part in result["intents"]).replace(" ","")==mixed_content.replace(" ",""),result
     assert all(mixed_content[part["source_start"]:part["source_end"]]==part["source_text"] for part in result["intents"]),result
     assert all("source_segment_ids" not in part for part in result["intents"]),result
-    assert result["interpretation_status"]=="split_completed" and result["action_status"]=="pending_resolution",result
+    assert result["interpretation_status"]=="split_completed",result
+    assert result["action_status"] in {"pending_execution","pending_clarification"},result
+    assert len(result["reference_resolutions"])==1 and result["reference_resolutions"][0]["ordinal"]==2,result
+    assert all("target_id" not in item and "target_key" not in item for item in result["reference_resolutions"]),result
     assert any(item["input_kind"]=="mutation_intent" and item["classification"]=="targeted"
                for item in result["knowledge_assessments"]),result
     assert all("candidate_refs" not in item for item in result["knowledge_assessments"]),result
@@ -192,7 +196,7 @@ def main():
 
     # A02 recognizes a natural-language object action after the common
     # interpretation pipeline, persists it, and does not accidentally promote
-    # the command as newly asserted knowledge. A06/A07 resolve and execute it.
+    # the command as newly asserted knowledge. A06 resolves or asks; A07 executes.
     action_id=uuid4();_CLEANUP_CAPTURE_IDS.append(action_id)
     with patch("smart_notebook.services.client_capture.CLIENT_TEXT_CAPTURE_SOURCE_TYPE","_contract_test_client_text_capture"):
         action=client.post("/api/client/v1/captures",json={"client_capture_id":str(action_id),"mode":"auto","content":"Hake Milch auf der Einkaufsliste ab."})
@@ -207,7 +211,8 @@ def main():
         promote.assert_not_awaited()
     action=get_capture(action_id)
     assert action["status"]=="completed" and action["resolved_intent"]=="complete",action
-    assert action["result"]["action_status"]=="pending_resolution",action
+    assert action["result"]["action_status"] in {"pending_execution","pending_clarification"},action
+    assert len(action["result"]["reference_resolutions"])==1,action
     assert action["result"]["intent"]["target_type"]=="list_item",action
     assert action["result"]["knowledge_assessments"][0]["classification"]=="targeted",action
     with get_db_connection() as db:
@@ -233,7 +238,8 @@ def main():
     audio_action=get_client_session(audio_action_id)
     assert audio_action["state"]=="completed",audio_action
     assert audio_action["capture_result"]["resolved_intent"]=="archive",audio_action
-    assert audio_action["capture_result"]["action_status"]=="pending_resolution",audio_action
+    assert audio_action["capture_result"]["action_status"] in {"pending_execution","pending_clarification"},audio_action
+    assert len(audio_action["capture_result"]["reference_resolutions"])==1,audio_action
 
     _cleanup_test_records()
     print("M8 CAPTURE CONTRACT TEST: PASS")

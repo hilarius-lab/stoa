@@ -308,6 +308,8 @@ async def finalize_client_session_with_knowledge(client_session_id,promotion_mod
             preflight_artifact_ids=[] if promotion_deferred else promotion_ids
             await ensure_session_knowledge_preflights(item["ingestion_session_id"],intent_parts,
                                                        preflight_artifact_ids,promotion_mode)
+            from .mutation_targets import ensure_session_mutation_target_resolutions
+            await ensure_session_mutation_target_resolutions(item["ingestion_session_id"],intent_parts,promotion_mode)
         if not promotion_deferred and promotion_ids!=[]:
             if promotion_ids is None:
                 await promote_session_artifacts(item["ingestion_session_id"],promotion_mode)
@@ -363,7 +365,12 @@ def _materialize_capture_result(client_session_id):
             result["intent"]=public_intent_decision(intent_decision)
             result["intents"]=public_intent_parts(intent_parts)
             if any(part["primary_intent"] in ("change","complete","archive") for part in intent_parts):
-                result["action_status"]="pending_resolution"
+                from .mutation_targets import (get_session_mutation_target_resolutions,
+                    public_mutation_target_resolutions)
+                resolutions=get_session_mutation_target_resolutions(item["ingestion_session_id"])
+                result["reference_resolutions"]=public_mutation_target_resolutions(resolutions)
+                result["action_status"]=("pending_execution" if resolutions and
+                    all(entry["status"]=="resolved" for entry in resolutions) else "pending_clarification")
             if len(intent_parts)>1:result["interpretation_status"]="split_completed"
             from .knowledge_preflight import get_session_knowledge_preflights,public_knowledge_preflights
             assessments=get_session_knowledge_preflights(item["ingestion_session_id"])

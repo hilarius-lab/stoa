@@ -604,6 +604,23 @@ MIGRATIONS=[
         "CREATE UNIQUE INDEX knowledge_preflight_intent_part_uidx ON knowledge_preflight_assessments(intent_part_id) WHERE intent_part_id IS NOT NULL",
         "CREATE INDEX knowledge_preflight_session_idx ON knowledge_preflight_assessments(session_id,id)",
     ]),
+    ("0046_mutation_target_resolution","Persist A06 mutation targets and clarification links",[
+        """CREATE TABLE mutation_target_resolutions(
+        id BIGSERIAL PRIMARY KEY,session_id BIGINT NOT NULL REFERENCES ingestion_sessions(id) ON DELETE CASCADE,
+        intent_part_id BIGINT NOT NULL UNIQUE REFERENCES session_intent_parts(id) ON DELETE CASCADE,
+        preflight_assessment_id BIGINT NOT NULL UNIQUE REFERENCES knowledge_preflight_assessments(id) ON DELETE CASCADE,
+        status TEXT NOT NULL,target_type TEXT,target_id BIGINT,target_key TEXT,
+        confidence DOUBLE PRECISION NOT NULL,candidate_keys JSONB NOT NULL DEFAULT '[]'::jsonb,
+        reason_codes JSONB NOT NULL DEFAULT '[]'::jsonb,decision_source TEXT NOT NULL,
+        clarification_question_id BIGINT REFERENCES session_questions(id) ON DELETE SET NULL,
+        created_at TIMESTAMPTZ NOT NULL,updated_at TIMESTAMPTZ NOT NULL,
+        CHECK(status IN('resolved','ambiguous','unresolved')),
+        CHECK(target_type IS NULL OR target_type IN('note','task','list','list_item')),
+        CHECK(confidence BETWEEN 0 AND 1),
+        CHECK((status='resolved')=(target_type IS NOT NULL AND target_id IS NOT NULL AND target_key IS NOT NULL)),
+        CHECK(status='resolved' OR clarification_question_id IS NOT NULL))""",
+        "CREATE INDEX mutation_target_resolution_session_idx ON mutation_target_resolutions(session_id,id)",
+    ]),
 ]
 
 

@@ -18,6 +18,7 @@ AI_TASK_PROFILES = {
     "capture.intent": {"group":"capture","complexity":"standard"},
     "capture.intent_split": {"group":"capture","complexity":"standard"},
     "capture.knowledge_preflight": {"group":"capture","complexity":"standard"},
+    "capture.target_resolution": {"group":"capture","complexity":"standard"},
     "segmentation.semantic": {"group":"semantic_segmentation","complexity":"complex"},
     "artifacts.session_memory": {"group":"session_artifact_analysis","complexity":"complex"},
     "artifacts.task_promotion": {"group":"session_artifact_analysis","complexity":"standard"},
