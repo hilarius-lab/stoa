@@ -1114,6 +1114,13 @@ M8-Gate mit 24 Prüfungen einschließlich logischem Vier-Stunden-Soak sind grün
 die Fixture-Nachkontrolle ergab null A08-Test-Sessions und -Listen. Ein echter
 strukturierter Split-Aufruf bewertete den sicheren Erledigungsteil mit `0.95`
 und den tentativen Archivierungsteil mit `0.70`. Es gab keine Firmwareänderung;
-`h4-auto` bleibt gültig. Offen ist die echte Audio→DB→ESP-Abnahme nach einem
-Backend-Worker-Neustart. Rückfrageantwort und Fortsetzung des zurückgestellten
-Teils bleiben der separate W05-Block.
+`h4-auto` bleibt gültig.
+
+Nach dem Worker-Neustart bestätigte Session 766 den echten Audiofall. Der
+sichere Taskteil „Kupfermond“ wurde mit `0.95` ausgeführt; der tentative
+Archivierungsteil blieb mit `0.75` zurückgestellt, Liste 304 blieb aktiv und
+genau eine segmentgebundene Rückfrage erschien auf dem ESP. Das STT hatte
+„Silberarbeit“ statt „Silberwald“ verstanden; die A08-Sperre blieb dennoch
+korrekt. Der Nutzer bestätigte sowohl die Erledigung als auch die Rückfrage.
+A08 ist damit live abgenommen. Rückfrageantwort und Fortsetzung des
+zurückgestellten Teils bleiben der separate W05-Block.

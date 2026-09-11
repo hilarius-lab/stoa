@@ -1,6 +1,6 @@
 # Projektstand
 
-Stand: 2026-09-11, A08 strukturell geschlossen; Live-Abnahme offen
+Stand: 2026-09-11, A08 vollständig einschließlich Live-Abnahme geschlossen
 
 ## Nachgewiesen am realen Gerät
 
@@ -79,8 +79,9 @@ Stand: 2026-09-11, A08 strukturell geschlossen; Live-Abnahme offen
   quellgebundene Bestätigungsfrage; unabhängige sichere Geschwister werden
   ausgeführt. Öffentliche Einzeloutcomes und `partially_completed` sind mit
   dediziertem DB-Test, echtem strukturiertem Modellaufruf und vollständigem
-  M8-Gate mit 24 Prüfungen belegt. Die Firmware bleibt unverändert `h4-auto`;
-  offen ist nur die reale Audioabnahme nach Backend-Worker-Neustart.
+  M8-Gate mit 24 Prüfungen belegt. Session 766 erledigte den sicheren Taskteil,
+  ließ die tentative Liste aktiv und erzeugte die sichtbare Rückfrage. Die
+  Firmware bleibt unverändert `h4-auto`.
 
 ## Systemgrenze
 
@@ -203,8 +204,8 @@ weiterhin die bestehende Oberfläche und behauptet nicht den H5-Meetingmodus.
 
 Die auswählbare IANA-Zeitzone ist ein späteres Komfortfeature. Bis dahin bleibt
 die verifizierte `Europe/Berlin`-Regel bewusst fest eingebaut. A01–A07 sind
-umgesetzt und live abgenommen; A08 ist strukturell grün und wartet nur noch auf
-die physische Audioabnahme nach Worker-Neustart. Danach bleiben insbesondere
+umgesetzt und live abgenommen; A08 ist ebenfalls strukturell und physisch grün.
+Danach bleiben insbesondere
 A09-Claim-Aktivierung, A11-Recovery, A12-Gesamtresultat und W05 offen.
 
 Historische Messwerte und Fehleranalysen stehen im `CHANGELOG.md` und in
