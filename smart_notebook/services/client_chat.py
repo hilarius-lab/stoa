@@ -166,12 +166,13 @@ async def run_chat_turn_once(mode="llm",deterministic_text="Deterministische Tes
         turn=_turn(row);c.execute("UPDATE client_conversation_turns SET status='running',attempts=attempts+1,started_at=%s,updated_at=%s WHERE id=%s",(now,now,row[0]))
         c.execute("INSERT INTO client_conversation_turn_events(turn_id,event_type,payload,created_at) VALUES(%s,'started','{}',%s)",(row[0],now));c.commit()
     try:
-        with get_db_connection() as c:user=c.execute("SELECT content FROM client_conversation_messages WHERE id=%s",(turn["user_message_id"],)).fetchone()[0]
+        with get_db_connection() as c:user,user_sequence=c.execute("SELECT content,sequence FROM client_conversation_messages WHERE id=%s",(turn["user_message_id"],)).fetchone()
         if mode=="deterministic":answer=deterministic_text;citations=[]
         else:
             from .events import create_event_record
             from .chat import ask_llm
-            event=create_event_record(user,source="client_chat");answer,debug=await ask_llm(user,event["id"])
+            event=create_event_record(user,source="client_chat")
+            answer,debug=await ask_llm(user,event["id"],conversation_id=turn["conversation_id"],before_sequence=user_sequence)
             citations=[{"type":x.get("type"),"id":x.get("id")} for x in debug.get("retrieved_knowledge",[]) if isinstance(x,dict)]
         answer=_sanitize_markdown(answer)
         completed=datetime.now(TIMEZONE);assistant_id=uuid4()

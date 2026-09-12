@@ -216,6 +216,55 @@ Priorität zuerst). Bei jedem neuen Task-Zyklus wird oben begonnen.
   Punkte für den aktuellen Zweck (Memo→Dashboard-Schleife) überhaupt nötig
   sind, ist vom Nutzer noch zu entscheiden.
 
+  **Reihenfolge vom Nutzer festgelegt, 2026-09-12:** Kern-Loop zuerst — W03 →
+  W04 → W02, da diese drei direkt Chat-/Dashboard-Korrektheit betreffen.
+  A12/A13/W09/W10 (UX-Konsistenz bzw. Hygiene, nicht Korrektheit) bleiben
+  bis auf Weiteres zurückgestellt.
+
+  **W03 umgesetzt und live verifiziert, 2026-09-12.** Beim Gegenchecken gegen
+  den aktuellen Code (nicht nur die Tabelle in §20.3) stellte sich heraus,
+  dass der Bug gravierender ist als die Kurzfassung nahelegt: Es geht nicht
+  nur um die „falsche" Tabelle, sondern darum, dass der reale ESP/Android-
+  Chat-Pfad (`client_chat.py::run_chat_turn_once` → `chat.py::ask_llm`)
+  **de facto gar kein Gedächtnis an seine eigene Konversation hatte**. Grund:
+  `ask_llm` liest den Verlauf über `get_recent_conversation()` aus der
+  Legacy-`events`-Tabelle, gefiltert auf `response IS NOT NULL` — aber die
+  synthetische `events`-Zeile, die `run_chat_turn_once` pro Turn anlegt,
+  bekommt ihre `response`-Spalte nie gesetzt (das tut ausschließlich der
+  separate Legacy-Endpoint `/api/message` in `routers/events.py`). Jeder
+  Client-Chat-Turn wurde dadurch faktisch wie der erste beantwortet, egal wie
+  viele vorherige Turns in derselben Conversation existierten.
+
+  Live reproduziert (vor dem Fix): Turn 1 „Merk dir bitte diesen Code:
+  Panther-8823." → Turn 2 „Welchen Code habe ich dir gerade genannt?" wurde
+  mit „In diesem Gespräch hast du mir noch keinen Code genannt. Das ist deine
+  erste Nachricht an mich." beantwortet.
+
+  Behoben durch `chat.py::get_conversation_turn_context(conversation_id,
+  before_sequence)`: liest `client_conversation_messages` (dieselbe Tabelle,
+  aus der `client_chat.py` ohnehin schon alles andere zu einer Conversation
+  liest/schreibt) gezielt nach `conversation_id` gefiltert, geordnet nach
+  `sequence`. `ask_llm`/`build_messages` bekommen dafür optionale Parameter
+  `conversation_id`/`before_sequence`; `run_chat_turn_once` übergibt jetzt
+  `turn["conversation_id"]` und die Sequenznummer der eigenen Nutzernachricht
+  (um sie nicht doppelt in den Prompt aufzunehmen). Ohne `conversation_id`
+  (der `/api/message`-Legacy-Pfad) bleibt `get_recent_conversation()`
+  unverändert im Einsatz — bewusst minimaler Eingriff, das einzelne
+  Legacy-Gespräch war von diesem Bug nicht betroffen.
+
+  Live mit echten LLM-Aufrufen verifiziert (nicht nur Testlauf): derselbe
+  Zwei-Turn-Ablauf liefert nach dem Fix korrekt „Du hast mir den Code
+  **Zebra-4471** genannt." Neuer Regressionstest
+  `m8_chat_conversation_memory_test.py` (macht selbst echte LLM-Aufrufe,
+  bewusst mit textlich getrenntem Cleanup-Tag und Geheimcode, damit ein
+  gedächtnisloses Echo des aktuellen Turns nicht versehentlich als Erfolg
+  durchgeht — ein erster Testentwurf hatte genau diese Falle selbst
+  zugeschlagen). Verifiziert gegen den unreparierten Code fehlschlagend,
+  gegen den Fix grün; jetzt Teil von `m8_release_gate_test.py`. Quick-Gate
+  (`CLIENT_DEVICE_AUTH_REQUIRED=false`) grün: 31 Einzeltests + Soak.
+  `BACKEND_LOGIK.md` (§10.1 Schritt 4, §10.2, W03-Zeile in §20.3)
+  aktualisiert. Nicht committed.
+
 - [ ] **Priorität 7 — ESP Secure Boot v2 / Flash Encryption / signiertes
   OTA mit Rollback.** Laut `esp32-client/docs/ROADMAP.md` Abschnitt H6
   soll dieser Pfad vollständig vorbereitet werden; eFuses werden

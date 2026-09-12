@@ -52,6 +52,34 @@ def get_recent_conversation(before_event_id: int):
 
     return messages
 
+def get_conversation_turn_context(conversation_id, before_sequence: int, limit: int = CONTEXT_EVENT_LIMIT):
+    # W03: client_chat.py's conversations each have their own turn history in
+    # client_conversation_messages (introduced for A11) -- unlike the single
+    # implicit legacy thread get_recent_conversation() was built for, several
+    # client_chat conversations exist concurrently, so context must be scoped
+    # to this one conversation instead of a global, source-agnostic time
+    # window. `before_sequence` excludes the user message that started the
+    # current turn (already appended separately by build_messages()).
+    with get_db_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT role, content
+            FROM client_conversation_messages
+            WHERE conversation_id = %s
+              AND sequence < %s
+            ORDER BY sequence DESC
+            LIMIT %s
+            """,
+            (conversation_id, before_sequence, limit * 2)
+        ).fetchall()
+
+    rows.reverse()
+
+    return [
+        {"role": role, "content": content}
+        for role, content in rows
+    ]
+
 def get_note_pair_similarities(note_ids: list[int]):
     unique_ids = sorted(set(note_ids))
 
@@ -179,7 +207,7 @@ def suppress_redundant_note_context(
 
     return filtered, suppressed
 
-async def build_messages(text: str, before_event_id: int):
+async def build_messages(text: str, before_event_id: int, conversation_id=None, before_sequence: int | None = None):
     now = datetime.now(TIMEZONE)
 
     runtime_context = (
@@ -192,7 +220,10 @@ async def build_messages(text: str, before_event_id: int):
         "keinen Zugriff auf die aktuelle Uhrzeit oder Echtzeitdaten hast."
     )
 
-    conversation_context = get_recent_conversation(before_event_id)
+    if conversation_id is not None:
+        conversation_context = get_conversation_turn_context(conversation_id, before_sequence)
+    else:
+        conversation_context = get_recent_conversation(before_event_id)
 
     retrieved_knowledge = await search_knowledge(
         query=text,
@@ -338,7 +369,7 @@ async def get_applied_prompt(messages: list[dict]):
     except Exception as exc:
         return f"apply-template debug failed: {type(exc).__name__}: {exc}"
 
-async def ask_llm(text: str, current_event_id: int):
+async def ask_llm(text: str, current_event_id: int, conversation_id=None, before_sequence: int | None = None):
     profile = get_ai_task_profile("conversation.reply")
     (
         messages,
@@ -349,7 +380,9 @@ async def ask_llm(text: str, current_event_id: int):
         suppressed_knowledge
     ) = await build_messages(
         text,
-        current_event_id
+        current_event_id,
+        conversation_id,
+        before_sequence
     )
 
     payload = {
