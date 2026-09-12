@@ -121,8 +121,84 @@ Priorität zuerst). Bei jedem neuen Task-Zyklus wird oben begonnen.
   Karte tatsächlich ohne „wird geladen …“ erscheint — erfordert einen echten
   Tastendruck am Gerät, bisher nur der Cache-Füllpfad über das Log geprüft.
 
-- [ ] **Priorität 5 — Netzwerk-/Transport-/Verschlüsselungsaudit.** Sehr
-  spät vor dem produktionsnahen Alpha-Einsatz einen systemweiten
+- [ ] **Priorität 5 — Wartungs-Fehlerisolation (W07, Backend).** Bei der
+  Vorbereitung von Priorität 10 (Audit) am 2026-09-12 gegen den aktuellen
+  Code gefunden: `run_daily_maintenance()` (`smart_notebook/services/
+  maintenance.py`) ruft alle Nachtschritte sequenziell ohne
+  Fehlerisolation auf. Wirft ein früher Schritt (z. B.
+  `consolidate_today()`) eine Ausnahme, laufen alle nachfolgenden Schritte
+  in dieser Nacht nicht mehr — einschließlich der in diesem Chat gebauten
+  A11/W06-Nachtreparatur-Mechanismen (`retry_attention_required_client_
+  sessions_for_night_repair`, `queue_failed_chat_turns_for_night_repair`,
+  `retry_promotion_errors_for_night_repair`,
+  `retry_stalled_processing_client_sessions_for_night_repair`). Zusätzlich
+  beginnt `consolidation.py::get_today_unarchived_events()` bei jedem Lauf
+  fest bei 00:00 des Aufruftags statt beim letzten erfolgreichen Lauf,
+  sodass ein ausgefallener Tag nicht nachgeholt wird. Ziel: jeder Schritt
+  einzeln fehlerisoliert (ein fehlschlagender Schritt blockiert die
+  anderen nicht mehr) und eine echte Nachholgrenze statt eines festen
+  Tagesbeginns.
+
+- [ ] **Priorität 6 — Restliche fachliche Lücken aus BACKEND_LOGIK.md §18
+  (Backend).** Ebenfalls am 2026-09-12 gegen den aktuellen Code neu
+  geprüft und bestätigt weiterhin offen (die entsprechende Tabelle in
+  `BACKEND_LOGIK.md` Abschnitt 20.3 stammt vom Re-Audit 8. September und
+  ist seither nicht durchgängig nachgezogen worden):
+  - A12 — kein einheitliches Gesamtresultat; Capture-, Promotion- und
+    Chatergebnisse bleiben getrennte Rückmeldungen.
+  - A13 — kein Aufnahmefilter mit niedriger Nutzenschwelle; jede Aufnahme
+    wird vollständig als Kandidat verarbeitet, auch Smalltalk/Füllsätze.
+  - W02 — `retrieval.py::search_knowledge` kennt weiterhin nur
+    `note/task/list/list_item`, keine Fact-Claims.
+  - W03 — `chat.py::ask_llm` liest Gesprächskontext weiterhin über
+    `get_recent_conversation()` (Legacy-Events-Tabelle), nicht über die
+    für A11 bereits eingeführte Tabelle `client_conversation_turns`.
+  - W04 — `claims.py::run_changed_conflict_scan` läuft weiterhin nur
+    nachts (`maintenance.py`) oder manuell (`routers/claims.py`), kein
+    allgemeiner Guard vor Antworten oder Mutationen.
+  - W09 — keine Langzeit-Selbstbereinigung (niedrige Importance +
+    schwache Evidence + lange Nichtnutzung) in `run_daily_maintenance()`.
+  - W10 — keine allgemeine Wiederaufnahmesperre für automatisch
+    archivierte oder vom Nutzer verworfene Inhalte.
+  Reihenfolge/Priorisierung innerhalb dieser Liste sowie ob alle sieben
+  Punkte für den aktuellen Zweck (Memo→Dashboard-Schleife) überhaupt nötig
+  sind, ist vom Nutzer noch zu entscheiden.
+
+- [ ] **Priorität 7 — ESP Secure Boot v2 / Flash Encryption / signiertes
+  OTA mit Rollback.** Laut `esp32-client/docs/ROADMAP.md` Abschnitt H6
+  soll dieser Pfad vollständig vorbereitet werden; eFuses werden
+  ausdrücklich erst nach abschließender Freigabe gebrannt, da
+  irreversibel. Von der bereits umgesetzten SD-/NVS-Verschlüsselung auf
+  Anwendungsebene (AES-256-GCM für die Uploadqueue, siehe H2/erledigter
+  Eintrag zu Prioritätsteil H2 weiter unten) zu unterscheiden: hier geht
+  es um Boot-/Flash-Verschlüsselung auf Chipebene. Bisher nicht begonnen.
+  Steht in der Roadmap-Reihenfolge bewusst vor dem Audit (Priorität 10) —
+  ein Audit vor Secure Boot würde einen Zustand prüfen, der sich danach
+  nochmal ändert.
+
+- [ ] **Priorität 8 — ESP 48-Stunden-Dauerbetriebstest mit 5000-mAh-Akku
+  (H6).** Überwiegend Geräte-/Messaufgabe, kaum Code; kann parallel zu
+  anderen Prioritäten laufen, sobald ein Gerät dafür frei ist.
+
+- [ ] **Priorität 9 — ESP temperaturabhängiges Refreshverhalten (H6,
+  zurückgestellt).** Ghosting nimmt in der Kälte zu; ob die interne
+  Temperaturkompensation des Display-Controllers (Register `0x18=0x80`,
+  interner Sensor bei `EPD_Init`) bereits ausreicht, ist ungeklärt — der
+  Displayport definiert keine Rückleseleitung, ein Live-Auslesen dieses
+  internen Sensors ist mit der aktuellen Verdrahtung nicht möglich, und
+  der ESP32-S3-eigene Chiptemperatursensor misst Eigenerwärmung, nicht die
+  Paneltemperatur. Vor einer Umsetzung erst klären, ob überhaupt eine
+  zusätzliche Maßnahme nötig ist.
+
+- [ ] **Priorität 10 — Netzwerk-/Transport-/Verschlüsselungsaudit.**
+  Inhaltlich unverändert gegenüber der bisherigen Priorität 5, auf
+  Nutzerwunsch ans Ende der Warteschlange verschoben, nachdem sich beim
+  Versuch, direkt damit zu beginnen, herausstellte, dass sowohl backend-
+  als auch ESP-seitig noch fachliche Lücken (Prioritäten 5–9) offen sind
+  und die eigene Roadmap (`esp32-client/docs/ROADMAP.md`, H6) den Audit
+  ohnehin explizit „unmittelbar vor dem produktionsnahen Alpha-Einsatz"
+  einordnet, also nach Abschluss der oben stehenden Punkte, nicht davor.
+  Sehr spät vor dem produktionsnahen Alpha-Einsatz einen systemweiten
   Netzwerk-, Transport- und Verschlüsselungsaudit durchführen:
   TLS/Authentisierung, Credentialrotation, Hotspot/Portal, WLAN-Profile,
   lokale SD-/NVS-Daten, Backendgrenzen und bekannte Klartext-/
