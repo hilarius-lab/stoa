@@ -15,7 +15,7 @@ from .provenance import transfer_knowledge_sources
 from .consolidation import consolidate_today
 from .claims import run_changed_conflict_scan
 from .jobs import queue_parked_jobs_for_night_repair
-from .client_sessions import retry_attention_required_client_sessions_for_night_repair
+from .client_sessions import retry_attention_required_client_sessions_for_night_repair,retry_stalled_processing_client_sessions_for_night_repair
 from .client_chat import queue_failed_chat_turns_for_night_repair
 from .promotion import retry_promotion_errors_for_night_repair
 from .shadow import purge_expired_shadow_details
@@ -389,6 +389,7 @@ async def run_daily_maintenance():
     note_fact_promotions=promote_eligible_notes_to_facts(dry_run=False)
     repaired_jobs=queue_parked_jobs_for_night_repair()
     repaired_sessions=await retry_attention_required_client_sessions_for_night_repair()
+    repaired_stalled_sessions=await retry_stalled_processing_client_sessions_for_night_repair()
     repaired_chat_turns=queue_failed_chat_turns_for_night_repair()
     repaired_promotions=await retry_promotion_errors_for_night_repair()
     purged_shadow_details=purge_expired_shadow_details()
@@ -409,6 +410,7 @@ async def run_daily_maintenance():
         "note_fact_promotions":note_fact_promotions,
         "night_repair":{"queued_count":len(repaired_jobs),"jobs":repaired_jobs},
         "client_session_night_repair":{"retried_count":len(repaired_sessions),"sessions":repaired_sessions},
+        "stalled_processing_session_night_repair":{"retried_count":len(repaired_stalled_sessions),"sessions":repaired_stalled_sessions},
         "chat_turn_night_repair":{"retried_count":len(repaired_chat_turns),"turns":repaired_chat_turns},
         "promotion_night_repair":{"retried_session_count":len(repaired_promotions),"sessions":repaired_promotions},
         "shadow_retention":{"purged_detail_rows":purged_shadow_details},

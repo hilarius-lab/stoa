@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime,timedelta
 from pathlib import Path
 from uuid import UUID
 
@@ -6,7 +6,7 @@ from psycopg.types.json import Jsonb
 
 from ..config import AUDIO_RETENTION_CACHE_DIR,TIMEZONE
 from ..database import get_db_connection
-from .audio import schedule_final_stt_windows
+from .audio import schedule_final_stt_windows,stabilize_transcripts
 
 
 ACTIVE_STATES=("created","recording","paused","draining","processing","failed","attention_required")
@@ -190,7 +190,35 @@ def finish_client_session(client_session_id,final_sequence,final_source_end_ms=N
         current=get_ingestion_session_record(ingestion_id)
         if current and current["status"]=="open":
             legacy=finish_ingestion_session_record(ingestion_id)
-            if legacy:schedule_final_stt_windows(ingestion_id)
+            if legacy:
+                schedule_final_stt_windows(ingestion_id)
+                # schedule_final_stt_windows only fills in a window that never
+                # got a transcription job at all. A single-window session
+                # (the common case for a short memo) can instead have already
+                # finished transcribing *before* this line flips
+                # ingestion_sessions.status to 'finished' -- run_stt_once()
+                # read the still-'open' status a moment earlier and passed
+                # force=False, so its lone window stayed 'provisional' with
+                # nothing left to ever revisit it: stabilize_transcripts() is
+                # otherwise only ever called from inside that same completion
+                # hook. Real case: session 1388 on 2026-09-12, stuck for hours
+                # with a fully transcribed but never-confirmed window.
+                #
+                # force=True only when nothing else is still transcribing --
+                # the same condition audio.py's own call already uses. A later
+                # overlapping window can still revise an earlier window's
+                # provisional tail (see stabilize_transcripts's docstring
+                # further down); confirming here while that is in flight would
+                # freeze a not-yet-corrected transcript. If something is still
+                # pending, that job's own completion will re-run this with the
+                # correct flag once it is the last one -- ingestion_sessions
+                # is already 'finished' by then, so the race this closes
+                # cannot recur for it.
+                with get_db_connection() as c:
+                    still_transcribing=c.execute("""SELECT 1 FROM processing_jobs
+                    WHERE ingestion_session_id=%s AND job_type='audio_transcription'
+                      AND status IN('queued','running') LIMIT 1""",(ingestion_id,)).fetchone()
+                if not still_transcribing:stabilize_transcripts(ingestion_id,force=True)
         with get_db_connection() as c:c.execute("UPDATE client_sessions SET state='processing',updated_at=%s WHERE client_session_id=%s",(datetime.now(TIMEZONE),client_session_id));c.commit()
     return get_client_session(client_session_id)
 
@@ -316,6 +344,71 @@ async def retry_attention_required_client_sessions_for_night_repair(limit=100,mo
     for item in claimed:
         await settle_client_session_for_ingestion(item["ingestion_session_id"],mode)
         after=get_client_session(item["client_session_id"])
+        results.append({"client_session_id":item["client_session_id"],
+                         "ingestion_session_id":item["ingestion_session_id"],
+                         "state":after["state"] if after else None})
+    return results
+
+
+def claim_stalled_processing_client_sessions_for_night_repair(limit=100,older_than_minutes=10):
+    """Claim `processing` sessions whose whole job graph is done but which never
+    finalized, for one repair attempt each.
+
+    Real case, session 1390 on 2026-09-12: every processing_jobs row for its
+    ingestion_session_id reached 'done' (audio_transcription, text_processing,
+    session_artifacts), yet client_sessions.state stayed 'processing' with
+    last_error=None -- settle_client_session_for_ingestion() silently swallows
+    ClientSessionConflict (see its docstring: "a failed promotion therefore
+    leaves the client session recoverably in processing"), and unlike
+    attention_required, nothing else ever revisits a 'processing' session --
+    finish_client_session() explicitly no-ops a retried finish once state is
+    already 'processing' or attention_required. Calling
+    finalize_client_session_with_knowledge() by hand on the real session
+    completed it immediately with no error at all, so whatever blocked the
+    original automatic attempt was transient. `older_than_minutes` exists so
+    this does not race a session whose last job finished moments ago and whose
+    own completion hook has not run settle() yet.
+    """
+    now=datetime.now(TIMEZONE);limit=max(1,min(limit,1000));cutoff=now-timedelta(minutes=older_than_minutes)
+    with get_db_connection() as c:
+        rows=c.execute("""WITH candidates AS(SELECT cs.client_session_id FROM client_sessions cs
+        WHERE cs.state='processing' AND cs.night_repair_attempts=0 AND cs.ingestion_session_id IS NOT NULL
+          AND cs.updated_at<%s
+          AND NOT EXISTS(SELECT 1 FROM processing_jobs pj WHERE pj.ingestion_session_id=cs.ingestion_session_id AND pj.status<>'done')
+        ORDER BY cs.updated_at,cs.client_session_id FOR UPDATE SKIP LOCKED LIMIT %s)
+        UPDATE client_sessions cs SET night_repair_attempts=1,updated_at=%s FROM candidates ca
+        WHERE cs.client_session_id=ca.client_session_id
+        RETURNING cs.client_session_id,cs.ingestion_session_id""",(cutoff,limit,now)).fetchall();c.commit()
+    return [{"client_session_id":r[0],"ingestion_session_id":r[1]} for r in rows]
+
+
+async def retry_stalled_processing_client_sessions_for_night_repair(limit=100,mode="llm"):
+    """Run the one claimed repair attempt for each stalled session.
+
+    A repair that still ends in 'processing' (the silent-swallow case this
+    exists for) is promoted to attention_required with its own
+    night_repair_attempts reset to 0 -- a genuine hand-off to the existing
+    attention_required repair for one further, independent try, rather than a
+    second silent dead end. A repair that already produced a more specific
+    attention_required (capture_intent_failed and friends set their own
+    last_error before raising) is left exactly as that call left it: this
+    counts as its one attempt, same as everywhere else in this file.
+    """
+    claimed=claim_stalled_processing_client_sessions_for_night_repair(limit)
+    results=[]
+    for item in claimed:
+        await settle_client_session_for_ingestion(item["ingestion_session_id"],mode)
+        after=get_client_session(item["client_session_id"])
+        if after and after["state"]=="processing":
+            now=datetime.now(TIMEZONE)
+            with get_db_connection() as c:
+                c.execute("""UPDATE client_sessions SET state='attention_required',night_repair_attempts=0,
+                last_error='stalled in processing after a completed job graph; automatic repair could not progress it',
+                updated_at=%s WHERE client_session_id=%s AND state='processing'""",
+                          (now,item["client_session_id"]))
+                _audit(c,item["client_session_id"],"state_reconciled","processing","attention_required",
+                       {"reason":"stalled_processing_repair_failed"});c.commit()
+            after=get_client_session(item["client_session_id"])
         results.append({"client_session_id":item["client_session_id"],
                          "ingestion_session_id":item["ingestion_session_id"],
                          "state":after["state"] if after else None})
