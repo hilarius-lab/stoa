@@ -16,6 +16,8 @@ typedef enum {
     DIAG_EVENT_QUEUE,
     DIAG_EVENT_CAPTURE_START,
     DIAG_EVENT_CAPTURE_END,
+    DIAG_EVENT_CREDENTIAL_ROTATED,
+    DIAG_EVENT_CREDENTIAL_ROTATE_FAILED,
 } diagnostic_event;
 
 /* Starts the sink only after /sdcard is mounted. Events before that are

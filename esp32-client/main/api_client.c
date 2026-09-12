@@ -89,6 +89,14 @@ typedef struct {
 static char base[256];
 static char credential[65];
 static char installation[JOURNAL_UUID_CHARS];
+/* Automatic credential rotation state, both persisted (see auth_load()). A
+ * pending request_id survives a reboot so a retry after power loss replays
+ * the same rotation instead of minting a new one; rotate_at is the server's
+ * own next-rotation deadline, approximate to the minute (see
+ * approx_unix_from_iso()) since nothing here needs better than that against a
+ * ~60-day server-chosen window. */
+static time_t rotate_at;
+static char rotate_request[JOURNAL_UUID_CHARS];
 static TaskHandle_t worker;
 static api_status status;
 /* Atomic mirrors for the display task. The full status struct belongs to the
@@ -342,6 +350,8 @@ static void auth_load(void) {
         journal_uuid(installation,memo_queue_random);nvs_set_str(n,"install",installation);nvs_commit(n);
     }
     size=sizeof(credential);if(nvs_get_str(n,"credential",credential,&size)!=ESP_OK)credential[0]=0;
+    int64_t stored_rotate_at=0;nvs_get_i64(n,"rotate_at",&stored_rotate_at);rotate_at=(time_t)stored_rotate_at;
+    size=sizeof(rotate_request);if(nvs_get_str(n,"rotate_req",rotate_request,&size)!=ESP_OK)rotate_request[0]=0;
     nvs_close(n);
 }
 
@@ -565,6 +575,50 @@ static bool gate(const char *path) {
     return ok;
 }
 
+/* YYYY-MM-DDTHH:MM prefix, ignoring seconds and any UTC offset — the same
+ * loose parse history.c uses to display a timestamp, applied here to decide
+ * "is rotation roughly due yet" against a server deadline weeks out.
+ * TIMEZONE in the backend is Europe/Berlin, so the wire string carries a
+ * +01:00/+02:00 suffix this ignores; treating it as UTC is off by at most a
+ * couple of hours, which does not matter against a ~60-day window. Returns 0
+ * on anything that does not parse, same "absent/unstated" convention as
+ * number_matches_or_absent(). */
+static bool iso_digits(const char *s, int count) {
+    for (int i = 0; i < count; i++) if (s[i] < '0' || s[i] > '9') return false;
+    return true;
+}
+static long iso_days_from_civil(int year, int month, int day) {
+    year -= month <= 2;
+    long era = (year >= 0 ? year : year - 399) / 400;
+    unsigned year_of_era = (unsigned)(year - era * 400);
+    unsigned day_of_year = (unsigned)((153 * (month + (month > 2 ? -3 : 9)) + 2) / 5)
+                         + (unsigned)day - 1;
+    unsigned day_of_era = year_of_era * 365 + year_of_era / 4
+                        - year_of_era / 100 + day_of_year;
+    return era * 146097 + (long)day_of_era - 719468;
+}
+static time_t approx_unix_from_iso(const char *iso) {
+    if (!iso || strlen(iso) < 16 || iso[4] != '-' || iso[7] != '-' ||
+        iso[10] != 'T' || iso[13] != ':' ||
+        !iso_digits(iso, 4) || !iso_digits(iso + 5, 2) || !iso_digits(iso + 8, 2) ||
+        !iso_digits(iso + 11, 2) || !iso_digits(iso + 14, 2)) return 0;
+    int year = (iso[0]-'0')*1000+(iso[1]-'0')*100+(iso[2]-'0')*10+(iso[3]-'0');
+    int month = (iso[5]-'0')*10+(iso[6]-'0');
+    int day = (iso[8]-'0')*10+(iso[9]-'0');
+    int hour = (iso[11]-'0')*10+(iso[12]-'0');
+    int minute = (iso[14]-'0')*10+(iso[15]-'0');
+    return (time_t)iso_days_from_civil(year, month, day) * 86400 + hour * 3600 + minute * 60;
+}
+
+/* Persists the server's next-rotation deadline from a `DeviceCredentialResponse`
+ * (enroll or rotate share the same shape) so a later sync can compare it
+ * against the wall clock without another round trip. Caller commits `n`. */
+static void remember_rotate_after(nvs_handle_t n, cJSON *root) {
+    cJSON *value = cJSON_GetObjectItemCaseSensitive(root, "rotate_after");
+    rotate_at = cJSON_IsString(value) ? approx_unix_from_iso(value->valuestring) : 0;
+    nvs_set_i64(n, "rotate_at", (int64_t)rotate_at);
+}
+
 static bool enroll_if_needed(void) {
     if(credential[0])return true;
     nvs_handle_t n;if(nvs_open("notebook",NVS_READWRITE,&n)!=ESP_OK)return false;
@@ -581,11 +635,81 @@ static bool enroll_if_needed(void) {
             strcpy(credential,token->valuestring);
             esp_err_t saved=nvs_set_str(n,"credential",credential);
             esp_err_t erased=nvs_erase_key(n,"enroll");
+            remember_rotate_after(n,root);
             ok=saved==ESP_OK&&(erased==ESP_OK||erased==ESP_ERR_NVS_NOT_FOUND)&&nvs_commit(n)==ESP_OK;
         }cJSON_Delete(root);
     }
     if(json){memset(json,0,strlen(json));cJSON_free(json);}if(body){memset(body,0,API_RESPONSE_MAX);free(body);}memset(code,0,sizeof(code));nvs_close(n);status.last_http=http;
     return ok;
+}
+
+/* Automatic credential rotation, the third of four prioritized H2 upload-
+ * queue sub-items (BACKEND_REQUIREMENTS.md §9: server-side two-phase rotation
+ * already existed, the ESP-side automatic trigger was the missing half).
+ *
+ * Durable-before-send, the same discipline journal.c uses for chunk ACKs: the
+ * request_id is committed to NVS before the network call goes out, not
+ * after. A power loss between "sent" and "response persisted" then retries
+ * with the SAME request_id next cycle instead of minting a new one — the
+ * server's rotate() treats a repeated request_id as a replay and returns the
+ * identical new credential instead of minting a spare one. Whichever
+ * credential is still in NVS when that retry goes out — old, if the crash
+ * landed before the switch below; new, if it landed after — is one the
+ * server still authenticates, because rotation itself never revokes the old
+ * credential. Only actually using the new one revokes the old one, which is
+ * exactly what the gate() calls immediately following this in synchronize()
+ * do on the same pass.
+ *
+ * rotate_at==0 covers both "never rotated yet" and "the server's timestamp
+ * did not parse" by treating the deadline as already passed: a device that
+ * does not know when it is due errs toward finding out over staying silent
+ * on a stale credential until it expires outright. */
+static void rotate_if_due(void) {
+    if (!credential[0] || !clock_ready()) return;
+    bool pending = rotate_request[0] != 0;
+    if (!pending && rotate_at != 0 && time(NULL) < rotate_at) return;
+    nvs_handle_t n;
+    if (nvs_open("notebook", NVS_READWRITE, &n) != ESP_OK) return;
+    if (!pending) {
+        journal_uuid(rotate_request, memo_queue_random);
+        if (nvs_set_str(n, "rotate_req", rotate_request) != ESP_OK || nvs_commit(n) != ESP_OK) {
+            rotate_request[0] = 0;
+            nvs_close(n);
+            return;
+        }
+    }
+    cJSON *request = cJSON_CreateObject();
+    cJSON_AddStringToObject(request, "request_id", rotate_request);
+    char *json = cJSON_PrintUnformatted(request);
+    cJSON_Delete(request);
+    char path[128];
+    snprintf(path, sizeof(path), "/api/client/v1/installations/%s/credentials/rotate", installation);
+    char *body = malloc(API_RESPONSE_MAX);
+    int http = 0;
+    bool ok = json && body &&
+        call(HTTP_METHOD_POST, path, json, body, API_RESPONSE_MAX, &http) && http == 200;
+    if (ok) {
+        cJSON *root = cJSON_Parse(body);
+        cJSON *token = cJSON_GetObjectItemCaseSensitive(root, "credential");
+        ok = cJSON_IsString(token) && strlen(token->valuestring) == 64;
+        if (ok) {
+            strcpy(credential, token->valuestring);
+            esp_err_t saved = nvs_set_str(n, "credential", credential);
+            remember_rotate_after(n, root);
+            esp_err_t cleared = nvs_erase_key(n, "rotate_req");
+            ok = saved == ESP_OK && (cleared == ESP_OK || cleared == ESP_ERR_NVS_NOT_FOUND) &&
+                 nvs_commit(n) == ESP_OK;
+            if (ok) rotate_request[0] = 0;
+        }
+        cJSON_Delete(root);
+    }
+    diagnostic_log_event(ok ? DIAG_EVENT_CREDENTIAL_ROTATED : DIAG_EVENT_CREDENTIAL_ROTATE_FAILED,
+                         http, 0, 0);
+    ESP_LOGI("api", "credential rotation %s http=%d", ok ? "ok" : "pending", http);
+    if (json) { memset(json, 0, strlen(json)); cJSON_free(json); }
+    if (body) { memset(body, 0, API_RESPONSE_MAX); free(body); }
+    nvs_close(n);
+    status.last_http = http;
 }
 
 /* Latch the queue counts and let the panel redraw them. `screen_status` only
@@ -1713,6 +1837,10 @@ static void synchronize(void) {
     status.compatible = false;
     atomic_store(&diagnostic_compatible, false);
     if(!enroll_if_needed()){ESP_LOGW("api","device enrollment pending; http=%d",status.last_http);return;}
+    /* Before the gates, so a freshly rotated credential is the one they
+     * authenticate with — that is what makes the server revoke the
+     * superseded credential, see rotate_if_due()'s comment. */
+    rotate_if_due();
     if (!gate("/api/client/capabilities") || !gate("/api/client/v1/contract")) {
         status.gates_failed++;
         atomic_fetch_add(&diagnostic_gate_failed, 1);

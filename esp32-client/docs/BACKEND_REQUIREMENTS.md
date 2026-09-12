@@ -131,11 +131,17 @@ Mock darf `false` melden und die Firmware zunächst pollen. SSE bleibt eine
 optionale Vordergrundoptimierung, gebündelt für E-Paper und mit
 REST-Re-Snapshot bei Lücken.
 
-## 9. Enrollment und Credentialrotation — teilweise offen
+## 9. Enrollment und Credentialrotation — umgesetzt, 12. September
 
 Enrollment und serverseitige Zwei-Phasen-Rotation sind implementiert; der ESP
-kann einen einmaligen Code einlösen. Die **automatische Rotation auf dem ESP**
-fehlt noch, ist aber Firmwarearbeit, keine Backendarbeit.
+kann einen einmaligen Code einlösen. Die automatische Rotation auf dem ESP ist
+seit dem 12. September ebenfalls umgesetzt (Firmwarearbeit, keine
+Backendarbeit): `api_client.c::rotate_if_due()` vergleicht das server-
+gelieferte `rotate_after` gegen die Wanduhr und ruft bei Fälligkeit
+`POST /installations/{id}/credentials/rotate` mit einem vor dem Versand
+durabel persistierten `request_id` auf — derselbe Durable-vor-Senden-Grundsatz
+wie beim Chunk-ACK. Details und Begründung in
+`docs/CLIENT_SERVER_STATE.md` Punkt 3.
 
 ## 10. HTTPS — Clientpfad umgesetzt und am Gerät bestätigt
 

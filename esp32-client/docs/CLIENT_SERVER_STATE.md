@@ -307,6 +307,71 @@ Sanitizer-Laufzeitbibliotheken; das Skript erkennt das und baut automatisch
 ohne sie weiter). Nicht Teil dieser Runde: die verbleibenden zwei H2-
 Teilpunkte, Credentialrotation und Verschlüsselung (in dieser Reihenfolge).
 
+**Nachtrag, 12. September, dritte Runde: automatische Credentialrotation.**
+Dritter der vier priorisierten H2-Teilpunkte. `services/device_auth.py::rotate()`
+war serverseitig bereits vollständig (`BACKEND_REQUIREMENTS.md` §9): eine
+idempotente Zwei-Phasen-Rotation, bei der die alte Credential erst revoziert
+wird, sobald die neue tatsächlich einmal erfolgreich zur Authentisierung
+benutzt wurde — das ESP-seitige „stößt das von sich aus an" fehlte.
+
+Neu in `main/api_client.c`:
+
+- `enroll_if_needed()` liest jetzt zusätzlich `rotate_after` aus der
+  `DeviceCredentialResponse` und merkt es sich (`remember_rotate_after()`,
+  `nvs`-Schlüssel `rotate_at`, Sekunden seit Epoch). Vorher wurde nur
+  `credential` ausgewertet, der Rest der Antwort verworfen.
+- `rotate_if_due()`, aufgerufen in `synchronize()` direkt nach
+  `enroll_if_needed()` und vor den beiden Gate-Aufrufen: vergleicht
+  `time(NULL)` gegen `rotate_at` und ruft bei Fälligkeit
+  `POST /api/client/v1/installations/{id}/credentials/rotate` auf.
+- Durabel-vor-Senden, exakt dieselbe Disziplin wie beim Chunk-ACK in
+  `journal.c`: die `request_id` wird vor dem Netzwerkaufruf in NVS geschrieben
+  und committed (Schlüssel `rotate_req`), nicht danach. Ein Stromausfall
+  zwischen Versand und persistierter Antwort führt beim nächsten Zyklus zu
+  einem Retry mit **derselben** `request_id` statt einer neuen — der Server
+  behandelt eine wiederholte `request_id` als Replay und liefert dieselbe neue
+  Credential zurück, statt eine überzählige zu erzeugen. Welche Credential
+  dabei gerade in NVS steht (alte, falls der Absturz vor dem Umschalten lag;
+  neue, falls danach), authentisiert sich in beiden Fällen noch beim Server,
+  weil `rotate()` selbst die alte Credential nie revoziert — das übernimmt
+  erst deren tatsächliche Nutzung, die die beiden `gate()`-Aufrufe direkt im
+  Anschluss auf demselben `synchronize()`-Durchlauf liefern.
+- `rotate_at == 0` (nie rotiert oder ein nicht parsbarer Zeitstempel) zählt
+  bewusst als „fällig": ein Gerät, das den Fälligkeitszeitpunkt nicht kennt,
+  soll ihn eher zeitnah in Erfahrung bringen als unbegrenzt auf einer
+  alternden Credential zu verharren.
+- `rotate_after`/`expires_at` kommen vom Backend als `TIMEZONE=Europe/Berlin`-
+  Zeitstempel mit Offset (`config.py`), nicht als UTC/`Z`. Ein neuer, lokaler
+  `approx_unix_from_iso()` parst nur `YYYY-MM-DDTHH:MM` (Sekunden und Offset
+  ignoriert, dieselbe Toleranzentscheidung wie bei `history.c`s Anzeige-Parser)
+  und rechnet über dieselbe `days_from_civil`-Formel um — bei einem
+  ~60-Tage-Fenster ist ein Fehler von ein paar Stunden irrelevant. Eigenständig
+  gegen acht Fälle geprüft (Epoche, Rundung, 32-Bit-Grenze, leere/kaputte/
+  fehlende Eingabe, fehlendes `T` als Ablehnungskriterium) — 8/8 grün, nicht
+  eingecheckt, da reine Datumsarithmetik ohne ESP-IDF-Abhängigkeit und ohne
+  Bezug zum bestehenden `tools/`-Testbaum.
+- Zwei neue `diagnostic_log`-Ereignisse (`CREDENTIAL rotated`/
+  `CREDENTIAL rotate_pending`) neben den bestehenden `CONTRACT ok`/`fail`, rein
+  numerisch wie der Rest des Sinks.
+
+Nicht angetastet, weil außerhalb des Aufgabenzuschnitts und ein vorbestehender,
+unabhängiger Zustand: Eine bereits **komplett** entwertete Credential (z. B.
+serverseitig manuell widerrufen) hat weiterhin keinen geräteweiten
+Wiederherstellungspfad — der Bearer bleibt einfach dauerhaft `401`, nur der
+Chunk-Upload kennt mit `credential_revoked` schon eine benannte Ursache dafür.
+Ein erneutes Enrollment bräuchte einen neuen Einmalcode, den das Gerät nach
+dem ersten erfolgreichen Enrollment nicht mehr besitzt (`enroll_if_needed()`
+löscht ihn bewusst aus NVS). Das ist derselbe Fall, den der bereits
+dokumentierte spätere Systemaudit-Punkt in `task.md` ohnehin abdeckt — kein
+neuer Befund dieser Runde.
+
+`idf.py build` grün. Noch nicht am Gerät live beobachtet: eine reale Rotation
+bräuchte entweder 60 Tage Wartezeit oder eine künstlich vorgezogene
+`rotate_after` in der DB — beides außerhalb dieser Runde nicht praktikabel,
+dieselbe Einschränkung wie bei den bereits dokumentierten `backoff`/
+`immediate`/`never`/`user_action`-Retry-Pfaden. Verbleibt: Verschlüsselung,
+zuletzt priorisiert.
+
 ### 4. `GET /sessions/{id}/dashboard` — erledigt, 7. September, zweite Runde
 
 `fetch_session()` hängt jetzt `?surface=esp32_epaper` an, analog zum

@@ -76,6 +76,10 @@ static bool event_text(char *out, size_t capacity, diagnostic_event event,
         case DIAG_EVENT_CAPTURE_END:
             snprintf(out, capacity, "I CAPTURE ended ok=%d segments=%d",
                      first, second); break;
+        case DIAG_EVENT_CREDENTIAL_ROTATED:
+            snprintf(out, capacity, "I CREDENTIAL rotated http=%d", first); break;
+        case DIAG_EVENT_CREDENTIAL_ROTATE_FAILED:
+            snprintf(out, capacity, "W CREDENTIAL rotate_pending http=%d", first); break;
         default:
             return false;
     }

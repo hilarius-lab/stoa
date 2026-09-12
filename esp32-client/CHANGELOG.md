@@ -1,5 +1,31 @@
 # Änderungen
 
+## 2026-09-12 – Automatische Credentialrotation
+
+- Dritter der vier priorisierten H2-Teilpunkte (Retryklassen →
+  Stromausfalltests → Credentialrotation → Verschlüsselung). Serverseitig war
+  die idempotente Zwei-Phasen-Rotation längst vollständig
+  (`services/device_auth.py::rotate()`, `BACKEND_REQUIREMENTS.md` §9); der ESP
+  stieß sie nie von sich aus an.
+- `main/api_client.c::enroll_if_needed()` liest jetzt zusätzlich `rotate_after`
+  aus der Enrollment-Antwort und merkt es in NVS (`remember_rotate_after()`).
+  Neue `rotate_if_due()`, aufgerufen in `synchronize()` nach
+  `enroll_if_needed()` und vor den Gate-Aufrufen: vergleicht die Wanduhr gegen
+  `rotate_after` und ruft bei Fälligkeit
+  `POST /installations/{id}/credentials/rotate` auf.
+- Durabel-vor-Senden wie beim Chunk-ACK: die `request_id` wird vor dem
+  Netzwerkaufruf in NVS committed, sodass ein Stromausfall zwischen Versand und
+  persistierter Antwort beim nächsten Zyklus mit derselben `request_id`
+  retryt und über die serverseitige Idempotenz dieselbe neue Credential
+  zurückerhält statt eine überzählige zu erzeugen.
+- Neuer, lokaler `approx_unix_from_iso()` parst die `Europe/Berlin`-Zeitstempel
+  des Backends auf Minutengenauigkeit (Sekunden/Offset bewusst ignoriert, wie
+  `history.c`s Anzeige-Parser) — bei einem 60-Tage-Rotationsfenster
+  ausreichend. Eigenständig gegen acht Fälle geprüft (Epoche, Rundung,
+  32-Bit-Grenze, leere/kaputte/fehlende Eingabe), 8/8 grün, nicht eingecheckt.
+- `idf.py build` grün. `docs/BACKEND_REQUIREMENTS.md` §9 und
+  `docs/CLIENT_SERVER_STATE.md` Punkt 3 aktualisiert. Verbleibt: Verschlüsselung.
+
 ## 2026-09-12 – Uploadqueue-Stromausfalltests real zum Laufen gebracht
 
 - Zweiter der vier priorisierten H2-Teilpunkte (Retryklassen → Stromausfalltests
