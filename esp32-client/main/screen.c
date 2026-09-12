@@ -975,6 +975,14 @@ static void activate_settings(void) {
         shutdown_open = true;
         return;
     }
+    if (settings_focus == 7) {
+        /* Immediate, no confirm dialog: unlike restart/shut down this is
+         * fully safe and instantly reversible in effect (it only redraws
+         * what is already on screen), so it fires on the first press,
+         * exactly like screen_refresh()'s existing "epd-clear" USB command. */
+        screen_refresh();
+        return;
+    }
     ESP_LOGI("settings", "row %d is visible but not implemented in this slice",
              settings_focus);
 }
@@ -1224,6 +1232,23 @@ static void screen_task(void *unused) {
             message.state = previous_state;
             message.hide_question = false;
         }
+        /* An ambient status ping (clock, battery, queue counters) can now
+         * arrive before this boot's first real screen was ever chosen:
+         * clock_task's very first tick (synced==false, fires within
+         * milliseconds of clock_start()) is fast enough to win the race
+         * against app_main's own wifi/netif setup before it reaches its
+         * screen_show(SCREEN_WAKEUP/SCREEN_SETUP, ...) call. previous_state
+         * is still only its C default here, not an actual picture the panel
+         * ever showed this boot, and the very first message always forces a
+         * full base draw (see !initialized below) -- rendering that default
+         * would flash a real but meaningless screen before the true first one
+         * replaced it a moment later. Device-observed: the old "Verbinde..."
+         * text for one full refresh, right after removing the guaranteed-
+         * first SCREEN_CONNECTING call this used to mask the race with.
+         * Dropped outright, same as the setup-screen case below: there is
+         * nothing yet worth refreshing. */
+        if (message.ambient && !initialized)
+            continue;
         /* Setup has no status bar and its QR payload password lives only in
          * the explicit setup message. Re-rendering an ambient clock/queue
          * update as the previous setup state would therefore generate a new
@@ -1700,6 +1725,19 @@ static void screen_task(void *unused) {
          * refresh policy in docs/IMPLEMENTATION_DECISIONS.md. */
         if(!initialized || leave_start || setup_transition || message.force_full ||
            (partial_count>=PARTIAL_REFRESH_LIMIT && message.state!=SCREEN_RECORDING)) {
+            /* EPD_Display_Fast_Base (register 0xD7) was tried here in place of
+             * EPD_Display_Base to cut flashing on ordinary content
+             * transitions, and reverted the same day: real, device-observed
+             * corruption -- the wakeup picture stayed visibly superimposed
+             * over the dashboard afterward, because the fast waveform did not
+             * fully settle the panel to the new image even though the
+             * controller's own comparison RAM (and this file's `previous[]`)
+             * already recorded it as done. Every later partial update then
+             * left that stale ghosting untouched, since nothing about it
+             * looked "changed" to the software model -- a corrupted-looking
+             * settings/restart confirm view afterward was the same root cause
+             * downstream, not a second bug. Full detail in
+             * esp32-client/docs/IMPLEMENTATION_DECISIONS.md, "Full Refresh". */
             int64_t started = esp_timer_get_time();
             EPD_Init(); EPD_Display_Base(buffer); initialized=true; partial_count=0;
             ESP_LOGI("screen","full update state=%d in %lld ms",message.state,

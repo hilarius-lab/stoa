@@ -1,5 +1,87 @@
 # Änderungen
 
+## 2026-09-12 – Wakeup-Bild: Text-Rest entfernt, Flacker-Reduzierung versucht und wieder verworfen, manuelle Reinigung ergänzt
+
+Reale Sichtprobe des Nutzers am Wakeup-Bild deckte einen kurz sichtbaren
+Rest des alten „Verbinde …“-Bildschirms auf. Zwei getrennte, nacheinander
+gefundene Ursachen, beide am Gerät bestätigt:
+
+- **Fund 1:** `main.c`s `app_main()` rief ganz am Anfang noch unbedingt
+  `screen_show(SCREEN_CONNECTING, NULL)` auf — ein Rest aus der Zeit vor dem
+  Wakeup-Bild, beim damaligen Umbau übersehen (nur der zweite, spätere Aufruf
+  direkt vor dem Netzwerkstart wurde seinerzeit ersetzt). Entfernt.
+- **Fund 2, real erst nach Fund 1 sichtbar geworden:** Der Uhr-Task sendet
+  direkt nach `clock_start()` eine erste beiläufige Statusaktualisierung ohne
+  eigenen Bildschirmtyp; sie übernimmt dafür `previous_state`, dessen
+  C-Standardwert `SCREEN_CONNECTING` ist. Ohne den nun entfernten Fund-1-Aufruf
+  kann diese Nachricht das Display vor dem echten `screen_show(WAKEUP, …)`
+  erreichen und wird als „Full Update“ auf den Panel-Standardzustand
+  `SCREEN_CONNECTING` gezeichnet. Behoben: eine beiläufige Nachricht wird
+  verworfen, solange das Display noch keinen ersten echten Bildschirm gezeigt
+  hat (`main/screen.c::screen_task()`), dieselbe Begründung wie beim
+  bestehenden Einrichtungs-Sonderfall direkt darunter.
+- Über drei saubere Resets (RTS-Toggle, nicht `idf.py monitor`) bestätigt:
+  genau ein Full Refresh beim Hochfahren, kein Fehler, kein Absturz.
+
+Anschließend, auf Nutzerwunsch, die Frage aufgegriffen, ob jeder Full Refresh
+das volle, stark flackernde Wellenformregister braucht — und **noch am
+selben Tag wieder verworfen**, nachdem eine reale Sichtprobe einen echten
+Folgeschaden zeigte. Vollständige Begründung in
+`docs/IMPLEMENTATION_DECISIONS.md`, Abschnitt „Full Refresh“. Kurzfassung:
+
+- Versucht: `components/epaper/epaper_port.c`s bis dahin ungenutzte,
+  deutlich weniger flackernde Wellenform (`EPD_Display_Fast_Base`, Register
+  `0xD7`) für gewöhnliche Ansichtswechsel (Boot, Wakeup→Ready, Einrichtung),
+  über ein neues, orthogonal zu `force_full` gedachtes `screen_message`-Feld
+  `deep_clean`. Am Gerät zunächst vielversprechend gemessen: 683 ms statt
+  2563 ms pro Übergang, ohne sichtbares Schwarz-Weiß-Durchtreiben.
+- **Realer Folgeschaden, vom Nutzer gemeldet:** Das Wakeup-Bild blieb sichtbar
+  über der eigentlichen Nutzeroberfläche liegen, und der
+  Neustart-Bestätigungsdialog war unsichtbar (der Neustart selbst lief laut
+  Log trotzdem durch). Ursache vermutlich: die schnelle Wellenform setzt den
+  Bildwechsel auf diesem Panel nicht immer vollständig physisch durch, aber
+  sowohl die Controller-eigene Vergleich-RAM als auch `screen.c`s eigenes
+  `previous[]`-Modell halten das neue Bild danach für bereits angezeigt —
+  jede folgende Teilaktualisierung fasst dann nur noch inhaltlich geänderte
+  Bytes an und lässt den physisch zurückgebliebenen Rest des alten Bildes
+  unbegrenzt stehen, auch über spätere, eigentlich unbeteiligte Ansichten
+  hinweg (das erklärt vermutlich auch den unsichtbaren Neustart-Dialog als
+  Folgeschaden desselben verunreinigten Panelzustands, keine zweite,
+  unabhängige Ursache).
+- **Vollständig zurückgebaut:** `deep_clean` und die Fast/Thorough-Wahl in
+  `main/screen.c` entfernt; jeder Full Refresh nutzt wieder ausnahmslos die
+  gründliche `EPD_Display_Base`, exakt wie vor diesem Versuch.
+  `screen_refresh()`/`epd-clear` haben wieder ihr ursprüngliches Verhalten.
+- **Stehen geblieben, unabhängig vom verworfenen Versuch:** neuer Menüpunkt
+  „Bildschirm reinigen“ in den Einstellungen (`main/settings.c`:
+  `SETTINGS_ITEM_COUNT` 6→7, neue Zeile; `main/screen.c`: Fokus 7 ruft das
+  bestehende `screen_refresh()` auf, dieselbe Funktion, die auch der
+  serielle Diagnosebefehl `epd-clear` schon nutzte). Keine Bestätigung
+  nötig — die Aktion ist ungefährlich und sofort reversibel im Effekt
+  (zeichnet nur neu, was ohnehin schon zu sehen ist, jetzt wieder mit der
+  gründlichen Wellenform wie jeder andere Full Refresh auch). **Offen:** eine
+  reale Sichtprobe der Einstellungen-Zeile selbst über die Gerätetasten
+  (Navigation, Auslösen) — nur der zugrunde liegende `screen_refresh()`-Pfad
+  wurde über den USB-Befehl geprüft.
+- `idf.py build` grün. Nach dem Rückbau erneut geflasht; COM9 war dabei
+  zunächst durch zwei verwaiste `idf.py monitor`-Prozesse blockiert
+  (`taskkill /T /F`, wie schon einmal zuvor in diesem Projekt beobachtet),
+  danach über mehrere saubere RTS-Reset-Zyklen bestätigt: wieder durchgehend
+  volle, gründliche Wellenform, kein Stack-Overflow, kein sonstiger Fehler.
+- Kein neuer Host-UI-Test ergänzt: `tools/run_ui_test.sh` deckt `settings.c`
+  ab, ließ sich in dieser Sitzung aber nicht ausführen (MinGW/Windows-gcc
+  kennt `setenv` ohne weiteres nicht, ein vorbestehendes, von dieser Änderung
+  unabhängiges Umgebungsproblem des Skripts unter Windows statt einer echten
+  POSIX-Umgebung).
+
+**Lehre für künftige Refresh-Experimente auf diesem Panel:** ein Full Refresh
+über die Fast-Wellenform ist nicht als bloß „etwas unschärfer, aber gleich
+zuverlässig" zu behandeln — ein fehlgeschlagener physischer Bildwechsel bleibt
+für die Software unsichtbar (beide RAM-Modelle melden Erfolg) und wirkt sich
+erst über spätere, scheinbar unabhängige Teilaktualisierungen aus. Ein
+erneuter Versuch bräuchte mindestens eine reale Sichtprobe unmittelbar nach
+dem allerersten Fast-Refresh.
+
 ## 2026-09-12 – Preloading/Caching für Detailansichten
 
 - Neuer kleiner RAM-Cache (`entity_cache`, 8 Plätze à `ENTITY_MAX`,

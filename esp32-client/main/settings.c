@@ -46,6 +46,7 @@ int settings_draw(unsigned char *canvas, int top, int bottom, int scroll,
         {"Zeitzone", "Europe/Berlin"},
         {"Neustart", NULL},
         {"Herunterfahren", NULL},
+        {"Bildschirm reinigen", NULL},
     };
     static const char title[] = "Einstellungen";
     text_draw(canvas, &text_font_title, LEFT + PAD, top + 4,

@@ -67,6 +67,41 @@ Priorität zuerst). Bei jedem neuen Task-Zyklus wird oben begonnen.
   realer Test des 60-Sekunden-Fallbacks (Server oder WLAN absichtlich
   unerreichbar machen).
 
+  **Nachtrag 2026-09-12, reale Sichtprobe fand einen echten Rest-Fehler,
+  behoben.** Die erste Sichtprobe zeigte kurz einen alten „Verbinde …“-
+  Bildschirm vor dem Wakeup-Bild. Ursache waren zwei getrennte Funde: ein
+  übersehener zweiter `screen_show(SCREEN_CONNECTING, NULL)`-Aufruf ganz am
+  Anfang von `app_main()` (Rest aus der Zeit vor dem Wakeup-Bild), und —
+  erst nach dessen Entfernen sichtbar geworden — eine beiläufige
+  Statusaktualisierung des Uhr-Tasks, die das Display vor dem echten
+  Wakeup-Aufruf erreichen und auf `previous_state`s C-Standardwert
+  (`SCREEN_CONNECTING`) gezeichnet werden konnte. Beide behoben, über drei
+  saubere Resets bestätigt: genau ein Full Refresh beim Hochfahren.
+
+  Dabei auf Nutzerwunsch zusätzlich versucht, das allgemeine
+  Full-Refresh-Flackern zu reduzieren (schnelle statt volle Wellenform für
+  gewöhnliche Ansichtswechsel) — **noch am selben Tag wieder verworfen.**
+  Reale Sichtprobe zeigte einen echten Folgeschaden: das Wakeup-Bild blieb
+  sichtbar über der eigentlichen Nutzeroberfläche liegen, und der
+  Neustart-Bestätigungsdialog war unsichtbar (der Neustart selbst lief laut
+  Log durch). Die schnelle Wellenform hatte den Bildwechsel auf diesem Panel
+  offenbar nicht immer vollständig physisch durchgesetzt, während sowohl die
+  Controller- als auch die Software-Vergleichsdaten das neue Bild bereits als
+  angezeigt führten — jede folgende Teilaktualisierung ließ den physisch
+  zurückgebliebenen Rest dadurch unbegrenzt stehen. Vollständig
+  zurückgebaut; jeder Full Refresh nutzt wieder ausnahmslos die gründliche
+  Wellenform wie vor diesem Versuch. Volle Begründung und die Lehre daraus in
+  `docs/IMPLEMENTATION_DECISIONS.md`, Abschnitt „Full Refresh“.
+
+  Stehen geblieben, unabhängig vom verworfenen Versuch: ein neuer
+  Einstellungen-Menüpunkt „Bildschirm reinigen“ für eine gezielte,
+  gründliche Reinigung auf Knopfdruck (ruft dieselbe Funktion wie der
+  bestehende USB-Befehl `epd-clear` auf). Details in
+  `esp32-client/CHANGELOG.md`. **Weiterhin offen:** reale Sichtprobe des
+  gepackten Bildes selbst, der 60-Sekunden-Fallback-Test, und eine reale
+  Sichtprobe des Einstellungen-Menüpunkts über die Gerätetasten (nur der
+  zugrunde liegende Reinigungspfad wurde über den USB-Befehl geprüft).
+
 - [ ] **Priorität 2 — Attention-Segmente der lokalen Uploadqueue im
   Verlauf verwalten.** Segmente im lokalen Journal-Zustand `attention`
   (z. B. der Session-654-Fall `server_conflict`, bisher nur über die

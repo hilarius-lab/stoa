@@ -5,7 +5,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define SETTINGS_ITEM_COUNT 6
+#define SETTINGS_ITEM_COUNT 7
 
 typedef struct {
     const char *firmware;
@@ -24,8 +24,9 @@ typedef struct {
     bool space_block;
 } settings_diagnostics;
 
-/* Main shell. Focus 0 is Back, 1..6 are Add WLAN, Diagnostics, SD logs,
- * Timezone, Restart and Shut down. Returns SETTINGS_ITEM_COUNT. */
+/* Main shell. Focus 0 is Back, 1..7 are Add WLAN, Diagnostics, SD logs,
+ * Timezone, Restart, Shut down and Clean the display. Returns
+ * SETTINGS_ITEM_COUNT. */
 int settings_draw(unsigned char *canvas, int top, int bottom, int scroll,
                   int focus, bool network_connected, bool logs_available);
 int settings_scroll_for(int top, int bottom, int focus, int current_scroll);

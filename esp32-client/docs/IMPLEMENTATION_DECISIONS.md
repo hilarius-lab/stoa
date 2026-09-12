@@ -510,6 +510,65 @@ halbe Sekunde, unabhängig von der Fläche.
   Minuten bei Zimmertemperatur zeigte kaum Ghosting, ist aber keine Grundlage
   für eine Dauerbetriebsaussage.
 
+**Nachtrag 2026-09-12 — doppelter Full Refresh beim Hochfahren behoben, ein
+Versuch mit schnellerer Wellenform noch am selben Tag wieder verworfen.**
+Reale Sichtprobe des Nutzers am Wakeup-Bild deckte zunächst einen doppelten
+Full Refresh beim Hochfahren auf: ein
+vergessener, unbedingter `screen_show(SCREEN_CONNECTING, NULL)`-Aufruf ganz am
+Anfang von `app_main()` (Rest aus der Zeit vor dem Wakeup-Bild, siehe
+Prioritätspunkt 1 in `task.md`), danach ein zweiter für das eigentliche
+Wakeup-Bild. Entfernen des ersten Aufrufs deckte einen zweiten, unabhängigen
+Fund auf: eine beiläufige Statusaktualisierung (Uhr-Task, erster Tick direkt
+nach `clock_start()`, deutlich vor dem eigentlichen `screen_show(WAKEUP,...)`)
+kann jetzt das allererste Display-Nachricht sein und wird dann fälschlich mit
+dem C-Standardwert von `previous_state` (`SCREEN_CONNECTING`) gezeichnet, weil
+dieser Fall vorher durch den nun entfernten ersten Aufruf verlässlich
+verdeckt war. Behoben: eine beiläufige Nachricht wird verworfen, solange das
+Display noch keinen ersten echten Bildschirm gezeigt hat (`main/screen.c`,
+`screen_task()`) — dieselbe Begründung wie beim bestehenden
+Einrichtungs-Sonderfall direkt darunter.
+
+Auf Nutzerwunsch anschließend eine zweite, unabhängige Frage aufgegriffen: ob
+das ausnahmslos volle, stark flackernde Refresh-Verfahren für **jeden**
+Full Refresh nötig ist. Ein Versuch mit dem Treiber-eigenen, ungenutzten
+schnelleren Wellenformregister (`components/epaper/epaper_port.c`s
+`EPD_Display_Fast_Base`, `0xD7` statt `0xF7`) für gewöhnliche
+Ansichtswechsel (Boot, Wakeup→Ready, Einrichtung) wurde **noch am selben Tag
+wieder verworfen**: reale Sichtprobe des Nutzers zeigte danach das Wakeup-Bild
+sichtbar über der eigentlichen Nutzeroberfläche liegend, und den
+Neustart-Bestätigungsdialog unsichtbar (der Neustart selbst lief laut Log
+trotzdem durch). Die schnelle Wellenform hat den Bildwechsel auf diesem Panel
+offenbar nicht vollständig physisch durchgesetzt; die Controller-eigene
+Vergleich-RAM (und `screen.c`s eigenes `previous[]`) hielten das neue Bild
+danach trotzdem für bereits angezeigt, sodass jede folgende Teilaktualisierung
+nur noch tatsächlich *inhaltlich* geänderte Bytes anfasste — der physisch
+zurückgebliebene Rest des alten Bildes blieb dadurch unbegrenzt stehen, auch
+über nachfolgende, eigentlich unbeteiligte Ansichten hinweg (das erklärt
+vermutlich auch den unsichtbaren Neustart-Dialog: derselbe verunreinigte
+Panelzustand, keine zweite, unabhängige Ursache). Der bisherige Satz „das
+Aufräumen gegen Ghosting ist dort geschenkt" gilt also unverändert weiter:
+**jeder Full Refresh bleibt bei der gründlichen, vollständig flackernden
+Wellenform (`EPD_Display_Base`)**, ausnahmslos. `main/screen.c`s
+`screen_message`-Feld `deep_clean` und die Fast/Thorough-Fallunterscheidung
+wurden vollständig zurückgebaut; `screen_refresh()`/`epd-clear` haben wieder
+exakt ihr ursprüngliches Verhalten.
+
+Stehen geblieben ist nur der neue, ausdrücklich vom Nutzer ausgelöste
+Menüpunkt „Bildschirm reinigen" in den Einstellungen (`main/settings.c`,
+`SETTINGS_ITEM_COUNT` 6→7, Fokus 7) — er ruft dieselbe bestehende
+`screen_refresh()` wie der serielle Diagnosebefehl `epd-clear` auf und ist
+davon unabhängig ein sinnvoller eigener Auslöser (z. B. wenn eine Ansicht
+lange offen bleibt, bevor der Partial-Sicherheitsnetz-Zähler selbst greift).
+
+**Lehre für künftige Refresh-Experimente auf diesem Panel:** Ein Full Refresh
+über die Fast-Wellenform ist auf diesem Panel nicht als bloß „etwas
+unschärfer, aber gleich zuverlässig" zu behandeln — ein fehlgeschlagener
+physischer Bildwechsel bleibt für die Software unsichtbar (beide RAM-Modelle
+melden Erfolg) und wirkt sich erst über spätere, scheinbar unabhängige
+Teilaktualisierungen aus. Ein erneuter Versuch bräuchte mindestens eine reale
+Sichtprobe unmittelbar nach dem allerersten Fast-Refresh, nicht erst nach
+mehreren weiteren Bildschirmwechseln.
+
 ## Schriftgrößen und Strichstärke
 
 Am Gerät geprüft: Vorschauschnitt DejaVu Sans regular 16 px ist gut lesbar,

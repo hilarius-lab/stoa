@@ -362,7 +362,16 @@ void app_main(void) {
     usb_serial_jtag_vfs_use_driver();
     ESP_ERROR_CHECK(nvs_flash_init()); // Never silently erase stored credentials.
     screen_start();
-    screen_show(SCREEN_CONNECTING, NULL);
+    /* No screen_show() here on purpose. This used to draw the plain
+     * SCREEN_CONNECTING screen unconditionally, before setup vs. normal boot
+     * is even known below -- a real leftover from before the wakeup image
+     * existed. It cost a full, flashing e-paper refresh into "Verbinde..."
+     * text that the WAKEUP path (or SCREEN_SETUP for the portal) immediately
+     * overwrote with a second full refresh a moment later: two flashes and a
+     * stray legacy screen for information that was already stale the instant
+     * it appeared. The panel now simply keeps showing whatever was on it
+     * before this boot until the branch below knows which real first screen
+     * to show, and draws that once. */
     gpio_set_direction(GPIO_NUM_0, GPIO_MODE_INPUT);
     gpio_set_pull_mode(GPIO_NUM_0, GPIO_PULLUP_ONLY);
     gpio_set_direction(GPIO_NUM_5, GPIO_MODE_INPUT);

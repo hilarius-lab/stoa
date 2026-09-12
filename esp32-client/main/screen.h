@@ -44,7 +44,9 @@ void screen_status_time(unsigned minutes_since_midnight, unsigned day,
 void screen_window_test(unsigned byte_x, unsigned y,
                         unsigned byte_w, unsigned h);
 /* Redraw the screen that is currently up with a full update, which also clears
- * accumulated ghosting. Used between windowed-update probes. */
+ * accumulated ghosting. Used between windowed-update probes, from the
+ * "epd-clear" USB command, and from the settings menu's "Bildschirm
+ * reinigen" row. */
 void screen_refresh(void);
 /* Diagnostic: draw the whole icon atlas and the five strip patterns as a grid,
  * so the symbols can be judged on the panel rather than on a monitor. */
