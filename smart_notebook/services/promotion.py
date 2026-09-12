@@ -180,8 +180,24 @@ async def promote_session_artifacts(session_id,mode='llm',artifact_ids=None):
                         list_cache[key]=existing[0] if existing else await create_list_record(topic_title,embedding_vector=embedding)
                     knowledge_id=await add_list_item_record(list_cache[key],content,embedding_vector=embedding,refresh_embedding=False)
                 else:
+                    # 'list_item_candidate' is the LLM proposal path's own reason
+                    # code (artifacts.py::_router_overrides now defers every
+                    # list_candidate/list_item_candidate segment segmentation
+                    # already identified to the LLM instead of guessing rules
+                    # against isolated text -- see that function's comment).
+                    # Without it here, every LLM-classified list item fell back
+                    # to explicit_target=False and resolve_list_target()'s
+                    # semantic-similarity search over ALL lists, using the
+                    # item's own content rather than its already-linked
+                    # topic_title. Real case, session 1388 on 2026-09-12:
+                    # "Kette für nach dem M2" was correctly linked to the topic
+                    # "Geplante Ausgaben", but its own wording matched an
+                    # unrelated, older "nach dem M2" list closely enough to be
+                    # filed there instead. topic_title here already reflects
+                    # segmentation's and the LLM's agreement on the target list;
+                    # trust it the same way an explicit rule match would be.
                     explicit_target=bool(classification_validated and set(reason_codes or []) & {
-                        'explicit_list_target','implicit_list_context'
+                        'explicit_list_target','implicit_list_context','list_item_candidate'
                     })
                     result=await process_list_item_candidate(topic_title,content,explicit_target=explicit_target)
                     knowledge_id=result.get('item_id') or result.get('updated_item_id') or result.get('existing_item_id')

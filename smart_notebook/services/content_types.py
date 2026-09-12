@@ -138,10 +138,32 @@ def validate_classification(source_text, classification, artifact_content=None):
             errors.append("list_requires_explicit_content")
     elif candidate == "list_item":
         items = data.get("items")
-        if not isinstance(data.get("target_list"), str) or not data["target_list"].strip():
-            errors.append("list_item_requires_target")
-        if not isinstance(items, list) or not items or any(not isinstance(item, str) or not item.strip() for item in items):
+        if items is None:
+            # The rule router (semantic_router.py) always proposes every item
+            # enumerated in one sentence together in a single call, filling
+            # `normalized_data.target_list`/`items` itself -- that shape is
+            # validated below when `items` is present. An LLM-proposed single
+            # list_item (one call per segmentation-identified
+            # list_item_candidate segment, see artifacts.py's
+            # _router_overrides) naturally has no batch to describe; it
+            # carries its one item as `content`/artifact_content, and its
+            # target list as the operation's own `topic_titles`, which this
+            # generic classification validator never sees (only artifacts.py
+            # does). Demanding a normalized_data target here regardless is
+            # demanding a field this call shape has no reason to produce, and
+            # the model's actual choice of key for it proved unstable across
+            # calls (`parent_list`, then nothing at all) -- silently dropping
+            # every such item either way. The real gate against an unlinked
+            # item is promote_session_artifacts()'s own `not topic_title`
+            # check at promotion time; this only needs the item's text itself,
+            # already required generically above (`artifact_content_empty`).
+            # Real case: session 1388 on 2026-09-12, three items open in the
+            # transcript, zero ever created.
+            pass
+        elif not isinstance(items, list) or not items or any(not isinstance(item, str) or not item.strip() for item in items):
             errors.append("list_item_requires_items")
+        if items is not None and (not isinstance(data.get("target_list"), str) or not data["target_list"].strip()):
+            errors.append("list_item_requires_target")
     elif candidate == "decision" and data.get("decision_status") not in {"open", "decided"}:
         errors.append("decision_requires_status")
 

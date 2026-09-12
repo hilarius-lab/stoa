@@ -341,6 +341,25 @@ def _router_overrides(session_id,segments,topics,started_at):
             continue
         route=route_artifact(text,started_at,topic_titles);valid,errors=validate_route(text,route)
         if not valid or route['confidence']<0.85 or route['candidate_type']=='question':continue
+        if segment_type in ("list_candidate","list_item_candidate") and route['candidate_type'] not in ("list","list_item"):
+            # Segmentation already decided this segment names or enumerates a
+            # list -- that decision came from run_text_processing_once()'s own
+            # LLM pass, which sees the segment in its full surrounding context.
+            # route_artifact()'s list detection only recognises two fixed
+            # phrasings ("erstelle Liste über ...", the "nach dem X will ich Y,
+            # schreib das auf eine Liste" pair); any other list-naming
+            # sentence -- "nenne die Liste X", say -- misses both and falls
+            # through to the generic task/fact heuristics below with no idea
+            # a list is even in play. Real case, session 1388 on 2026-09-12:
+            # "... nenne die Liste Ausgaben, soll eine Computertastatur ...
+            # eingetragen werden" scored 0.86 as a bare task purely because it
+            # contains "soll", pre-empting the LLM step entirely and orphaning
+            # its three list_item_candidate siblings (each just a bare noun
+            # phrase alone, with no list context left to anchor them, and
+            # silently dropped there). Deferring to _propose_artifact_operations
+            # instead trusts the segmentation, which is exactly why that call
+            # receives each segment's segment_type as "type" in its context.
+            continue
         handled.add(segment_id);route['validated']=True;route['decision_source']='rules'
         if route['candidate_type']=='list_item':
             target=route['normalized_data']['target_list'];new_topics.append({"title":target,"description":"Explizit genannte Zielliste.","confidence":route['confidence']})

@@ -79,6 +79,58 @@ def main():
     invalid_question = {"candidate_type":"question","alternative_type":None,"normalized_data":{},
         "evidence_spans":["Was fehlt?"],"missing_fields":[],"confidence":1.0,"abstain":False}
     assert "question_uses_separate_store" in validate_classification("Was fehlt?", invalid_question, "Was fehlt?")
+
+    # Regression, real session 1388 on 2026-09-12: a list_candidate segment
+    # naming its list as "nenne die Liste Ausgaben" (route_artifact's list
+    # detection only recognises "erstelle Liste über ..." and the "nach dem X
+    # will ich Y, schreib das auf eine Liste" pair, missing this phrasing
+    # entirely) scored 0.86 as a bare task purely because it contains "soll",
+    # short-circuiting straight past the LLM step that would have understood
+    # it. Its three list_item_candidate siblings -- each just a bare noun
+    # phrase alone, with the list-naming sentence's context gone -- then had
+    # nothing to anchor them and were silently dropped. Fixed in
+    # _router_overrides(): when route_artifact()'s guess disagrees with what
+    # segmentation already decided for a list_candidate/list_item_candidate
+    # segment, defer to the LLM step instead of trusting the narrower regex.
+    list_bug_segments = [
+        (1147, "Auf die Liste von Ausgaben, die ich später einmal tätigen will, "
+               "also nenne die Liste Ausgaben, soll eine Computertastatur und eine Kette "
+               "für nach dem M2 und eine Hose von Shaping the New Tomorrow eingetragen werden.",
+         "list_candidate", 0.9),
+        (1148, "eine Computertastatur", "list_item_candidate", 0.9),
+        (1149, "eine Kette für nach dem M2", "list_item_candidate", 0.9),
+        (1150, "eine Hose von Shaping the New Tomorrow", "list_item_candidate", 0.9),
+    ]
+    list_operations, list_handled, _ = _router_overrides(1, list_bug_segments, [], SESSION_TIME)
+    assert list_handled == set(), (list_handled, list_operations)
+    assert not any(op["artifact_type"] == "task" for op in list_operations), list_operations
+
+    # The same real session's actual downstream failure, one layer further
+    # in: even once the LLM correctly proposes a list_item per segment, each
+    # call naturally has no reason to invent the rule router's batch
+    # target_list/items shape around its own single item -- it carries the
+    # item as content and never even saw the other two items' text. The old
+    # validator demanded that batch shape unconditionally and dropped every
+    # such item; it must now accept a bare single item with no
+    # target_list/items/parent_list at all.
+    single_llm_item = {"candidate_type":"list_item","alternative_type":None,"normalized_data":{},
+        "evidence_spans":["eine Computertastatur"],"missing_fields":[],"confidence":0.95,
+        "decision_source":"llm","abstain":False}
+    assert not validate_classification(
+        "eine Computertastatur", single_llm_item, "Computertastatur"
+    ), validate_classification("eine Computertastatur", single_llm_item, "Computertastatur")
+    # The rule router's own batch shape (real items, real target) still
+    # validates; a batch claiming to have items but with an empty/invalid
+    # target or list must still fail exactly as before.
+    batch_item = {"candidate_type":"list_item","alternative_type":None,
+        "normalized_data":{"target_list":"Einkaufsliste","items":["Reis","Milch"]},
+        "evidence_spans":["Reis","Milch"],"missing_fields":[],"confidence":0.95,
+        "decision_source":"rules","abstain":False}
+    assert not validate_classification("Reis und Milch auf die Einkaufsliste.", batch_item, "Reis, Milch")
+    broken_batch_item = {**batch_item,"normalized_data":{"items":["Reis","Milch"]}}
+    assert "list_item_requires_target" in validate_classification(
+        "Reis und Milch auf die Einkaufsliste.", broken_batch_item, "Reis, Milch")
+
     print("B6 SEMANTIC ROUTER GOLD TEST: PASS")
 
 
