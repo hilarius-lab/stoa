@@ -24,6 +24,15 @@ void api_client_request_sync(void);
  * screen_entity_received; the request itself is queued for the worker, because
  * HTTP belongs to the worker and drawing belongs to the display task. */
 void api_client_open_entity(const char *type, const char *id);
+/* Queue a background, opportunistic fetch of one entity for the detail-view
+ * cache — issued by the display task for cards already visible on a freshly
+ * accepted dashboard snapshot, so opening one later needs no round trip. Never
+ * competes with a reader's own pending request: dropped silently if the queue
+ * is full or the entity is already queued, and only actually sent once no
+ * explicit fetch (entity/history/session) is waiting. Delivered through
+ * screen_entity_preload_received, never through screen_entity_received --
+ * a preload must not overwrite what the reader is looking at right now. */
+void api_client_preload_entity(const char *type, const char *id);
 /* Mark an open task complete. The updated task (no longer carrying an
  * action) comes back through the same screen_entity_received the detail view
  * already redraws from. */

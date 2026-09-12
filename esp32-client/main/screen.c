@@ -148,6 +148,23 @@ static char *entity_json;
 /* Written by the upload worker, read by the display task while drawing: the
  * same handover the snapshot needs, and it needs the same lock. */
 static SemaphoreHandle_t entity_lock;
+/* Preloaded detail bodies, keyed by (type,id) -- filled by background
+ * preload requests for cards on a freshly accepted snapshot and refreshed by
+ * every real fetch, including a completed task's own response. A detail open
+ * that hits a fresh slot here shows at once, no server round trip. Freshness
+ * reuses the same server-declared horizon the snapshot itself ages against
+ * (cache_max_age_s / HEADER_STALE_FALLBACK_S below) rather than a separate,
+ * second staleness policy. */
+#define ENTITY_CACHE_SLOTS 8
+typedef struct {
+    bool valid;
+    char type[32];
+    char id[40];
+    char *json;
+    int64_t fetched_at_us;
+} entity_cache_slot;
+static entity_cache_slot entity_cache[ENTITY_CACHE_SLOTS];
+static SemaphoreHandle_t entity_cache_lock;
 static bool detail_open, detail_waiting;
 static int detail_line;
 /* The id the detail view is currently showing, captured once when it opens —
@@ -307,6 +324,89 @@ static bool entity_take(char *into, size_t capacity) {
     snprintf(into, capacity, "%s", entity_json);
     xSemaphoreGive(entity_lock);
     return into[0] != 0;
+}
+
+/* How old a cached (or displayed) snapshot/detail is allowed to get before it
+ * no longer counts as current -- the same number the header's own staleness
+ * mark uses, right down to the fallback for a server that declared none. */
+static int64_t entity_cache_horizon_us(void) {
+    unsigned limit_s = atomic_load(&cache_max_age_s);
+    if (!limit_s) limit_s = HEADER_STALE_FALLBACK_S;
+    return (int64_t)limit_s * 1000000LL;
+}
+
+/* Inserts or refreshes the slot for (type,id); evicts the stalest slot once
+ * every slot is in use. A slot always belongs to exactly one (type,id) at a
+ * time, so a hit can never hand back the wrong entity's content. */
+static void entity_cache_put(const char *type, const char *id, const char *json) {
+    if (!type || !type[0] || !id || !id[0] || !json || !entity_cache_lock) return;
+    if (xSemaphoreTake(entity_cache_lock, pdMS_TO_TICKS(200)) != pdTRUE) return;
+    int slot = -1, oldest = 0;
+    for (int i = 0; i < ENTITY_CACHE_SLOTS; i++) {
+        if (entity_cache[i].valid && strcmp(entity_cache[i].type, type) == 0 &&
+            strcmp(entity_cache[i].id, id) == 0) { slot = i; break; }
+        if (!entity_cache[i].valid && slot < 0) slot = i;
+        if (entity_cache[i].fetched_at_us < entity_cache[oldest].fetched_at_us) oldest = i;
+    }
+    if (slot < 0) slot = oldest;
+    if (entity_cache[slot].json) {
+        snprintf(entity_cache[slot].type, sizeof(entity_cache[slot].type), "%s", type);
+        snprintf(entity_cache[slot].id, sizeof(entity_cache[slot].id), "%s", id);
+        snprintf(entity_cache[slot].json, ENTITY_MAX, "%s", json);
+        entity_cache[slot].fetched_at_us = esp_timer_get_time();
+        entity_cache[slot].valid = true;
+    }
+    xSemaphoreGive(entity_cache_lock);
+}
+
+/* Copies a fresh cached body into `out`, or reports a miss -- both for an
+ * unknown (type,id) and for one that fell outside the freshness horizon. A
+ * stale slot is left in place rather than cleared: it may still be worth
+ * something to entity_cache_put's eviction choice, and clearing it here would
+ * just race the very preload that is likely already queued to replace it. */
+static bool entity_cache_get(const char *type, const char *id, char *out, size_t cap) {
+    if (!type || !id || !out || !entity_cache_lock) return false;
+    bool hit = false;
+    if (xSemaphoreTake(entity_cache_lock, pdMS_TO_TICKS(200)) == pdTRUE) {
+        int64_t horizon = entity_cache_horizon_us();
+        int64_t now = esp_timer_get_time();
+        for (int i = 0; i < ENTITY_CACHE_SLOTS; i++) {
+            if (!entity_cache[i].valid || strcmp(entity_cache[i].type, type) != 0 ||
+                strcmp(entity_cache[i].id, id) != 0) continue;
+            if (now - entity_cache[i].fetched_at_us < horizon) {
+                snprintf(out, cap, "%s", entity_cache[i].json);
+                hit = true;
+            }
+            break;
+        }
+        xSemaphoreGive(entity_cache_lock);
+    }
+    return hit;
+}
+
+/* Whether (type,id) is already cached and fresh -- used only to decide
+ * whether a background preload is even worth queuing, so it never needs a
+ * buffer to copy the body into. */
+static bool entity_cache_has_fresh(const char *type, const char *id) {
+    if (!type || !id || !entity_cache_lock) return false;
+    bool fresh = false;
+    if (xSemaphoreTake(entity_cache_lock, pdMS_TO_TICKS(200)) == pdTRUE) {
+        int64_t horizon = entity_cache_horizon_us();
+        int64_t now = esp_timer_get_time();
+        for (int i = 0; i < ENTITY_CACHE_SLOTS; i++) {
+            if (entity_cache[i].valid && strcmp(entity_cache[i].type, type) == 0 &&
+                strcmp(entity_cache[i].id, id) == 0) {
+                fresh = now - entity_cache[i].fetched_at_us < horizon;
+                break;
+            }
+        }
+        xSemaphoreGive(entity_cache_lock);
+    }
+    return fresh;
+}
+
+void screen_entity_preload_received(const char *type, const char *id, const char *json) {
+    entity_cache_put(type, id, json);
 }
 
 /* The answer is already durable before this runs. Remove only the answered
@@ -499,20 +599,38 @@ static void open_detail(void) {
                  plan.focus_action);
         return;
     }
-    if (entity_json && entity_lock &&
-        xSemaphoreTake(entity_lock, pdMS_TO_TICKS(200)) == pdTRUE) {
-        entity_json[0] = 0;
-        xSemaphoreGive(entity_lock);
-    }
     detail_open = true;
-    detail_waiting = true;
     detail_line = 0;
     detail_action_focus = 0;
     detail_list_mode = strcmp(plan.focus_type, "list") == 0;
     detail_list_initialized = false;
     detail_list_focus = detail_list_scroll = detail_list_count = 0;
     snprintf(detail_entity_id, sizeof(detail_entity_id), "%s", plan.focus_id);
-    api_client_open_entity(plan.focus_type, plan.focus_id);
+    /* A fresh preload already answers this exact question: show it at once,
+     * no server round trip, no "wird geladen ..." flash. A miss falls back to
+     * the same synchronous fetch this always did. */
+    char *cached = heap_caps_malloc(ENTITY_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    bool hit = cached && entity_cache_get(plan.focus_type, plan.focus_id, cached, ENTITY_MAX);
+    if (hit && entity_json && entity_lock &&
+        xSemaphoreTake(entity_lock, pdMS_TO_TICKS(200)) == pdTRUE) {
+        snprintf(entity_json, ENTITY_MAX, "%s", cached);
+        xSemaphoreGive(entity_lock);
+        detail_waiting = false;
+        char question_id[40];
+        if (dashboard_entity_capture_context(cached, question_id, sizeof(question_id)))
+            recorder_set_clarification_context(question_id);
+        else
+            recorder_set_clarification_context(NULL);
+    } else {
+        if (entity_json && entity_lock &&
+            xSemaphoreTake(entity_lock, pdMS_TO_TICKS(200)) == pdTRUE) {
+            entity_json[0] = 0;
+            xSemaphoreGive(entity_lock);
+        }
+        detail_waiting = true;
+        api_client_open_entity(plan.focus_type, plan.focus_id);
+    }
+    free(cached);
 }
 
 /* --- history view --------------------------------------------------------- */
@@ -1023,6 +1141,42 @@ static void draw_qr(esp_qrcode_handle_t qr) {
     }
 }
 
+/* Queues a background preload for every card on the just-accepted snapshot
+ * that opens through the entity route and is not already cached and fresh.
+ * Runs once per accepted snapshot, not per redraw -- apply_pending_snapshot()
+ * only reaches this after actually consuming a pending one. Session cards
+ * (`open_session`) are deliberately left out: that path fetches a whole
+ * session dashboard, not an ENTITY_MAX-sized entity, and is not what
+ * task.md's "Detailansicht" scope or main/detail.c cover. */
+static void preload_visible_entities(void) {
+    if (!snapshot_json) return;
+    /* dashboard_plan is close to 1 KB (48 rows plus the identity fields); the
+     * display task's own stack is a scarce 4096 bytes shared with drawing and
+     * cJSON's own frames. A stack overflow here was real and device-observed
+     * (right after the first "dashboard: snapshot accepted" of a boot, in
+     * exactly this function) before this moved to a single heap instance,
+     * reused across every dashboard_walk call the same way the rest of this
+     * file already does for anything this size (entity_json, snapshot_json,
+     * the 48000-byte framebuffers). */
+    dashboard_plan *plan = heap_caps_malloc(sizeof(dashboard_plan), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!plan) return;
+    dashboard_surface surfaces[] = {DASHBOARD_SURFACE_MAIN, DASHBOARD_SURFACE_TASKS,
+                                    DASHBOARD_SURFACE_LISTS};
+    for (unsigned s = 0; s < sizeof(surfaces) / sizeof(surfaces[0]); s++) {
+        dashboard_walk(NULL, snapshot_json, BODY_TOP, BODY_BOTTOM, 0, -1, plan, surfaces[s]);
+        int focusable = plan->focusable;
+        for (int i = 0; i < focusable; i++) {
+            dashboard_walk(NULL, snapshot_json, BODY_TOP, BODY_BOTTOM, 0, i, plan, surfaces[s]);
+            if (!plan->focus_has_entity) continue;
+            if (strcmp(plan->focus_action, "open_entity") != 0 &&
+                strcmp(plan->focus_action, "open_clarification") != 0) continue;
+            if (entity_cache_has_fresh(plan->focus_type, plan->focus_id)) continue;
+            api_client_preload_entity(plan->focus_type, plan->focus_id);
+        }
+    }
+    free(plan);
+}
+
 static void apply_pending_snapshot(void) {
     if (!atomic_exchange(&snapshot_pending, false) || !snapshot_json ||
         !pending_snapshot_json || !snapshot_lock) return;
@@ -1047,6 +1201,7 @@ static void apply_pending_snapshot(void) {
     atomic_store(&snapshot_empty, empty);
     atomic_store(&snapshot_at_us, received_at);
     atomic_store(&snapshot_seen, true);
+    preload_visible_entities();
 }
 
 static void screen_task(void *unused) {
@@ -1658,9 +1813,17 @@ void screen_start(void) {
     entity_lock = xSemaphoreCreateMutex();
     history_lock = xSemaphoreCreateMutex();
     session_lock = xSemaphoreCreateMutex();
+    entity_cache_lock = xSemaphoreCreateMutex();
+    bool cache_ok = entity_cache_lock != NULL;
+    for (int i = 0; i < ENTITY_CACHE_SLOTS; i++) {
+        entity_cache[i].json = heap_caps_malloc(ENTITY_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!entity_cache[i].json) cache_ok = false;
+    }
     if (!snapshot_json || !pending_snapshot_json || !entity_json || !history_json || !session_json ||
         !snapshot_lock || !entity_lock || !history_lock || !session_lock)
         ESP_LOGE("screen", "no memory for the dashboard snapshot");
+    if (!cache_ok)
+        ESP_LOGE("screen", "no memory for the entity detail cache");
     /* Room for a few messages. It used to be a single slot written with
      * xQueueOverwrite, which was fine while the only producers were rare state
      * changes: a newer screen simply replaced an older one. Once the clock and
@@ -1714,6 +1877,20 @@ void screen_entity_received(const char *json) {
         xSemaphoreTake(entity_lock, pdMS_TO_TICKS(500)) == pdTRUE) {
         snprintf(entity_json, ENTITY_MAX, "%s", json ? json : "");
         xSemaphoreGive(entity_lock);
+    }
+    /* Warms the cache from every real fetch, not only from a preload: a
+     * completed task's response is exactly this same call, and without this
+     * a re-opened detail would keep showing the pre-completion snapshot until
+     * the next dashboard poll evicted it. */
+    if (json) {
+        cJSON *root = cJSON_Parse(json);
+        if (cJSON_IsObject(root)) {
+            const cJSON *type_v = cJSON_GetObjectItemCaseSensitive(root, "type");
+            const cJSON *id_v = cJSON_GetObjectItemCaseSensitive(root, "id");
+            if (cJSON_IsString(type_v) && cJSON_IsString(id_v))
+                entity_cache_put(type_v->valuestring, id_v->valuestring, json);
+        }
+        cJSON_Delete(root);
     }
     detail_waiting = false;
     char question_id[40];

@@ -1,5 +1,60 @@
 # Änderungen
 
+## 2026-09-12 – Preloading/Caching für Detailansichten
+
+- Neuer kleiner RAM-Cache (`entity_cache`, 8 Plätze à `ENTITY_MAX`,
+  `screen.c`) für Entity-Detailkörper, Schlüssel `(type, id)`. Freshness
+  teilt sich mit der bestehenden Snapshot-Alterung genau denselben Wert
+  (`cache_max_age_s`, serverseitig `limits.dashboard_cache_max_age_seconds`,
+  Fallback `HEADER_STALE_FALLBACK_S`) statt einer zweiten, eigenen
+  Staleness-Regel — bewusst, damit ein Detail nie länger als vertrauenswürdig
+  gilt als der Dashboard-Snapshot, aus dem seine Karte stammt.
+- Jede frisch angenommene Dashboard-Momentaufnahme (`apply_pending_snapshot()`
+  in `screen.c`, einmal pro echtem neuen Snapshot, nicht pro Redraw) läuft
+  jetzt über `preload_visible_entities()`: für jede fokussierbare Karte mit
+  Aktion `open_entity`/`open_clarification` über alle drei
+  Dashboard-Oberflächen (Haupt/Aufgaben/Listen), deren Cache-Eintrag fehlt
+  oder abgelaufen ist, wird ein Hintergrundabruf über die neue
+  `api_client_preload_entity()` in `api_client.c` angestoßen. Session-Karten
+  (`open_session`) bleiben bewusst ausgenommen — deren Route liefert ein
+  ganzes Session-Dashboard, kein `ENTITY_MAX`-großes Entity, außerhalb des
+  hier betroffenen `main/detail.c`-Zuschnitts.
+- Der Worker verarbeitet diese Warteschlange (`preload_queue`,
+  `PRELOAD_QUEUE_MAX=8`, nicht persistiert) mit niedrigster Priorität: ein
+  Job wird nur geholt, wenn kein expliziter Leser (`entity_pending`,
+  `history_pending`, `session_pending`) wartet, und erst nach `synchronize()`
+  in der ohnehin schon offenen Funkfenster-Runde — kein zusätzliches
+  Aufwachen des Radios. Ein Treffer landet über die neue
+  `screen_entity_preload_received()` ausschließlich im Cache, nie in der
+  gerade angezeigten `entity_json`-Kopie: eine spekulative Antwort darf nie
+  überschreiben, worauf ein Leser tatsächlich wartet.
+- `open_detail()` fragt vor dem bisherigen synchronen Abruf zuerst den Cache
+  ab: ein Treffer zeigt den Inhalt sofort, ohne Serverumweg und ohne das
+  „wird geladen …“-Aufflackern; ein Fehltreffer fällt unverändert auf den
+  bisherigen Weg zurück. `screen_entity_received()` aktualisiert denselben
+  Cache-Eintrag zusätzlich aus jeder echten Antwort (auch aus einer
+  abgeschlossenen Aufgabe), damit ein Wiederöffnen nie den Vorzustand zeigt,
+  nur weil der nächste Dashboard-Poll noch nicht da war.
+- Echter, am Gerät gefundener und behobener Fund unterwegs: die erste Fassung
+  legte pro Aufruf zwei `dashboard_plan`-Strukturen (~1 kB, 48 Zeilen plus
+  Identitätsfelder) auf dem knappen 4096-Byte-Stack des `screen`-Tasks an und
+  rief das in einer Schleife über bis zu drei Oberflächen mal deren
+  Karten­anzahl auf — ein echter Stack-Overflow, live im Log direkt nach dem
+  ersten „dashboard: snapshot accepted“ dieses Boots bestätigt
+  (`***ERROR*** A stack overflow in task screen has been detected`, danach
+  Reboot). Behoben nach demselben Muster wie der Rest der Datei
+  (`entity_json`, `snapshot_json`, die 48000-Byte-Framebuffer): eine einzige
+  `heap_caps_malloc(sizeof(dashboard_plan), MALLOC_CAP_SPIRAM)`-Instanz, über
+  alle `dashboard_walk()`-Aufrufe hinweg wiederverwendet.
+- `idf.py build` grün. Nach dem Fix am Gerät (COM9) reproduziert bestätigt:
+  kein Stack-Overflow mehr über mehrere Boot-/Poll-Zyklen, und
+  `api: entity preload ok http=200` erscheint im Log direkt nach jedem
+  `dashboard: snapshot accepted` — der Preload-Pfad liefert real gegen den
+  Produktionsserver aus. **Offen:** eine reale Sichtprobe, dass ein
+  Wiederöffnen einer schon einmal gesehenen Karte tatsächlich ohne
+  „wird geladen …“ erscheint — das erfordert einen echten Tastendruck am
+  Gerät und wurde nicht geprüft, nur der Cache-Füllpfad über das Log.
+
 ## 2026-09-12 – Lokale `attention`-Sessions im Verlauf verwalten
 
 - `memo_queue.c`s ohnehin fensterbegrenzter `memo_queue_scan()`-Durchlauf

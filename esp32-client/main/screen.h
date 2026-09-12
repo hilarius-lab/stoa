@@ -83,6 +83,11 @@ void screen_focus_move(int delta);
 void screen_focus_activate(void);
 /* The entity for an open detail arrived, or NULL if the fetch failed. */
 void screen_entity_received(const char *json);
+/* A background preload for one dashboard card's entity succeeded. Only warms
+ * the detail cache -- unlike screen_entity_received, never touches an open
+ * detail's own displayed copy, so a fetch the reader is actually waiting on
+ * can never be overwritten by a speculative one that happens to land later. */
+void screen_entity_preload_received(const char *type, const char *id, const char *json);
 /* A bound answer has reached durable local storage. Hide that one card now;
  * later server snapshots may show any still-required clarification again. */
 void screen_clarification_answered(const char *question_id);

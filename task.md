@@ -145,6 +145,44 @@ Priorität zuerst). Bei jedem neuen Task-Zyklus wird oben begonnen.
   Cache-Invalidierung bei neuen Snapshots zusammenspielen, damit kein
   veralteter Detailinhalt gezeigt wird.
 
+  **Umgesetzt 2026-09-12, reale Sichtprobe eines Wiederöffnens steht noch
+  aus.** RAM-Cache gewählt (8 Plätze, `ENTITY_MAX` je Slot), keine SD:
+  Freshness teilt sich denselben Wert wie die bestehende
+  Snapshot-Alterung (`cache_max_age_s`/`HEADER_STALE_FALLBACK_S`) statt einer
+  zweiten Staleness-Regel, genau wie in der Designfrage gefordert. Jede
+  frisch angenommene Dashboard-Momentaufnahme (`apply_pending_snapshot()`,
+  einmal pro echtem neuen Snapshot) preloaded über die neue
+  `preload_visible_entities()`/`api_client_preload_entity()` jede
+  fokussierbare `open_entity`/`open_clarification`-Karte über alle drei
+  Oberflächen, deren Cache-Eintrag fehlt oder abgelaufen ist; Session-Karten
+  (`open_session`) bleiben ausgenommen, da deren Route ein ganzes
+  Session-Dashboard liefert, nicht ein `ENTITY_MAX`-großes Entity — außerhalb
+  des hier betroffenen `main/detail.c`-Zuschnitts. Der Worker verarbeitet die
+  Preload-Warteschlange mit niedrigster Priorität, nur wenn kein expliziter
+  Leser wartet, und ausschließlich innerhalb des ohnehin schon offenen
+  Funkfensters (kein zusätzliches Radio-Aufwachen). Ein Treffer landet über
+  `screen_entity_preload_received()` ausschließlich im Cache, nie in der
+  gerade angezeigten `entity_json`-Kopie. `open_detail()` fragt vor dem
+  bisherigen synchronen Abruf zuerst den Cache ab: Treffer zeigen sofort ohne
+  „wird geladen …“; ein Fehltreffer fällt unverändert auf den alten Weg
+  zurück. `screen_entity_received()` aktualisiert denselben Cache-Eintrag
+  zusätzlich aus jeder echten Antwort (auch einer abgeschlossenen Aufgabe).
+  Echter, am Gerät gefundener Fund unterwegs: die erste Fassung legte pro
+  Aufruf zwei `dashboard_plan`-Strukturen auf dem knappen 4096-Byte-Stack des
+  `screen`-Tasks an, in einer Schleife über bis zu drei Oberflächen — ein
+  realer Stack-Overflow, live im Log direkt nach dem ersten „dashboard:
+  snapshot accepted“ dieses Boots bestätigt, danach Reboot. Behoben durch eine
+  einzige heap-allozierte Instanz, wiederverwendet über alle
+  `dashboard_walk()`-Aufrufe, nach demselben Muster wie der Rest der Datei.
+  `idf.py build` grün, Flash auf COM9 erfolgt, nach dem Fix über mehrere
+  Boot-/Poll-Zyklen ohne Stack-Overflow oder sonstigen Fehler bestätigt; `api:
+  entity preload ok http=200` erscheint im Log direkt nach jedem `dashboard:
+  snapshot accepted` — der Preload-Pfad liefert real gegen den
+  Produktionsserver aus. Details in `esp32-client/CHANGELOG.md`. **Offen:**
+  eine reale Sichtprobe, dass ein Wiederöffnen einer schon einmal gesehenen
+  Karte tatsächlich ohne „wird geladen …“ erscheint — erfordert einen echten
+  Tastendruck am Gerät, bisher nur der Cache-Füllpfad über das Log geprüft.
+
 - [ ] **Priorität 4 — Späterer STT-Unsicherheitsblock.** Lokale
   Whisper-Wortkonfidenzen und vom LLM bewertete Satzplausibilität
   gemeinsam auswerten. Bei materieller Inkonsistenz optional einen

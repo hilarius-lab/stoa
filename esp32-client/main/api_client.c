@@ -130,6 +130,17 @@ static atomic_bool session_pending;
  * clears again until the next reboot. */
 static atomic_bool dashboard_ready_once;
 
+/* A small FIFO of opportunistic detail preloads, one entity per fetch pass so
+ * a card-heavy dashboard cannot monopolize the worker. Not persisted: losing
+ * a queued preload across a reboot costs nothing, the next accepted snapshot
+ * asks again for whatever is still uncached. */
+#define PRELOAD_QUEUE_MAX 8
+typedef struct { char type[32]; char id[40]; } preload_job;
+static preload_job preload_queue[PRELOAD_QUEUE_MAX];
+static unsigned preload_count;
+static SemaphoreHandle_t preload_lock;
+static atomic_bool preload_pending;
+
 /* A small durable desired-state queue for list items. Unlike the audio queue,
  * these records contain no user content, only opaque UUIDs and active/done.
  * `committed=0` is a draft while its list detail is open; leaving promotes all
@@ -1661,6 +1672,47 @@ static void fetch_entity(void) {
     atomic_store(&entity_pending, false);
 }
 
+/* One opportunistic background fetch for the detail-view cache, at most one
+ * per pass. Checked before the queue is touched, not after: a job popped and
+ * then abandoned here would be lost outright, since nothing re-queues it
+ * before the next accepted snapshot. A reader's own explicit request always
+ * wins -- this only runs once fetch_entity/fetch_history/fetch_session have
+ * nothing waiting. */
+static void fetch_preload(void) {
+    if (!atomic_load(&preload_pending) || atomic_load(&entity_pending) ||
+        atomic_load(&history_pending) || atomic_load(&session_pending))
+        return;
+    preload_job job;
+    bool have = false;
+    if (preload_lock && xSemaphoreTake(preload_lock, pdMS_TO_TICKS(200)) == pdTRUE) {
+        if (preload_count) {
+            job = preload_queue[0];
+            memmove(&preload_queue[0], &preload_queue[1],
+                    (preload_count - 1) * sizeof(preload_job));
+            preload_count--;
+            have = true;
+        }
+        if (!preload_count) atomic_store(&preload_pending, false);
+        xSemaphoreGive(preload_lock);
+    }
+    if (!have) return;
+    char path[128];
+    snprintf(path, sizeof(path), "/api/client/v1/entities/%s/%s", job.type, job.id);
+    char *body = malloc(API_RESPONSE_MAX);
+    int http = 0;
+    bool ok = body && call(HTTP_METHOD_GET, path, NULL, body, API_RESPONSE_MAX, &http) &&
+              http == 200;
+    if (ok) {
+        cJSON *root = cJSON_Parse(body);
+        ok = cJSON_IsObject(root) && string_is(root, "id", job.id) &&
+             string_is(root, "type", job.type) && cJSON_HasObjectItem(root, "status");
+        cJSON_Delete(root);
+    }
+    if (ok) screen_entity_preload_received(job.type, job.id, body);
+    ESP_LOGI("api", "entity preload %s http=%d", ok ? "ok" : "failed", http);
+    if (body) { memset(body, 0, API_RESPONSE_MAX); free(body); }
+}
+
 /* The one mutation the closed action catalog grants the device today. The
  * response is the same DashboardEntityResponse a plain fetch returns (now
  * without `action`, the task being done), so it goes through the same
@@ -2042,7 +2094,7 @@ static void api_task(void *unused) {
         memo_queue_status queued = memo_queue_get();
         TickType_t wait;
         if (queued.ready || list_action_count(true) || clarification_capture_is_pending() ||
-            atomic_load(&entity_pending) ||
+            atomic_load(&entity_pending) || atomic_load(&preload_pending) ||
             atomic_load(&history_pending) || atomic_load(&session_pending))
             wait = pdMS_TO_TICKS(5000);
         else if (retry_ms)
@@ -2058,12 +2110,16 @@ static void api_task(void *unused) {
         if (esp_wifi_sta_get_ap_info(&station) != ESP_OK) continue;
         radio_awake(true);
         if (resolve_server()) {
-            /* A waiting reader comes before housekeeping. */
+            /* A waiting reader comes before housekeeping, and a background
+             * preload is the lowest priority of all: it runs last, after
+             * synchronize() may itself have posted a fresh snapshot that
+             * changes which entities are even worth preloading. */
             fetch_entity();
             submit_complete_task();
             fetch_history();
             fetch_session();
             synchronize();
+            fetch_preload();
         } else {
             fail_pending_readers();
             /* Without a name nothing on this path can succeed, and every
@@ -2102,6 +2158,7 @@ void api_client_start(const char *base_url) {
     auth_load();
     list_actions_load();
     clarification_capture_load();
+    preload_lock = xSemaphoreCreateMutex();
     while (strlen(base) && base[strlen(base)-1] == '/') base[strlen(base)-1] = 0;
     /* Priority 1, below the display task and level with the input loop in
      * app_main. It used to be 3, which put background housekeeping above the
@@ -2121,6 +2178,25 @@ void api_client_open_entity(const char *type, const char *id) {
     snprintf(entity_type, sizeof(entity_type), "%s", type);
     snprintf(entity_id, sizeof(entity_id), "%s", id);
     atomic_store(&entity_pending, true);
+    if (worker) xTaskNotifyGive(worker);
+}
+
+void api_client_preload_entity(const char *type, const char *id) {
+    if (!type || !type[0] || !id || !id[0] || !preload_lock) return;
+    if (xSemaphoreTake(preload_lock, pdMS_TO_TICKS(200)) != pdTRUE) return;
+    bool already_queued = false;
+    for (unsigned i = 0; i < preload_count; i++)
+        if (strcmp(preload_queue[i].type, type) == 0 && strcmp(preload_queue[i].id, id) == 0) {
+            already_queued = true;
+            break;
+        }
+    if (!already_queued && preload_count < PRELOAD_QUEUE_MAX) {
+        snprintf(preload_queue[preload_count].type, sizeof(preload_queue[preload_count].type), "%s", type);
+        snprintf(preload_queue[preload_count].id, sizeof(preload_queue[preload_count].id), "%s", id);
+        preload_count++;
+        atomic_store(&preload_pending, true);
+    }
+    xSemaphoreGive(preload_lock);
     if (worker) xTaskNotifyGive(worker);
 }
 
