@@ -12,6 +12,7 @@ from ..database import get_db_connection
 from .ai_tasks import get_ai_task_profile
 from .embeddings import get_embedding
 from .content_types import CLAIM_TYPES
+from .observability import emit_event
 
 
 def normalize_claim_subject(value: str) -> str:
@@ -50,7 +51,27 @@ polarity,modality,valid_from,valid_until,status,confidence,source_knowledge_type
 source_knowledge_id,derived,metadata,created_at,updated_at FROM claims"""
 
 
-def create_claim_record(data):
+async def _trigger_eager_conflict_scan():
+    """W04 mutation guard: run the conflict scan right when a new active claim
+    appears instead of waiting for the nightly maintenance run.
+
+    Without this, `run_changed_conflict_scan()`'s `disputed` status -- the
+    signal existing guards like note_fact.py's promotion check already rely
+    on -- can be up to 24h stale: a claim created (or contradicted) after
+    tonight's scan simply isn't flagged yet, so a same-day promotion could
+    sail through a conflict that structurally already exists. Best-effort:
+    a transient failure here (e.g. the embedding endpoint) must not break
+    claim creation or promotion -- the unaffected nightly run_daily_maintenance()
+    call remains the reliable backstop, so this is exactly as stale as before
+    this fix, never worse.
+    """
+    try:
+        await run_changed_conflict_scan(dry_run=False)
+    except Exception as exc:
+        emit_event("claims", "eager_conflict_scan_failed", "warning", metadata={"error_type": type(exc).__name__})
+
+
+async def create_claim_record(data):
     if data.claim_type not in CLAIM_TYPES: raise ValueError("Unknown claim type")
     statement = data.statement.strip(); subject = data.subject.strip(); predicate = data.predicate.strip()
     if data.valid_from and data.valid_until and data.valid_until < data.valid_from:
@@ -71,6 +92,7 @@ def create_claim_record(data):
              data.source_knowledge_id,data.derived,Jsonb(data.metadata),now,now),
         ).fetchone()
         connection.commit()
+    await _trigger_eager_conflict_scan()
     return _claim(row)
 
 
@@ -105,7 +127,7 @@ def list_claim_records(status=None, subject=None, limit=100):
     return [_claim(row) for row in rows]
 
 
-def materialize_validated_artifact_claims(artifact_id,knowledge_type,knowledge_id):
+async def materialize_validated_artifact_claims(artifact_id,knowledge_type,knowledge_id):
     """Create only claims whose structured value is already locally validated."""
     now=datetime.now(TIMEZONE)
     with get_db_connection() as connection:
@@ -143,6 +165,8 @@ def materialize_validated_artifact_claims(artifact_id,knowledge_type,knowledge_i
                 (claim_id,str(artifact_id),content,confidence,Jsonb({"artifact_id":artifact_id}),now))
             created.append({"claim_id":claim_id,"claim_key":spec['key'],"idempotent":False})
         connection.commit()
+    if any(not item["idempotent"] for item in created):
+        await _trigger_eager_conflict_scan()
     return {"artifact_id":artifact_id,"created":created,"skipped":None}
 
 

@@ -263,7 +263,46 @@ Priorität zuerst). Bei jedem neuen Task-Zyklus wird oben begonnen.
   gegen den Fix grün; jetzt Teil von `m8_release_gate_test.py`. Quick-Gate
   (`CLIENT_DEVICE_AUTH_REQUIRED=false`) grün: 31 Einzeltests + Soak.
   `BACKEND_LOGIK.md` (§10.1 Schritt 4, §10.2, W03-Zeile in §20.3)
-  aktualisiert. Nicht committed.
+  aktualisiert. Committed und gepusht: `bbc2392`.
+
+  **W04, Hälfte A (Mutations-Guard) umgesetzt und getestet, 2026-09-12.**
+  Vor dem Umsetzen Scope geklärt: `BACKEND_LOGIK.md` §11.5/§11.6 beschreiben
+  eine ganze Fact-Konflikt-Vision (Belegstatus, autonome Klärung mit
+  Eskalation), Status dort ausdrücklich „Beschlossen / Umsetzung offen" — kein
+  1:1 umsetzbarer Bugfix wie W03/W07. W04 zerfällt in zwei unabhängige
+  Hälften: ein Guard vor **Mutationen** (technisch machbar) und einer vor
+  **Antworten** (strukturell blockiert durch W02 — `search_knowledge` kennt
+  bislang keine Claims, es gibt also nichts, das eine Chat-Antwort auf
+  `disputed` prüfen könnte). Nutzer hat entschieden: nur Hälfte A jetzt,
+  Hälfte B wartet auf W02.
+
+  Umsetzung: `claims.py::run_changed_conflict_scan` (setzt `disputed`) lief
+  bisher nur nachts oder manuell. Der bereits bestehende `disputed`-Check der
+  Note-zu-Fact-Promotion (§11.3, „keinen offenen Konfliktfall") war dadurch
+  bis zu 24h veraltet — ein Widerspruch, der nach dem letzten nächtlichen
+  Lauf entsteht, wurde von diesem Check schlicht nicht gesehen. Neue Funktion
+  `claims.py::_trigger_eager_conflict_scan()`, aufgerufen nach
+  `create_claim_record` (explizite Claim-API) und nach
+  `materialize_validated_artifact_claims` (deterministischer Materializer bei
+  Artefaktpromotion), aber nur wenn dabei tatsächlich ein neuer, nicht
+  idempotenter Claim entstand. Best-effort: schlägt der eager Scan fehl (z. B.
+  Embedding-Endpoint down), wird das nur geloggt
+  (`emit_event("claims","eager_conflict_scan_failed","warning",...)`, gleiches
+  Muster wie andere Best-effort-Stellen im Code) — der nächtliche Lauf bleibt
+  unverändert die Rückfallebene, nichts wird schlechter als vorher. Beide
+  betroffenen Funktionen mussten dafür `async` werden; alle vier
+  Aufrufstellen (`routers/claims.py`, dreimal `promotion.py`, einmal
+  `knowledge_clarifications.py`) liefen bereits in async-Kontexten und
+  bekamen nur ein `await`.
+
+  Neuer Regressionstest `m8_claim_conflict_guard_test.py`: legt zwei sich
+  widersprechende Claims direkt über `create_claim_record` an (gleiches
+  Subjekt/Prädikat/Objekt, entgegengesetzte Polarität) und prüft, dass beide
+  sofort `disputed` sind — ohne selbst je `run_changed_conflict_scan` oder
+  die Wartung aufzurufen. Verifiziert gegen den unreparierten Code
+  fehlschlagend, gegen den Fix grün. Quick-Gate grün: 32 Einzeltests + Soak.
+  `BACKEND_LOGIK.md` (§11.4, W04-Zeile in §20.3) aktualisiert. Nicht
+  committed.
 
 - [ ] **Priorität 7 — ESP Secure Boot v2 / Flash Encryption / signiertes
   OTA mit Rollback.** Laut `esp32-client/docs/ROADMAP.md` Abschnitt H6

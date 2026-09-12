@@ -264,7 +264,7 @@ async def resume_knowledge_clarification(question_id,answer_session_id,answer,mo
         from .promotion import _transfer_all_topics
         source_artifact=(resolution["artifact_id"] if decision["decision"]=="pending_statement"
                          else linked_artifact_id)
-        materialize_validated_artifact_claims(source_artifact,"note",selected_id)
+        await materialize_validated_artifact_claims(source_artifact,"note",selected_id)
         _transfer_all_topics(source_artifact,"note",selected_id)
     return get_artifact_knowledge_clarification(resolution["artifact_id"])
 

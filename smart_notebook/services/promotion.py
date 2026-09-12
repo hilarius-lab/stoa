@@ -124,7 +124,7 @@ async def promote_session_artifacts(session_id,mode='llm',artifact_ids=None):
     for artifact_id,kind,content,confidence,topic_title,normalized_data,classification_validated,reason_codes in rows:
         old=_linked(artifact_id)
         if old:
-            claim_result=materialize_validated_artifact_claims(artifact_id,old[0],old[1])
+            claim_result=await materialize_validated_artifact_claims(artifact_id,old[0],old[1])
             topic_ids=_transfer_all_topics(artifact_id,old[0],old[1])
             promoted.append({"artifact_id":artifact_id,"knowledge_type":old[0],"knowledge_id":old[1],"idempotent":True,"claims":claim_result,"topic_ids":topic_ids})
             continue
@@ -138,7 +138,7 @@ async def promote_session_artifacts(session_id,mode='llm',artifact_ids=None):
             identical_id=identical_knowledge_target(assessment,target)
             if identical_id is not None:
                 _record(artifact_id,target,identical_id)
-                claim_result=materialize_validated_artifact_claims(artifact_id,target,identical_id)
+                claim_result=await materialize_validated_artifact_claims(artifact_id,target,identical_id)
                 topic_ids=_transfer_all_topics(artifact_id,target,identical_id)
                 promoted.append({"artifact_id":artifact_id,"knowledge_type":target,"knowledge_id":identical_id,
                     "idempotent":False,"reused_existing":True,"knowledge_classification":"identical",
@@ -205,7 +205,7 @@ async def promote_session_artifacts(session_id,mode='llm',artifact_ids=None):
                 target='list_item'
             else:deferred.append({"artifact_id":artifact_id,"reason":"unsupported_artifact_type"});continue
             _record(artifact_id,target,knowledge_id)
-            claim_result=materialize_validated_artifact_claims(artifact_id,target,knowledge_id)
+            claim_result=await materialize_validated_artifact_claims(artifact_id,target,knowledge_id)
             topic_ids=_transfer_all_topics(artifact_id,target,knowledge_id)
             promoted.append({"artifact_id":artifact_id,"knowledge_type":target,"knowledge_id":knowledge_id,"idempotent":False,"claims":claim_result,"topic_ids":topic_ids})
         except Exception as exc:

@@ -11,7 +11,7 @@ router=APIRouter()
 
 @router.post("/api/claims")
 async def create_claim(claim:ClaimCreate):
-    try:return create_claim_record(claim)
+    try:return await create_claim_record(claim)
     except ValueError as exc:raise HTTPException(400,str(exc)) from exc
 
 @router.get("/api/claims")
