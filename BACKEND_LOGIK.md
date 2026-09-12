@@ -936,15 +936,53 @@ Die folgende Liste konsolidiert das Gespräch und den tatsächlichen Integration
 
 Importance gezielt für Kontextauswahl und Darstellung verwenden; automatische implizite Fragen über die Minimalrückfrage hinaus ausbauen; externe Referenzquellen und volatile Fakten kontrolliert anschließen; semantische Nachtvorschläge nach belastbarer Prüfung aktivieren. Diese Schritte sind keine Voraussetzung dafür, dass ein erster Auto-Modus Texte zuverlässig in Notes, Tasks und Listen überführt.
 
-Ein späterer STT-Unsicherheitsblock kombiniert zwei voneinander unabhängige
-Signale: die bereits in der Whisper-kompatiblen Rohantwort vorhandenen lokalen
-Wortwahrscheinlichkeiten und eine inhaltliche Satzplausibilitätsprüfung durch
-das LLM. Eine hohe Durchschnittskonfidenz darf einzelne sehr schwache Wörter
-nicht verdecken. Nur wenn beide Signale materiell auseinanderlaufen, darf ein
-zweiter STT-Lauf mit gezielt anderen Parametern die Unsicherheit bestätigen
-oder auflösen. Bleibt eine handlungsrelevante Mehrdeutigkeit bestehen, entsteht
-eine konkrete Rückfrage; das System korrigiert das Transkript nicht still und
-führt keinen pauschalen Zweitlauf für jede Aufnahme aus.
+**Umgesetzt 2026-09-12 (STT-Unsicherheitsblock, strukturell geschlossen, M8-
+Gate grün):** Der STT-Unsicherheitsblock kombiniert zwei voneinander
+unabhängige Signale: die bereits in der Whisper-kompatiblen Rohantwort
+vorhandenen lokalen Wortwahrscheinlichkeiten (`audio.py::_weak_word_signal`,
+persistiert als `transcript_segments.min_word_probability`/`weak_words`,
+Schwelle `STT_WEAK_WORD_THRESHOLD`) und eine inhaltliche
+Satzplausibilitätsprüfung durch das LLM (neues Aufgabenprofil
+`audio.plausibility`, `services/stt_uncertainty.py`). Eine hohe
+Durchschnittskonfidenz verdeckt keine einzelnen sehr schwachen Wörter mehr,
+weil das lokale Signal pro Wort statt am Durchschnitt geprüft wird. Nur wenn
+beide Signale materiell auseinanderlaufen (lokal schwach, LLM hält den Satz
+für plausibel), läuft ein zweiter STT-Lauf mit gezielt anderer Temperatur auf
+genau dem betroffenen Satzfenster (`audio.py::transcribe_slice_second_pass`)
+zur Bestätigung oder Auflösung; stimmen beide Signale bereits überein
+(schwach und unplausibel), entfällt der Zweitlauf, weil er keine neue
+Information liefern könnte.
+
+Handlungsrelevanz entscheidet, ob eine verbleibende Mehrdeutigkeit zu einer
+Rückfrage wird: Mutationen an bestehenden Objekten (`change`/`complete`/
+`archive`) ebenso wie neu anzulegende Task-/Listen-/Listeneintrags-Objekte aus
+`memo`-Intents (`stt_uncertainty.py::memo_creation_part_ids`, derselbe Join
+wie `capture_intent.py::promotable_artifact_ids_for_parts` von der
+Artefaktseite her). Reine Notes/Facts/Queries lösen keine Rückfrage aus. Der
+betroffene Intent-Teil wird für den laufenden Verarbeitungsdurchlauf aus A05/
+A06/A07 und aus der Memo-Promotion ausgenommen (`client_sessions.py`, neuer
+Schritt zwischen A02/A03 und A05); eine bestätigende Antwort („Ja“) löst
+genau diesen Teil erneut ein, eine ablehnende Antwort („Nein“) lässt ihn für
+diese Session unausgeführt, ohne weiter zu raten — das Transkript selbst wird
+nirgends still verändert, und es läuft kein pauschaler Zweitlauf für jede
+Aufnahme, nur für den einen materiell divergierenden Satz.
+
+Neuer Test `m8_stt_uncertainty_test.py` (Wortgewichtungs-Maskierung,
+`_evaluate_segment`-Zustandsmatrix, volle Pipeline für den handlungsrelevanten
+Mutationsfall inklusive Ablehnungsantwort, negativer Kontrollfall für reinen
+Memo-Text). Vollständiges M8-Gate (31 Prüfungen inkl. logischem
+Vier-Stunden-Soak) grün. **Bewusst nicht automatisiert abgedeckt:** der
+Memo-erzeugt-neues-Objekt-Pfad end-to-end, weil die deterministische
+semantische Segmentierung für Tests immer `segment_type='statement'` liefert,
+nie `task_candidate`/`list_candidate` — der zugrunde liegende Join ist
+derselbe, bereits getestete Musterjoin wie bei `promotable_artifact_ids_for_parts`,
+aber ein echter End-to-End-Beleg dafür braucht entweder einen echten
+LLM-Lauf oder eigens gebaute Fixture-Zeilen über fünf Tabellen hinweg.
+Ebenfalls nicht getestet, weil ausschließlich gegen den echten Produktions-
+STT-/LLM-Endpoint sinnvoll: der reale zweite STT-Lauf und die reale
+LLM-Plausibilitätsprüfung selbst (deterministischer Testmodus ersetzt beide
+durch textgetriebene Orakel, analog zu `capture_intent.py`s
+`deterministic_content_intent`).
 
 ### 18.4 Abnahmeszenarien für die spätere Implementierung
 

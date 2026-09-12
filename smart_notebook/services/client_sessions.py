@@ -456,22 +456,41 @@ async def finalize_client_session_with_knowledge(client_session_id,promotion_mod
         except Exception as exc:
             _mark_client_finalization_attention(client_session_id,"capture_intent_failed",exc)
             raise
+    withheld_part_ids=set()
+    if item["capture_mode"]=="auto" and intent_parts:
+        try:
+            from .stt_uncertainty import ensure_session_stt_uncertainty
+            withheld_part_ids=await ensure_session_stt_uncertainty(item["ingestion_session_id"],intent_parts,promotion_mode)
+        except Exception as exc:
+            _mark_client_finalization_attention(client_session_id,"stt_uncertainty_failed",exc)
+            raise
+    active_intent_parts=[part for part in intent_parts if part["id"] not in withheld_part_ids]
     # A03 permits only artifacts supported exclusively by memo parts through
     # the ordinary creation path. Query and mutation segments cannot leak into
     # a new note/task/list; A06/A07 will resolve and execute those mutations.
     promotion_ids=promotable_artifact_ids_for_parts(item["ingestion_session_id"],intent_parts) if len(intent_parts)>1 else None
+    if withheld_part_ids:
+        from .stt_uncertainty import blocked_artifact_ids_for_parts
+        blocked=blocked_artifact_ids_for_parts(item["ingestion_session_id"],withheld_part_ids)
+        if blocked:
+            if promotion_ids is None:
+                with get_db_connection() as c:
+                    promotion_ids=[r[0] for r in c.execute("SELECT id FROM session_artifacts WHERE session_id=%s",
+                                                            (item["ingestion_session_id"],)).fetchall() if r[0] not in blocked]
+            else:promotion_ids=[i for i in promotion_ids if i not in blocked]
+        if len(intent_parts)==1 and intent_parts[0]["id"] in withheld_part_ids:promotion_ids=[]
     promotion_deferred=bool(intent_decision and len(intent_parts)==1 and
                             intent_decision["primary_intent"] in MUTATION_INTENTS)
     try:
         if item["capture_mode"]=="auto":
             from .knowledge_preflight import ensure_session_knowledge_preflights
             preflight_artifact_ids=[] if promotion_deferred else promotion_ids
-            await ensure_session_knowledge_preflights(item["ingestion_session_id"],intent_parts,
+            await ensure_session_knowledge_preflights(item["ingestion_session_id"],active_intent_parts,
                                                        preflight_artifact_ids,promotion_mode)
             from .mutation_targets import ensure_session_mutation_target_resolutions
-            await ensure_session_mutation_target_resolutions(item["ingestion_session_id"],intent_parts,promotion_mode)
+            await ensure_session_mutation_target_resolutions(item["ingestion_session_id"],active_intent_parts,promotion_mode)
             from .mutation_actions import ensure_session_mutation_actions
-            await ensure_session_mutation_actions(item["ingestion_session_id"],intent_parts,promotion_mode)
+            await ensure_session_mutation_actions(item["ingestion_session_id"],active_intent_parts,promotion_mode)
         if not promotion_deferred and promotion_ids!=[]:
             if promotion_ids is None:
                 await promote_session_artifacts(item["ingestion_session_id"],promotion_mode)

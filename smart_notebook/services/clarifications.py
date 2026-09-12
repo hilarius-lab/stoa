@@ -14,6 +14,8 @@ from .mutation_targets import (get_session_mutation_target_resolutions_for_quest
     mutation_target_clarification_options,resume_mutation_target_resolution)
 from .knowledge_clarifications import (get_question_knowledge_clarifications,
     knowledge_clarification_options,resume_knowledge_clarification)
+from .stt_uncertainty import (get_session_stt_uncertainty_for_question,
+    resume_stt_uncertainty_clarification,stt_uncertainty_clarification_options)
 
 
 ATTEMPT_SELECT="""SELECT id,question_id,answer_session_id,answer_text,answer_source,status,result,
@@ -49,7 +51,8 @@ def clarification_detail_action(question_id,public_id,status):
     if status!="open":return None
     params={"mode":"auto","context_ref":{"type":"clarification","id":str(public_id)}}
     options=(mutation_target_clarification_options(question_id) or
-             knowledge_clarification_options(question_id))
+             knowledge_clarification_options(question_id) or
+             stt_uncertainty_clarification_options(question_id))
     if options:
         # label/content keep older clients useful; current clients prefer the
         # bounded options array and therefore do not render the first twice.
@@ -102,14 +105,16 @@ async def resolve_clarification_answer(answer_session_id,context,answer,mode="ll
     target_resolutions=get_session_mutation_target_resolutions_for_question(reference["id"])
     action_resolutions=get_session_mutation_actions_for_question(reference["id"])
     knowledge_resolutions=get_question_knowledge_clarifications(reference["id"])
-    if not target_resolutions and not action_resolutions and not knowledge_resolutions:
+    stt_assessments=get_session_stt_uncertainty_for_question(reference["id"])
+    if not target_resolutions and not action_resolutions and not knowledge_resolutions and not stt_assessments:
         result={"question_id":reference["public_id"],"status":"needs_clarification",
                 "action_status":"pending_clarification","reason_codes":["missing_dependency"]}
         _finish_attempt(attempt,"needs_clarification",result)
         return result
     parent_session=(target_resolutions[0]["session_id"] if target_resolutions else
                     (action_resolutions[0]["session_id"] if action_resolutions
-                     else knowledge_resolutions[0]["session_id"]))
+                     else (knowledge_resolutions[0]["session_id"] if knowledge_resolutions
+                           else stt_assessments[0]["session_id"])))
     try:
         if target_resolutions:
             resolution=await resume_mutation_target_resolution(reference["id"],answer,mode)
@@ -123,9 +128,12 @@ async def resolve_clarification_answer(answer_session_id,context,answer,mode="ll
         elif action_resolutions:
             action=await resume_mutation_action(reference["id"],answer,mode)
             dependency_status=action["status"] if action else "clarification_required"
-        else:
+        elif knowledge_resolutions:
             knowledge=await resume_knowledge_clarification(reference["id"],answer_session_id,answer,mode)
             dependency_status=knowledge["status"] if knowledge else "needs_clarification"
+        else:
+            stt_resolution=await resume_stt_uncertainty_clarification(reference["id"],answer,mode)
+            dependency_status=stt_resolution["status"] if stt_resolution else "needs_clarification"
         if dependency_status in {"resolved","completed"}:
             final_status="completed";action_status="completed";reasons=["clarification_resolved"]
         elif dependency_status=="cancelled":

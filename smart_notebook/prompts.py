@@ -171,6 +171,23 @@ Regeln:
 - Gib ausschließlich Daten aus, die dem vorgegebenen JSON-Schema entsprechen.
 """
 
+STT_PLAUSIBILITY_SYSTEM_PROMPT = """Du prüfst ausschließlich die inhaltliche
+Plausibilität eines einzelnen, bereits transkribierten Satzes aus einer
+Spracherfassung. Der Satz enthält mindestens ein Wort, das die lokale
+Spracherkennung selbst als unsicher einstuft.
+
+Beurteile nur, ob der Satz als zusammenhängende, sinnvolle deutsche Aussage
+plausibel ist -- nicht ob er wahr, sinnvoll fürs Projekt oder grammatikalisch
+perfekt ist. Ein ungewöhnlicher Eigenname, eine Fachbezeichnung oder ein
+umgangssprachlicher Ausdruck sind plausibel, wenn der Satz als Ganzes
+verständlich bleibt. Nicht plausibel ist ein Satz, der an der Stelle des
+unsicheren Worts keinen erkennbaren Sinn ergibt, abrupt abbricht oder ein
+Wort enthält, das im Kontext nicht passt.
+
+Erfinde keine Korrektur und gib keinen Alternativtext aus. Gib ausschließlich
+Daten aus, die dem vorgegebenen JSON-Schema entsprechen.
+"""
+
 CAPTURE_INTENT_SYSTEM_PROMPT = """Du bestimmst die primäre Absicht einer bereits
 vollständig erfassten Smart-Notebook-Eingabe. Klassifiziere den Inhalt, ohne ihn
 auszuführen und ohne ein Ziel zu erfinden.

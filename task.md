@@ -5,103 +5,6 @@
 Priorisierte Warteschlange, vom Nutzer am 2026-09-12 festgelegt (höchste
 Priorität zuerst). Bei jedem neuen Task-Zyklus wird oben begonnen.
 
-- [ ] **Priorität 1 — ESP-Hochfahren mit Wakeup-Bild.** Analog zum
-  bestehenden Herunterfahren-Bildschirm (`SCREEN_SLEEP`, Asset `sleep.bin`,
-  siehe erledigter Eintrag „Erste ESP32-Einstellungsstufe … Herunterfahren“
-  weiter unten) soll auch beim Hochfahren statt der aktuellen Ansicht
-  (`app_main()` zeigt direkt `SCREEN_CONNECTING`) zunächst ein eigenes Bild
-  erscheinen. Nutzerbild liegt als `wakeup.png` im Projekt-Root. Umsetzung
-  spiegelbildlich zum Sleep-Bild: über `tools/pack_image_asset.py` auf das
-  480×800-Hochformat-Canvas packen (mit der dort etablierten Drehung, nicht
-  auf 800×480 zielen — genau der Fehler, der beim Sleep-Bild einmal real
-  auftrat), Registrierung in `main/CMakeLists.txt` (`EMBED_FILES`), neuer
-  Bildschirmzustand analog `SCREEN_SLEEP` in `screen.h`/`screen.c`, gezeigt
-  mit erzwungenem vollem Refresh ganz am Anfang von `app_main()` in
-  `main.c`, statt des bisherigen ersten `screen_show(SCREEN_CONNECTING,
-  NULL)`. `generate_h3_assets.py` darf „wakeup“ nicht mit erzeugen, sonst
-  überschreibt ein künftiger Sammel-Regenerierungslauf das handgestaltete
-  Bild wieder mit Platzhaltertext (dieselbe Falle, die beim Sleep-Bild schon
-  dokumentiert ist).
-
-  **Dauer, auf Nutzerwunsch an echte Betriebsbereitschaft gebunden statt an
-  eine feste Zeit** (2026-09-12 nachgeschärft): Das Gerät ist praktisch erst
-  nutzbar, wenn das erste Dashboard geholt wurde, nicht schon bei
-  hergestellter WLAN-Verbindung. Der Ersteinrichtungs-Portal-Flow (kein
-  gespeichertes WLAN, `setup==true`) bekommt kein Wakeup-Bild — das ist
-  Konfiguration, kein Aufwachen, und bleibt beim bestehenden `SCREEN_SETUP`.
-
-  **Umgesetzt 2026-09-12, reale Sichtprobe und Fallback-Test stehen noch
-  aus.** `screen_show(SCREEN_WAKEUP, NULL)` ersetzt in `main.c` das bisherige
-  `screen_show(SCREEN_CONNECTING, NULL)` direkt vor `api_client_start()`.
-  Dabei ein echter, am Gerät nachvollzogener struktureller Fund: der lokale
-  Boot-Recovery-Pfad in `recorder.c` (`recorder_task()`) erreicht
-  `SCREEN_READY` schon Sekunden nach dem Boot, komplett unabhängig von
-  Netzwerk/Dashboard (Kommentar dort: „READY is an honest state" — bezogen
-  auf die lokale Aufnahmefunktion, nicht auf das Dashboard). Ungefiltert
-  hätte das binnen ~6 Sekunden ein leeres Dashboard über das Wakeup-Bild
-  geblendet, real im Firmware-Log bestätigt, bevor die Korrektur griff.
-  Neuer `wakeup_pending`-Zustand in `screen.c` fängt deshalb jede
-  `SCREEN_READY`-Anfrage ab und hält sie auf `SCREEN_WAKEUP` zurück, bis
-  `screen_snapshot_received()` (aufgerufen aus `fetch_dashboard()`,
-  `main/api_client.c:731`, bei Erfolg) echte Daten meldet; Aufnahme,
-  Fehleranzeige und jeder andere Bildschirmzustand bleiben unberührt, da nur
-  `SCREEN_READY`-Anfragen abgefangen werden. Scheitert die Verbindung
-  ungewöhnlich lange (WLAN weg, Server nicht erreichbar), gibt `main.c` nach
-  60 Sekunden (`WAKEUP_FALLBACK_TICKS`) ohne Dashboard auf und ruft die neue
-  `screen_wakeup_timeout()` auf: zeigt den echten `SCREEN_CONNECTING`-
-  Diagnosebildschirm und beendet den Wakeup-Zustand dauerhaft, damit ein
-  echtes Problem nicht hinter einem statischen Bild verschwindet und ein
-  späterer Warteschlangen-Ping nicht stillschweigend zurück aufs Bild
-  springt. Zweiter realer Fund: der Übergang Connecting→Wakeup lief zunächst
-  über die partielle Waveform statt eines vollen Refreshs (Ghosting-Risiko
-  bei einem kompletten Bildwechsel) — behoben mit demselben erzwungenen
-  Vollrefresh wie beim Sleep-Bild, aber nur beim tatsächlichen Übergang in
-  den Zustand (`previous_state != SCREEN_WAKEUP`), sonst hätte jeder
-  spätere, inhaltlich identische Warteschlangen-Ping das unveränderte Bild
-  erneut sichtbar aufflackern lassen — real als vierfaches Flackern
-  beobachtet, dann behoben und über drei Boot-Iterationen im Log bestätigt
-  (genau eine Wakeup-Vollaktualisierung, genau eine READY-Vollaktualisierung
-  erst nach `dashboard: snapshot accepted`). `idf.py build` grün, Flash auf
-  COM9 erfolgt. Details in `esp32-client/CHANGELOG.md`. **Offen:** reale
-  Sichtprobe, ob das gepackte Bild auf dem Panel gut aussieht, und ein
-  realer Test des 60-Sekunden-Fallbacks (Server oder WLAN absichtlich
-  unerreichbar machen).
-
-  **Nachtrag 2026-09-12, reale Sichtprobe fand einen echten Rest-Fehler,
-  behoben.** Die erste Sichtprobe zeigte kurz einen alten „Verbinde …“-
-  Bildschirm vor dem Wakeup-Bild. Ursache waren zwei getrennte Funde: ein
-  übersehener zweiter `screen_show(SCREEN_CONNECTING, NULL)`-Aufruf ganz am
-  Anfang von `app_main()` (Rest aus der Zeit vor dem Wakeup-Bild), und —
-  erst nach dessen Entfernen sichtbar geworden — eine beiläufige
-  Statusaktualisierung des Uhr-Tasks, die das Display vor dem echten
-  Wakeup-Aufruf erreichen und auf `previous_state`s C-Standardwert
-  (`SCREEN_CONNECTING`) gezeichnet werden konnte. Beide behoben, über drei
-  saubere Resets bestätigt: genau ein Full Refresh beim Hochfahren.
-
-  Dabei auf Nutzerwunsch zusätzlich versucht, das allgemeine
-  Full-Refresh-Flackern zu reduzieren (schnelle statt volle Wellenform für
-  gewöhnliche Ansichtswechsel) — **noch am selben Tag wieder verworfen.**
-  Reale Sichtprobe zeigte einen echten Folgeschaden: das Wakeup-Bild blieb
-  sichtbar über der eigentlichen Nutzeroberfläche liegen, und der
-  Neustart-Bestätigungsdialog war unsichtbar (der Neustart selbst lief laut
-  Log durch). Die schnelle Wellenform hatte den Bildwechsel auf diesem Panel
-  offenbar nicht immer vollständig physisch durchgesetzt, während sowohl die
-  Controller- als auch die Software-Vergleichsdaten das neue Bild bereits als
-  angezeigt führten — jede folgende Teilaktualisierung ließ den physisch
-  zurückgebliebenen Rest dadurch unbegrenzt stehen. Vollständig
-  zurückgebaut; jeder Full Refresh nutzt wieder ausnahmslos die gründliche
-  Wellenform wie vor diesem Versuch. Volle Begründung und die Lehre daraus in
-  `docs/IMPLEMENTATION_DECISIONS.md`, Abschnitt „Full Refresh“.
-
-  Stehen geblieben, unabhängig vom verworfenen Versuch: ein neuer
-  Einstellungen-Menüpunkt „Bildschirm reinigen“ für eine gezielte,
-  gründliche Reinigung auf Knopfdruck (ruft dieselbe Funktion wie der
-  bestehende USB-Befehl `epd-clear` auf). Details in
-  `esp32-client/CHANGELOG.md`. **Weiterhin offen:** reale Sichtprobe des
-  gepackten Bildes selbst, der 60-Sekunden-Fallback-Test, und eine reale
-  Sichtprobe des Einstellungen-Menüpunkts über die Gerätetasten (nur der
-  zugrunde liegende Reinigungspfad wurde über den USB-Befehl geprüft).
-
 - [ ] **Priorität 2 — Attention-Segmente der lokalen Uploadqueue im
   Verlauf verwalten.** Segmente im lokalen Journal-Zustand `attention`
   (z. B. der Session-654-Fall `server_conflict`, bisher nur über die
@@ -218,14 +121,6 @@ Priorität zuerst). Bei jedem neuen Task-Zyklus wird oben begonnen.
   Karte tatsächlich ohne „wird geladen …“ erscheint — erfordert einen echten
   Tastendruck am Gerät, bisher nur der Cache-Füllpfad über das Log geprüft.
 
-- [ ] **Priorität 4 — Späterer STT-Unsicherheitsblock.** Lokale
-  Whisper-Wortkonfidenzen und vom LLM bewertete Satzplausibilität
-  gemeinsam auswerten. Bei materieller Inkonsistenz optional einen
-  zweiten STT-Lauf mit anderen Parametern verwenden, um die Unsicherheit
-  zu bestätigen oder aufzulösen; nur ungelöste, handlungsrelevante Fälle
-  als gezielte Rückfrage ausgeben. Keine stille Transkriptkorrektur und
-  kein pauschaler Zweitlauf.
-
 - [ ] **Priorität 5 — Netzwerk-/Transport-/Verschlüsselungsaudit.** Sehr
   spät vor dem produktionsnahen Alpha-Einsatz einen systemweiten
   Netzwerk-, Transport- und Verschlüsselungsaudit durchführen:
@@ -323,6 +218,9 @@ dauerhaft fest eingebaut, dieser Punkt kommt nicht wieder auf die Roadmap.
 - [ ] Führe zum Abschluss einen vollständigen Normrang-, Contract-, Link-, ADR-, Sicherheits-, Datenschutz-, Accessibility-, Lizenz- und Reproduzierbarkeitsaudit durch und liefere einen Abschlussbericht, der bestandene automatische Prüfungen klar von manuellen oder noch offenen Gerätetests trennt.
 
 ## Done
+
+- [x] Priorität 4 — Später STT-Unsicherheitsblock: lokale Whisper-Wortwahrscheinlichkeiten pro Wort (nicht am Durchschnitt) plus unabhängige LLM-Satzplausibilitätsprüfung; nur bei materieller Divergenz ein gezielter zweiter STT-Lauf mit anderer Temperatur auf dem betroffenen Satzfenster; Rückfrage nur bei verbleibender, handlungsrelevanter Mehrdeutigkeit (Mutationen an bestehenden Objekten sowie neu anzulegende Task-/Listen-/Listeneintrags-Objekte aus Memo-Intents), reine Notes/Facts/Queries bleiben unberührt. Betroffener Intent-Teil wird für den laufenden Durchlauf aus A05/A06/A07 und Memo-Promotion ausgenommen; „Ja“ löst ihn erneut ein, „Nein“ lässt ihn für diese Session unausgeführt, ohne weiter zu raten. Kein stiller Transkriptumschrieb, kein pauschaler Zweitlauf. Neuer Test `m8_stt_uncertainty_test.py`, vollständiges M8-Gate (31 Prüfungen inkl. Vier-Stunden-Soak) grün. Details inkl. bewusst nicht automatisiert abgedeckter Pfade in `BACKEND_LOGIK.md` §18.3. — Erledigt 2026-09-12.
+- [x] Priorität 1 — ESP-Hochfahren mit Wakeup-Bild: eigener `SCREEN_WAKEUP`-Zustand ersetzt den bisherigen `SCREEN_CONNECTING`-Start, hält `SCREEN_READY` zurück bis zum ersten echten Dashboard-Snapshot, mit 60-Sekunden-Netzwerk-Fallback auf den echten Diagnosebildschirm und erzwungenem Full Refresh nur beim tatsächlichen Zustandswechsel. Zwei reale Sichtproben fanden und behoben je einen echten Fehler (Rest-„Verbinde …“-Bildschirm durch doppelten `screen_show`-Aufruf und eine Uhr-Task-Race; ein separat versuchtes schnelles Wellenform-Refresh verursachte sichtbares Bild-Nachziehen und wurde vollständig verworfen). Nutzer hat Priorität 1 nach diesen Korrekturen am Gerät final bestätigt. `idf.py build` grün, Flash auf COM9, committet (`93b2d6d`). Details in `esp32-client/CHANGELOG.md` und `esp32-client/docs/IMPLEMENTATION_DECISIONS.md`. — Erledigt 2026-09-12.
 
 - [x] A01 geschlossen: `POST /api/client/v1/captures` legt für direkte Texteingaben eine text-only Client-/Ingestion-Session, genau einen idempotenten Chunk und per Repair einen Textjob an. Text und stabilisiertes Audiotranskript laufen danach durch dieselbe Segmentierungs-, Topic-, Artefakt-, Finalisierungs- und Promotionskette. `GET .../captures/{id}` spiegelt `processing`, `attention_required`, Recovery und `completed`; Query-Conversation/Turn entstehen erst nach dem fachlichen Abschluss. Der ESP bleibt unverändert reine Audioquelle. Der gezielte Paritäts-/Recoverytest und das vollständige M8-Gate einschließlich logischem Vier-Stunden-Soak sind grün. — Erledigt 2026-09-09.
 

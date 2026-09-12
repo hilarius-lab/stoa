@@ -690,6 +690,23 @@ MIGRATIONS=[
         "ALTER TABLE session_artifacts ADD COLUMN night_repair_attempts INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE session_artifacts ADD CONSTRAINT session_artifacts_night_repair_attempts_check CHECK(night_repair_attempts>=0 AND night_repair_attempts<=1)",
     ]),
+    ("0052_stt_uncertainty","Persist local Whisper weak-word signals and the STT-uncertainty clarification loop",[
+        "ALTER TABLE transcript_segments ADD COLUMN min_word_probability DOUBLE PRECISION",
+        "ALTER TABLE transcript_segments ADD COLUMN weak_words JSONB NOT NULL DEFAULT '[]'::jsonb",
+        """CREATE TABLE transcript_segment_uncertainty_assessments(
+        id BIGSERIAL PRIMARY KEY,segment_id BIGINT NOT NULL UNIQUE REFERENCES transcript_segments(id) ON DELETE CASCADE,
+        session_id BIGINT NOT NULL REFERENCES ingestion_sessions(id) ON DELETE CASCADE,
+        local_signal TEXT NOT NULL,min_word_probability DOUBLE PRECISION,weak_words JSONB NOT NULL DEFAULT '[]'::jsonb,
+        llm_verdict TEXT,reason_codes JSONB NOT NULL DEFAULT '[]'::jsonb,
+        second_run_requested BOOLEAN NOT NULL DEFAULT FALSE,second_run_text TEXT,second_run_agrees BOOLEAN,
+        status TEXT NOT NULL,clarification_question_id BIGINT REFERENCES session_questions(id) ON DELETE SET NULL,
+        created_at TIMESTAMPTZ NOT NULL,updated_at TIMESTAMPTZ NOT NULL,
+        CHECK(local_signal='weak'),
+        CHECK(llm_verdict IS NULL OR llm_verdict IN('plausible','implausible')),
+        CHECK(status IN('confirmed','unresolved')),
+        CHECK(status='confirmed' OR clarification_question_id IS NOT NULL))""",
+        "CREATE INDEX transcript_segment_uncertainty_session_idx ON transcript_segment_uncertainty_assessments(session_id,status)",
+    ]),
 ]
 
 

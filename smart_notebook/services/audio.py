@@ -5,7 +5,7 @@ from pathlib import Path
 import httpx
 from psycopg.types.json import Jsonb
 
-from ..config import AUDIO_RETENTION_CACHE_DIR,AUDIO_RETENTION_DAYS,STT_API_MODEL_PARAMETER,STT_DEFAULT_LANGUAGE,STT_MODEL,STT_URL,TIMEZONE
+from ..config import AUDIO_RETENTION_CACHE_DIR,AUDIO_RETENTION_DAYS,STT_API_MODEL_PARAMETER,STT_DEFAULT_LANGUAGE,STT_MODEL,STT_SECOND_PASS_TEMPERATURE,STT_URL,STT_WEAK_WORD_THRESHOLD,TIMEZONE
 from ..database import get_db_connection
 from .jobs import claim_processing_job_record,complete_processing_job_record,enqueue_processing_job_record,fail_processing_job_record
 from .ingestion import create_ingestion_chunk_record
@@ -18,6 +18,17 @@ class AudioChunkConflictError(Exception):pass
 def _normalized_transcript_text(value):
     return re.sub(r"[^\w]+"," ",value.casefold()).strip()
 
+def _weak_word_signal(words):
+    """Per-word probabilities, kept separate from the sentence average so a
+    high average cannot hide one individually very weak word (BACKEND_LOGIK.md §18.3)."""
+    probabilities=[part.get('probability') for part in words if part.get('probability') is not None]
+    weak=[{"word":(part.get('word') or '').strip(),"probability":part.get('probability')}
+          for part in words if part.get('probability') is not None and part.get('probability')<STT_WEAK_WORD_THRESHOLD]
+    return {"avg_logprob":sum(probabilities)/len(probabilities) if probabilities else None,
+            "min_word_probability":min(probabilities) if probabilities else None,
+            "weak_words":weak}
+
+
 def _sentence_segments(response,duration_seconds):
     words=response.get('words') or []
     if words:
@@ -26,15 +37,13 @@ def _sentence_segments(response,duration_seconds):
             current.append(word)
             if re.search(r"[.!?…][\"')\]]*$",(word.get('word') or '').strip()):
                 text=' '.join(part.get('word','').strip() for part in current).strip()
-                probabilities=[part.get('probability') for part in current if part.get('probability') is not None]
                 result.append({"start":current[0].get('start',0),"end":current[-1].get('end',duration_seconds),"text":text,
-                               "avg_logprob":sum(probabilities)/len(probabilities) if probabilities else None})
+                               **_weak_word_signal(current)})
                 current=[]
         if current:
             text=' '.join(part.get('word','').strip() for part in current).strip()
-            probabilities=[part.get('probability') for part in current if part.get('probability') is not None]
             result.append({"start":current[0].get('start',0),"end":current[-1].get('end',duration_seconds),"text":text,
-                           "avg_logprob":sum(probabilities)/len(probabilities) if probabilities else None})
+                           **_weak_word_signal(current)})
         return result
     return response.get('segments') or [{"start":0,"end":duration_seconds,"text":response.get('text','')}]
 
@@ -157,6 +166,46 @@ async def _transcribe(window,mode,text):
     if r.is_error:raise RuntimeError(f"Ocean STT HTTP {r.status_code}: {r.text[:500]}")
     return r.json()
 
+def _render_slice(window_id,start_ms,end_ms):
+    """Re-render only the audio behind one already-transcribed sentence, for the
+    STT-uncertainty second pass (BACKEND_LOGIK.md §18.3). Reuses the same source
+    chunks the original transcription window used, so it stays byte-identical
+    audio, just a targeted time slice instead of the whole multi-chunk window."""
+    with get_db_connection() as c:
+        chunk_rows=c.execute("""SELECT ac.id FROM transcript_window_chunks twc
+        JOIN audio_chunks ac ON ac.id=twc.audio_chunk_id WHERE twc.window_id=%s ORDER BY ac.sequence""",(window_id,)).fetchall()
+        window_row=c.execute("SELECT source_start_ms FROM transcript_windows WHERE id=%s",(window_id,)).fetchone()
+    if not chunk_rows or not window_row:return None
+    chunks=[get_audio_chunk(r[0]) for r in chunk_rows]
+    window_start=window_row[0]
+    rendered=_render_window({"chunks":chunks})
+    start_s=max(0.0,(start_ms-window_start)/1000);end_s=max(start_s+0.01,(end_ms-window_start)/1000)
+    handle=tempfile.NamedTemporaryFile(prefix='smart-notebook-stt-slice-',suffix='.wav',delete=False);output=Path(handle.name);handle.close()
+    command=['ffmpeg','-hide_banner','-loglevel','error','-y','-i',str(rendered),
+             '-ss',f'{start_s:.3f}','-to',f'{end_s:.3f}','-ar','16000','-ac','1',str(output)]
+    result=subprocess.run(command,capture_output=True,text=True,timeout=60)
+    rendered.unlink(missing_ok=True)
+    if result.returncode!=0:
+        output.unlink(missing_ok=True);raise RuntimeError(f"FFmpeg slice extraction failed: {result.stderr[-500:]}")
+    return output
+
+async def transcribe_slice_second_pass(window_id,start_ms,end_ms,mode,deterministic_text=''):
+    """One targeted second STT run with a deliberately different decoding
+    parameter (temperature), used only to arbitrate a material divergence
+    between the local word-probability signal and the LLM plausibility check.
+    Never runs for every recording -- callers gate this per BACKEND_LOGIK.md §18.3."""
+    if mode=='deterministic':return {"text":deterministic_text}
+    rendered=_render_slice(window_id,start_ms,end_ms)
+    if rendered is None:return None
+    files={"file":(rendered.name,rendered.read_bytes(),'audio/wav')}
+    data={"model":STT_API_MODEL_PARAMETER,"language":STT_DEFAULT_LANGUAGE,
+          "response_format":"json","temperature":STT_SECOND_PASS_TEMPERATURE}
+    try:
+        async with httpx.AsyncClient(timeout=120,trust_env=False) as client:r=await client.post(STT_URL,files=files,data=data)
+    finally:rendered.unlink(missing_ok=True)
+    if r.is_error:raise RuntimeError(f"Ocean STT second-pass HTTP {r.status_code}: {r.text[:500]}")
+    return r.json()
+
 def _persist_transcript(window,job,response,mode):
     now=datetime.now(TIMEZONE);segments=_sentence_segments(response,window['duration_ms']/1000)
     with get_db_connection() as c:
@@ -170,8 +219,8 @@ def _persist_transcript(window,job,response,mode):
             if not text:continue
             start=window['source_start_ms']+round(float(s.get('start',0))*1000);end=min(window['source_end_ms'],window['source_start_ms']+round(float(s.get('end',window['duration_ms']/1000))*1000))
             if end<=start:end=min(window['source_end_ms'],start+1)
-            segment_id=c.execute("""INSERT INTO transcript_segments(window_id,session_id,segment_index,text,source_start_ms,source_end_ms,confidence,status,content_hash,created_at,updated_at)
-            VALUES(%s,%s,%s,%s,%s,%s,%s,'provisional',%s,%s,%s) RETURNING id""",(wid,window['session_id'],i,text,start,end,s.get('avg_logprob'),hashlib.sha256(text.encode()).hexdigest(),now,now)).fetchone()[0]
+            segment_id=c.execute("""INSERT INTO transcript_segments(window_id,session_id,segment_index,text,source_start_ms,source_end_ms,confidence,min_word_probability,weak_words,status,content_hash,created_at,updated_at)
+            VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,'provisional',%s,%s,%s) RETURNING id""",(wid,window['session_id'],i,text,start,end,s.get('avg_logprob'),s.get('min_word_probability'),Jsonb(s.get('weak_words') or []),hashlib.sha256(text.encode()).hexdigest(),now,now)).fetchone()[0]
             # A newer overlapping window may revise the unstable tail of the previous
             # window. Supersede only strongly similar hypotheses; unrelated speech
             # that merely overlaps in time is retained.

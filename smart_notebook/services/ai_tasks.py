@@ -21,6 +21,7 @@ AI_TASK_PROFILES = {
     "capture.target_resolution": {"group":"capture","complexity":"standard"},
     "capture.action_plan": {"group":"capture","complexity":"standard"},
     "segmentation.semantic": {"group":"semantic_segmentation","complexity":"complex"},
+    "audio.plausibility": {"group":"stt_uncertainty","complexity":"standard"},
     "artifacts.session_memory": {"group":"session_artifact_analysis","complexity":"complex"},
     "artifacts.task_promotion": {"group":"session_artifact_analysis","complexity":"standard"},
     "questions.detect": {"group":"question_detection","complexity":"complex"},
