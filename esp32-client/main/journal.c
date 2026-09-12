@@ -234,6 +234,18 @@ int journal_build_chunk_state(char *out, size_t capacity, unsigned sequence,
     return ok ? (int)at : -1;
 }
 
+int journal_build_chunk_backoff(char *out, size_t capacity, unsigned sequence,
+                                unsigned attempts, uint64_t until_unix) {
+    size_t at = 0;
+    bool ok = write_raw(out, capacity, &at, "{");
+    if (ok) ok = write_number_field(out, capacity, &at, "ba", attempts, true);
+    if (ok) ok = write_number_field(out, capacity, &at, "bu", until_unix, false);
+    if (ok) ok = write_number_field(out, capacity, &at, "seq", sequence, false);
+    if (ok) ok = write_text_field(out, capacity, &at, "t", "chunk_backoff", false);
+    if (ok) ok = write_raw(out, capacity, &at, "}");
+    return ok ? (int)at : -1;
+}
+
 int journal_build_finish(char *out, size_t capacity, unsigned final_sequence,
                          uint64_t final_source_end_ms) {
     size_t at = 0;
@@ -366,6 +378,22 @@ static void apply_payload(journal_session *session, const char *json) {
         chunk_state state = state_from_name(name);
         if (state != CHUNK_UNKNOWN) chunk->state = state;
         read_text(json, "r", chunk->reason, sizeof(chunk->reason));
+        /* Any ordinary transition ends a backoff wait, not only a successful
+         * one -- a chunk pulled back to attention or acked by some other path
+         * must not keep an old "not before" time that a later, unrelated
+         * return to READY (e.g. resync_missing()'s "server_missing") would
+         * otherwise still be bound by. */
+        chunk->backoff_attempts = 0;
+        chunk->backoff_until = 0;
+        return;
+    }
+    if (strcmp(type, "chunk_backoff") == 0) {
+        uint64_t attempts = 0, until = 0;
+        read_number(json, "ba", &attempts);
+        read_number(json, "bu", &until);
+        chunk->backoff_attempts = (unsigned)attempts;
+        chunk->backoff_until = until;
+        chunk->state = CHUNK_READY;
         return;
     }
 }

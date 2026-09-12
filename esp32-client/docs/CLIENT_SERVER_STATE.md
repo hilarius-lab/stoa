@@ -213,20 +213,54 @@ ausgerechnet ein DNS-Aussetzer als Serverablehnung markiert):
 - `backoff`/`network`/unbekannt/nicht lesbar: unverändert der bisherige
   Standardpfad (`ready`, erneuter Versuch im nächsten Durchlauf).
 
-**Bewusst nicht umgesetzt:** ein echtes, pro Segment gestaffeltes
-Backoff-Timing für die Klasse `backoff`. Jedes `ready`-Segment teilt sich
-weiterhin denselben ~5-Sekunden-Takt des Workers, unabhängig von
-`retry_class` — eine `backoff`-Klassifizierung wirkt sich heute nicht anders
-aus als `network` oder ein unbekannter Wert. Ein echtes Pro-Segment-Timing
+**Bewusst nicht umgesetzt (Stand 7. September):** ein echtes, pro Segment
+gestaffeltes Backoff-Timing für die Klasse `backoff`. Jedes `ready`-Segment
+teilte sich weiterhin denselben ~5-Sekunden-Takt des Workers, unabhängig von
+`retry_class` — eine `backoff`-Klassifizierung wirkte sich nicht anders aus
+als `network` oder ein unbekannter Wert. Ein echtes Pro-Segment-Timing
 bräuchte einen weiteren persistierten oder zumindest In-Memory-Zustand pro
 Chunk (nächster zulässiger Versuchszeitpunkt) — vergleichbar im Umfang mit der
-Journal-Erweiterung aus Punkt 1, hier aus Zeitgründen zurückgestellt statt
+Journal-Erweiterung aus Punkt 1, damals aus Zeitgründen zurückgestellt statt
 blind mitgebaut.
 
 Build, Flash und Regressionscheck (unveränderter Zustand der zwei
 bestehenden, bereits abgeschlossenen Sessions) bestanden. Der eigentliche
 `immediate`/`never`/`user_action`-Pfad ist nicht live gegen eine echte
 Serverablehnung geprüft — dieselbe Einschränkung wie bei Punkt 1.
+
+**Nachtrag, 12. September: jetzt umgesetzt.** Neuer Journal-Recordtyp
+`chunk_backoff` (`journal.h`/`journal.c`, Felder `ba`=Versuchszähler,
+`bu`=Unix-Sekunden-Deadline) neben dem bestehenden `chunk_state`; jede
+gewöhnliche `chunk_state`-Transition setzt beide Felder zurück, live wie beim
+Replay, damit ein später unabhängig zurückgesetztes Segment (z. B.
+`resync_missing()`s `server_missing`) keine veraltete Backoff-Deadline
+mitschleppt. `upload_chunk()` behandelt `backoff` jetzt als eigenen Zweig
+(`mark_chunk_backoff()`): exponentiell wachsend (30 s Boden, 30 min Deckel,
+±20 % Jitter, sechs Versuche bis der Deckel erreicht ist), `transfer_session()`
+überspringt ein Segment, solange `now() < backoff_until`, ohne die übrigen
+Segmente derselben Session zu blockieren. Wall-Clock (`time(NULL)`), nicht die
+monotone Bootuhr: eine monotone Deadline würde einen Reboot nicht überleben,
+weil `esp_timer` dabei nahe null neu startet und eine alte, größere
+gespeicherte Deadline nie wieder einholen könnte — das Segment bliebe
+scheinbar für immer zurückgestellt. Die Wartezeit wird nur durchgesetzt, wenn
+`clock_ready()` wahr ist; ohne synchronisierte Uhr bleibt das alte Verhalten
+(jeden Takt versuchen) erhalten. `network`/unklassifiziert/unlesbar bleiben
+bewusst unverändert auf dem gemeinsamen Takt.
+
+Verifiziert über eine eigene, nicht eingecheckte Hostprüfung (23 Checks: Auf-
+und Abbau des Records, Reset bei gewöhnlicher Transition, Überleben eines
+simulierten Reboots via frischem `journal_replay()`) statt über das bestehende
+`tools/journal_test.c` — das läuft auf dieser nativen Windows-Toolchain nicht
+durch, unabhängig von dieser Änderung: `main()` verlässt sich auf
+`system("rm -rf ... && mkdir -p ...")` und später `cp ... .bak`, und die
+native mingw-EXE, `cmd.exe`/Git-`cp.exe` und die aufrufende Git-Bash lösen
+einen bloßen `/tmp/...`-Pfad jeweils unterschiedlich auf — dieselbe Klasse von
+nur-unter-Linux/WSL/macOS-lauffähiger Testlücke wie bei `tools/ui_test.c`s
+`setenv()`. Vollständiger `idf.py build` (ESP-IDF 5.5.2, esp32s3) kompiliert
+sauber durch. Noch nicht geflasht oder live gegen ein echtes
+`retry_class=backoff` geprüft — der Server müsste das absichtlich liefern, was
+ohne Backend-Mitwirkung nicht erzwingbar ist, dieselbe Einschränkung wie beim
+`immediate`/`never`/`user_action`-Pfad oben.
 
 ### 4. `GET /sessions/{id}/dashboard` — erledigt, 7. September, zweite Runde
 

@@ -57,6 +57,15 @@ typedef struct {
     uint64_t source_end_ms;
     uint64_t duration_ms;
     char encryption[12];
+    /* Real per-segment backoff timing for retry_class=backoff (API_INTERACTION.md's
+     * Segmentupload table), persisted so it survives a reboot. `backoff_until` is
+     * a wall-clock unix second, not a monotonic one: a monotonic deadline would
+     * outlive its own clock across a reboot, since the new boot's esp_timer
+     * restarts near zero and could never catch up to an old, larger value. Zero
+     * means unrestricted. `backoff_attempts` drives the exponential growth and is
+     * reset by any ordinary chunk_state transition, not only a successful one. */
+    unsigned backoff_attempts;
+    uint64_t backoff_until;
 } journal_chunk;
 
 typedef struct {
@@ -106,6 +115,12 @@ int journal_build_chunk_open(char *out, size_t capacity, unsigned sequence,
 int journal_build_chunk_ready(char *out, size_t capacity, const journal_chunk *chunk);
 int journal_build_chunk_state(char *out, size_t capacity, unsigned sequence,
                               chunk_state state, const char *reason);
+/* A chunk sent back to READY with a persisted wall-clock "not before" time and
+ * an attempt count, distinct from journal_build_chunk_state so an ordinary
+ * transition (which always clears backoff on replay) never has to special-case
+ * this one. */
+int journal_build_chunk_backoff(char *out, size_t capacity, unsigned sequence,
+                                unsigned attempts, uint64_t until_unix);
 int journal_build_finish(char *out, size_t capacity, unsigned final_sequence,
                          uint64_t final_source_end_ms);
 /* Session-level defect, set or cleared. `reason` is truncated the same way as

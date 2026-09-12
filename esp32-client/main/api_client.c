@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <limits.h>
+#include <time.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -26,6 +27,7 @@
 #include "screen.h"
 #include "diagnostic_log.h"
 #include "refresh_policy.h"
+#include "clock.h"
 
 /* Headroom, not a fit. The server projects the e-paper surface down to roughly
  * six kilobytes, so 8192 would have worked on paper — and a worst case measured
@@ -733,6 +735,50 @@ static bool mark_chunk(journal_session *session, journal_chunk *chunk,
     return true;
 }
 
+/* Real per-segment backoff timing for retry_class=backoff
+ * (docs/CLIENT_SERVER_STATE.md's open point 3, docs/API_INTERACTION.md's
+ * Segmentupload table: "exponentiell mit Jitter"). Every other outcome still
+ * shares transfer_session()'s plain ~5 s pass cadence; only a segment the
+ * server explicitly asked to be backed off is held back on its own persisted
+ * clock, doubling per consecutive backoff answer since the last ordinary
+ * transition, floored and capped so one flaky segment can neither retry in a
+ * tight loop nor get stuck for the rest of the day. */
+#define CHUNK_BACKOFF_FLOOR_S 30u
+#define CHUNK_BACKOFF_CAP_S (30u * 60u)
+#define CHUNK_BACKOFF_MAX_ATTEMPTS 6u /* 30*2^6 = 1920 s, already above the cap */
+
+static uint64_t chunk_backoff_seconds(unsigned attempts) {
+    unsigned shift = attempts > CHUNK_BACKOFF_MAX_ATTEMPTS ? CHUNK_BACKOFF_MAX_ATTEMPTS : attempts;
+    uint64_t span = (uint64_t)CHUNK_BACKOFF_FLOOR_S << shift;
+    if (span > CHUNK_BACKOFF_CAP_S) span = CHUNK_BACKOFF_CAP_S;
+    /* +-20 % jitter so several devices backed off by the same incident do not
+     * all retry on the same second. */
+    uint64_t jitter_span = span / 5;
+    uint64_t jitter = jitter_span ? esp_random() % (2 * jitter_span + 1) : 0;
+    return span - jitter_span + jitter;
+}
+
+/* Wall-clock, not the monotonic boot clock: a monotonic deadline would outlive
+ * its own clock across a reboot, since the new boot's esp_timer restarts near
+ * zero and could never catch up to an old, larger value — the segment would
+ * look backed off forever. Wall time can itself be unsynchronised at boot;
+ * transfer_session() only enforces the wait once clock_ready() is true, so an
+ * unsynchronised device simply keeps today's plain cadence instead of either
+ * enforcing a wait it cannot compute or blocking on time it does not have. */
+static bool mark_chunk_backoff(journal_session *session, journal_chunk *chunk) {
+    unsigned attempts = chunk->backoff_attempts + 1;
+    uint64_t until = (uint64_t)time(NULL) + chunk_backoff_seconds(attempts);
+    char payload[JOURNAL_MAX_PAYLOAD];
+    int length = journal_build_chunk_backoff(payload, sizeof(payload), chunk->sequence, attempts, until);
+    if (length <= 0 || !journal_append(session, payload, (size_t)length)) return false;
+    memo_queue_note_transition(chunk->state, CHUNK_READY);
+    chunk->state = CHUNK_READY;
+    chunk->backoff_attempts = attempts;
+    chunk->backoff_until = until;
+    local_queue_state_changed = true;
+    return true;
+}
+
 static bool ack_matches(const char *text, const journal_session *session,
                         const journal_chunk *chunk) {
     cJSON *root = cJSON_Parse(text);
@@ -943,12 +989,18 @@ static bool upload_chunk(journal_session *session, journal_chunk *chunk) {
         reason_from_error_code(body, reason, sizeof(reason));
         persisted = mark_chunk(session, chunk, CHUNK_ATTENTION, reason);
         status.uploads_failed++;
+    } else if (request_ok && response_retry_class_is(body, "backoff")) {
+        /* Real per-segment staggered timing, unlike the other outcomes below
+         * — see mark_chunk_backoff() and docs/CLIENT_SERVER_STATE.md. */
+        persisted = mark_chunk_backoff(session, chunk);
+        status.uploads_failed++;
     } else {
-        /* backoff, network, unclassified or unreadable: the conservative
-         * default, retried on the next pass. Per-chunk backoff timing
-         * distinct from the immediate loop above is not implemented — every
-         * ready segment shares the same ~5 s retry cadence regardless of
-         * retry_class here; see docs/CLIENT_SERVER_STATE.md. */
+        /* network, unclassified or unreadable: the conservative default,
+         * retried on the very next pass. `network` already means "resume
+         * once the connection is back", which the pass loop provides on its
+         * own the moment esp_wifi_sta_get_ap_info() succeeds again, so it
+         * does not need a persisted deadline of its own the way `backoff`
+         * does. */
         persisted = mark_chunk(session, chunk, CHUNK_READY, "");
         status.uploads_failed++;
     }
@@ -1078,9 +1130,15 @@ static unsigned resync_missing(journal_session *session) {
 }
 
 static bool transfer_session(journal_session *session) {
+    /* clock_ready() gates the wait, not just the comparison value: an
+     * unsynchronised device has no trustworthy "now" to compare a persisted
+     * unix deadline against, so it falls back to attempting every READY
+     * segment on the plain cadence exactly as before backoff timing existed. */
+    uint64_t now = clock_ready() ? (uint64_t)time(NULL) : 0;
     for (unsigned i = 0; i < session->chunk_count; i++) {
         journal_chunk *chunk = &session->chunks[i];
         if (chunk->state != CHUNK_READY) continue;
+        if (now && chunk->backoff_until && now < chunk->backoff_until) continue;
         if (recorder_busy() || !upload_chunk(session, chunk)) return false;
     }
     if (!session->finished) return true;
