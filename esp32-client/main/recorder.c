@@ -28,6 +28,7 @@
 #include "driver/usb_serial_jtag.h"
 #include "mbedtls/sha256.h"
 #include "journal.h"
+#include "crypto.h"
 #include "memo_queue.h"
 #include "api_client.h"
 #include "diagnostic_log.h"
@@ -46,32 +47,70 @@ static bool usb_line(const char *line) {
     size_t n=strlen(line);
     return usb_serial_jtag_write_bytes(line,n,pdMS_TO_TICKS(2000))==n;
 }
+/* An encrypted segment is decrypted while it is streamed out, exactly like
+ * the upload path: the point of at-rest encryption is that no plaintext
+ * lives on SD, not that an authorized wired export can no longer recover the
+ * audio. The digest sent in @END is always the plaintext one, so a host tool
+ * can still compare it against the server's content_hash. */
 static void export_memo(const char *directory,unsigned segments) {
     char path[64],line[600]; uint8_t data[256],hash[32];
+    journal_session *session=heap_caps_malloc(sizeof(journal_session),MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
+    if(!session) { usb_line("@ERROR no_memory\n"); return; }
+    journal_session_init(session,directory);
+    bool replayed=journal_replay(session);
     for(unsigned s=0;s<segments;s++) {
         snprintf(path,sizeof(path),"%s/%08u.M4A",directory,s);
-        FILE *f=fopen(path,"rb"); if(!f) { usb_line("@ERROR missing_segment\n"); return; }
-        fseek(f,0,SEEK_END); long size=ftell(f); rewind(f);
+        journal_chunk *chunk=replayed?journal_find(session,s):NULL;
+        bool encrypted=chunk && chunk->encryption[0] && strcmp(chunk->encryption,"none")!=0;
+        FILE *f=NULL; audio_crypto_reader *reader=NULL; long size;
+        if(encrypted) {
+            if(!audio_crypto_verify_file(path,session->session_id,s,chunk->iv,chunk->tag) ||
+               !(reader=audio_crypto_reader_open(path,session->session_id,s,chunk->iv))) {
+                usb_line("@ERROR missing_segment\n"); free(session); return;
+            }
+            size=(long)chunk->plain_length;
+        } else {
+            f=fopen(path,"rb");
+            if(!f) { usb_line("@ERROR missing_segment\n"); free(session); return; }
+            fseek(f,0,SEEK_END); size=ftell(f); rewind(f);
+        }
         snprintf(line,sizeof(line),"\n@FILE %u %ld\n",s,size);
-        if(!usb_line(line)) { fclose(f); return; }
+        if(!usb_line(line)) {
+            if(f) fclose(f);
+            if(reader) audio_crypto_reader_close(reader);
+            free(session); return;
+        }
         mbedtls_sha256_context sha; mbedtls_sha256_init(&sha); mbedtls_sha256_starts(&sha,0);
-        size_t offset=0,n;
-        while((n=fread(data,1,sizeof(data),f))>0) {
+        size_t offset=0,n; long remaining=size; bool failed=false;
+        while(remaining>0) {
+            size_t want=remaining<(long)sizeof(data)?(size_t)remaining:sizeof(data);
+            if(encrypted) {
+                int got=audio_crypto_reader_read(reader,data,want);
+                if(got<=0) { failed=got<0; break; }
+                n=(size_t)got;
+            } else {
+                n=fread(data,1,want,f);
+                if(!n) break;
+            }
             mbedtls_sha256_update(&sha,data,n);
             int prefix=snprintf(line,sizeof(line),"@DATA %u ",(unsigned)offset);
             for(size_t i=0;i<n;i++) snprintf(line+prefix+i*2,3,"%02x",data[i]);
             strcpy(line+prefix+n*2,"\n");
-            if(!usb_line(line)) { fclose(f); mbedtls_sha256_free(&sha); return; }
+            if(!usb_line(line)) { failed=true; break; }
             // Leave headroom for the USB/JTAG hardware FIFO and host scheduling.
             vTaskDelay(pdMS_TO_TICKS(20));
-            offset+=n;
+            offset+=n; remaining-=(long)n;
         }
-        fclose(f); mbedtls_sha256_finish(&sha,hash); mbedtls_sha256_free(&sha);
+        if(f) fclose(f);
+        if(reader) audio_crypto_reader_close(reader);
+        if(failed) { mbedtls_sha256_free(&sha); free(session); return; }
+        mbedtls_sha256_finish(&sha,hash); mbedtls_sha256_free(&sha);
         strcpy(line,"@END ");
         for(int i=0;i<32;i++) snprintf(line+5+i*2,3,"%02x",hash[i]);
-        strcpy(line+69,"\n"); if(!usb_line(line)) return;
+        strcpy(line+69,"\n"); if(!usb_line(line)) { free(session); return; }
     }
     usb_line("@DONE\n");
+    free(session);
 }
 static bool memo_id_valid(const char *id) {
     return id && strlen(id)==8 && strspn(id,"0123456789abcdefABCDEF")==8;
@@ -555,15 +594,23 @@ static bool record_memo(bool diagnostic) {
         if(!chunk || !memo_queue_hash(final,digest,&stored)) {
             ESP_LOGE("memo","segment unreadable after write"); ok=false; break;
         }
-        chunk->plain_length=chunk->stored_length=stored;
+        chunk->plain_length=stored;
         snprintf(chunk->plain_sha256,sizeof(chunk->plain_sha256),"%s",digest);
-        snprintf(chunk->stored_sha256,sizeof(chunk->stored_sha256),"%s",digest);
-        snprintf(chunk->encryption,sizeof(chunk->encryption),"none");
+        char iv[JOURNAL_IV_CHARS],tag[JOURNAL_TAG_CHARS],stored_digest[JOURNAL_SHA_CHARS];
+        uint64_t stored_length=0;
+        if(!audio_crypto_encrypt_file(final,journal->session_id,sequence,iv,tag,stored_digest,&stored_length)) {
+            ESP_LOGE("memo","segment encryption failed"); ok=false; break;
+        }
+        chunk->stored_length=stored_length;
+        snprintf(chunk->stored_sha256,sizeof(chunk->stored_sha256),"%s",stored_digest);
+        snprintf(chunk->encryption,sizeof(chunk->encryption),"aes256gcm");
+        snprintf(chunk->iv,sizeof(chunk->iv),"%s",iv);
+        snprintf(chunk->tag,sizeof(chunk->tag),"%s",tag);
         chunk->source_start_ms=segment_start_ms;
         chunk->source_end_ms=samples*1000/48000;
         chunk->duration_ms=chunk->source_end_ms-segment_start_ms;
         if(!note(journal,payload,journal_build_chunk_ready(payload,sizeof(payload),chunk))) { ok=false; break; }
-        memo_queue_note_ready(stored);
+        memo_queue_note_ready(stored_length);
         sequence++;
     }
     if(opened && esp_codec_dev_close(mic)!=ESP_CODEC_DEV_OK) ok=false;
@@ -660,6 +707,7 @@ static void recorder_task(void *unused) {
     if (storage_ok) diagnostic_log_start();
     bool ok=storage_ok && (mkdir("/sdcard/MEMOS",0700)==0 || errno==EEXIST) && init_mic();
     if(ok) ok=mp4_muxer_register()==ESP_MUXER_ERR_OK;
+    if(ok) ok=audio_crypto_init();
     if(!ok) {
         ESP_LOGE("memo","initialization failed"); screen_memo(SCREEN_ERROR,0); vTaskDelete(NULL); return;
     }

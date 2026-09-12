@@ -372,6 +372,158 @@ dieselbe Einschränkung wie bei den bereits dokumentierten `backoff`/
 `immediate`/`never`/`user_action`-Retry-Pfaden. Verbleibt: Verschlüsselung,
 zuletzt priorisiert.
 
+**Nachtrag, 12. September, vierte Runde: Verschlüsselung (letzter der vier
+priorisierten H2-Teilpunkte).** `journal.h`/`journal.c` trugen die dafür
+vorgesehenen Felder (`plain_`/`stored_length`/`_sha256`, `enc`) schon lange als
+Platzhalter ("H6 does not require a journal format migration"). `journal_chunk`
+bekommt jetzt zusätzlich `iv`/`tag` (je Hex-codiert, 12/16 Byte); ein neuer
+Callback-Typ `journal_encrypt_fn`, injiziert exakt wie das bestehende
+`journal_hash_fn`, hält `journal.c` weiterhin frei von Plattform-Crypto.
+
+Neues Modul `main/crypto.c`/`.h`: pro Installation ein zufälliger 256-Bit-
+Schlüssel (`esp_fill_random`), einmalig erzeugt und in NVS unter dem
+bestehenden Namespace `notebook` abgelegt — Flash Encryption schützt das erst
+bei der Produktionsfreigabe, dieselbe bewusste Reihenfolge wie beim
+Geräte-Credential. `audio_crypto_encrypt_file()` verschlüsselt ein fertiges
+Segment mit AES-256-GCM (12-Byte-Zufalls-IV, `session_id:sequence` als
+Associated Data, damit ein Chiffrat nicht unbemerkt auf ein anderes Segment
+umbenannt werden kann) blockweise in eine Sibling-Datei, fsynct sie, entfernt
+dann das Klartext-`.M4A` und benennt das Chiffrat darauf um — dieselbe
+Fsync-vor-Rename-Disziplin wie beim übrigen Journal. Genau drei Stellen bauten
+bisher aus einem fertigen Klartextsegment einen `chunk_ready`-Record mit
+`enc="none"`: der normale Aufnahmepfad (`recorder.c::record_memo()`) und die
+beiden Recovery-Pfade in `journal.c` (`journal_recover()`s `CHUNK_WRITING`-Ast,
+`journal_adopt()`). Alle drei rufen jetzt zusätzlich den Encrypt-Callback auf
+und schreiben `enc="aes256gcm"` mit den zurückgegebenen `iv`/`tag`.
+
+Der Uploadpfad (`api_client.c::upload_chunk()`/`upload_attempt()`) verifiziert
+den GCM-Tag über die komplette Chiffratdatei, **bevor** überhaupt eine
+Verbindung geöffnet wird (`audio_crypto_verify_file()`, RAM-only, kein
+Klartext) — ein beschädigtes At-rest-Chiffrat landet damit sofort lokal auf
+`attention`/`hash`, derselben Klassifikation, die `journal_recover()` schon für
+einen abweichenden gespeicherten Hash verwendet, statt einen Uploadversuch mit
+falschem Inhalt zu verschwenden. Erst danach liest die bestehende
+1024-Byte-Streamingschleife blockweise über einen neuen `audio_crypto_reader`
+und entschlüsselt jeden Block direkt in den Sendepuffer — kein Klartext auf
+SD, keine vollständige Pufferung im RAM, exakt wie in
+`docs/IMPLEMENTATION_DECISIONS.md` gefordert. `content_hash`/`plain_length`
+bleiben unverändert die Klartextwerte, da GCM längenerhaltend ist. Bereits
+vorhandene `enc="none"`-Segmente (z. B. vor diesem Flash aufgenommen) laufen
+unverändert über den alten Klartextzweig — kein harter Cutover.
+
+Ein bislang unbemerkter Nebeneffekt wäre sonst gewesen: der USB-Diagnoseexport
+(`recorder.c::export_memo()`, siehe `memo-files`) liest `.M4A`-Dateien direkt
+und hätte ab jetzt unbemerkt Chiffrat statt Klartext über die serielle
+Schnittstelle geschickt, mit einer SHA-256, die nicht mehr zum serverseitigen
+`content_hash` passt. Behoben im selben Zug: `export_memo()` liest jetzt den
+Journal-Eintrag jedes Segments, verifiziert und entschlüsselt verschlüsselte
+Segmente genauso wie der Uploadpfad, und meldet weiterhin den
+Klartext-SHA-256.
+
+`journal_build_chunk_ready()`/`apply_payload()` schreiben/lesen `iv`/`tg` nur,
+wenn gesetzt — ein `enc="none"`-Record bleibt byteidentisch zu vorher, keine
+Journalmigration. `tools/journal_test.c` bekam einen no-op-`fake_encrypt()`
+(unverändertes Dateiinhalt, echte Zufalls-IV/Tag-Hexwerte über den bereits
+vorhandenen `fake_random()`) für alle 13 bestehenden
+`journal_recover()`/`journal_adopt()`-Aufrufe, plus neue Prüfungen, dass ein
+adoptiertes Segment nach echtem Disk-Replay (nicht nur im RAM) `enc`, eine
+24-stellige `iv` und eine 32-stellige `tag` trägt und zwei Segmente
+unterschiedliche IVs bekommen — `sh tools/run_journal_test.sh` lokal grün
+(9580 Prüfungen, vier neu, keine roten). `idf.py build` (ESP-IDF 5.5.2,
+esp32s3) kompiliert sauber durch, inklusive `crypto.c` als neue Komponente in
+`main/CMakeLists.txt`.
+
+**Erster echter Gerätetest schlug fehl, echter Fehler gefunden und behoben.**
+Jede Aufnahme brach sofort mit `segment encryption failed` ab (Log: `capture
+start` → `E (…) memo: segment encryption failed` → `capture FAILED`),
+sichtbar am Gerät als „Achtung — lokale Diagnose über USB öffnen". Ursache war
+eine falsche Annahme über `mbedtls_gcm_update()`, die sich gegen den
+vollständigen `idf.py build` nicht prüfen lässt und erst am realen Gerät
+auffiel: die Funktion garantiert **nicht**, dass die Ausgabelänge pro Aufruf
+der Eingabelänge entspricht — laut dem vendorierten
+`components/mbedtls/mbedtls/include/mbedtls/gcm.h` kann sie intern blockweise
+puffern (das `acceleration`-Feld im Kontext deutet auf die S3-Hardware-
+beschleunigung als Ursache hin), und `mbedtls_gcm_finish()` kann am Ende
+zusätzlich noch bis zu 15 Byte Restdaten liefern. Der ursprüngliche Code
+prüfte `produced != got` als Fehlerbedingung (falsch) und verwarf
+`mbedtls_gcm_finish()`s Ausgabeparameter komplett mit `NULL, 0` (hätte am
+Dateiende Bytes verloren). Behoben in allen drei betroffenen Funktionen in
+`crypto.c`: `audio_crypto_encrypt_file()`, `audio_crypto_verify_file()` und
+`audio_crypto_reader_read()`. Die Ausgabepuffer sind jetzt `Eingabelänge + 15`
+groß (die von mbedtls dokumentierte Untergrenze), `produced`/`tail_len` werden
+als tatsächliche Längen übernommen statt gegen die Eingabelänge geprüft, und
+`mbedtls_gcm_finish()` bekommt einen echten Ausgabepuffer statt `NULL, 0`.
+`audio_crypto_reader` bekam dafür einen internen Pending-Puffer: ein Aufrufer
+erwartet pro `read()`-Aufruf eine feste, selbst gewählte Byteanzahl, GCM
+liefert aber pro internem Schritt eine davon unabhängige Menge — der Reader
+puffert intern und füllt die Aufruferanfrage über mehrere interne Schritte,
+bis genug da ist oder das Dateiende samt `mbedtls_gcm_finish()`-Rest erreicht
+ist. `idf.py build` bleibt grün, `sh tools/run_journal_test.sh` unverändert
+grün (dieser Teil ist reines Host-C ohne mbedtls-Abhängigkeit).
+
+**Zweiter echter Gerätetest, gleicher äußerer Befund, anderer echter Fehler.**
+Nach dem GCM-Fix oben schlug die Aufnahme mit identischem Bild/Symptom erneut
+fehl. Diesmal mit gezieltem Stufen-Logging (siehe unten) sofort eindeutig:
+`E crypto: encrypt: cannot open ciphertext temp file, errno=22` (`EINVAL`).
+Ursache: jeder von dieser Firmware geschriebene Dateiname ist ein strikter
+FAT-8.3-Kurzname (`00000000.M4A`, `JOURNAL.LOG`, …, genau ein Punkt, höchstens
+acht Zeichen davor, höchstens drei danach); FATFS auf diesem Gerät lehnt alles
+andere mit `EINVAL` ab. `path + ".ENC"` erzeugte `00000000.M4A.ENC` — zwei
+Punkte, zu lang — und das ließ sich mit keinem Build-Lauf prüfen, nur am
+echten Gerät. Behoben: die Endung wird jetzt ersetzt statt angehängt
+(`strrchr(path, '.')`, alles davor plus `.ENC`), Ergebnis `00000000.ENC` —
+regelkonform. Um beim ersten Fehlversuch nicht wieder blind zu raten, hat
+`audio_crypto_encrypt_file()` jetzt an jeder mbedtls-/Datei-Operation ein
+eigenes `ESP_LOGE` mit Fehlercode/`errno` — genau das hat diesen zweiten
+Fehler in einem Durchlauf statt in mehreren Rateversuchen gefunden. `idf.py
+build` grün, `sh tools/run_journal_test.sh` unverändert grün (crypto.c ist
+nicht Teil des Hosttests).
+
+**Dritter Gerätetest nach beiden Fixes: erfolgreich.** Eine reale Aufnahme
+lief vollständig durch (`capture SAVED; segments=1 ready=1 attention=0`),
+wurde hochgeladen und vom Server bestätigt (`acked=1 ... finish=1` im
+`sync complete: ...`-Log). Damit ist H2 vollständig; alle vier priorisierten
+Teilpunkte sind jetzt real am Gerät bestätigt.
+
+**Nachtrag: Untersuchung des 51-Session-Nachholsyncs, kein Freigabe-Bug,
+aber ein echter Skalierungsfehler gefunden.** Der große Nachholsync nach
+diesem Flash (51 lokale Sessions) sah nach einem hängenden Freigabe-Pfad aus
+und wurde direkt am Gerät per `pyserial` gegen COM9 untersucht (`idf.py
+monitor` erwies sich für skriptgesteuerte Interaktion als unzuverlässig —
+ein `Stop-Process` beendete nur den `idf.py`-Wrapper, nicht die dahinter
+liegenden Python-Kindprozesse, die den Port danach gesperrt hielten).
+`memo-list`/`memo-why` zeigten: 11 von 11 stichprobenartig geprüften
+`acked`-Sessions hatten bereits `file=missing` — das Audio war längst
+freigegeben und gelöscht, nur der Journal-Eintrag bleibt absichtlich für
+immer stehen. Kein Freigabe-Bug.
+
+Dabei aber ein echter, unabhängiger Fund: `memo_queue.c::memo_queue_scan()`
+(die Boot-Zeit-Wiederherstellung) deckelte fest bei 32 Verzeichnissen pro
+Durchlauf, **ohne Rotation** — anders als der strukturell identische,
+bereits gelöste Fall im Sync-Pfad (`api_client.c`s
+`SESSION_WINDOW`/`session_offset`). Da sich die POSIX-`readdir()`-Reihenfolge
+nicht von selbst ändert, blieb jedes Verzeichnis jenseits Position 32 auf
+einer Karte mit mehr Sessions dauerhaft unwiederhergestellt — genau das hielt
+drei durch die eigenen Verschlüsselungs-Testfehlschläge entstandene,
+unvollständige Aufnahmen unbegrenzt im `writing`-Zustand fest. Behoben mit
+demselben Rotationsmuster (`SCAN_WINDOW`/`scan_offset`); live am Gerät
+bestätigt (aufeinanderfolgende Scans: „17 of 49 sessions … next start=0" dann
+„32 of 48 sessions … next start=32"). Beim anschließenden Aufräumen der drei
+Testaufnahmen ein schönes Detail: zwei davon finalisierte der frische Boot
+mit dem jetzt reparierten Verschlüsselungscode zuerst selbst zu echten
+`ready`-Segmenten (`journal_recover()`s `CHUNK_WRITING`-Pfad) — `memo-discard`
+verweigerte sie folgerichtig mit `still_deliverable`, bis der reale
+Uploadversuch serverseitig mit `AUDIO_METADATA_INVALID` ablehnte (die
+Aufnahmen waren tatsächlich zu kurz/beschädigt), erst danach waren sie regulär
+discardable. Realer Beleg, dass die Discard-Sicherheitsregel genau wie
+vorgesehen funktioniert. Endzustand: nur noch die eine bereits vorher
+bekannte `server_conflict`-Attention-Session übrig.
+
+Damit ist H2 inhaltlich und real vollständig; der spätere, separat
+priorisierte Systemaudit (`task.md`) bleibt der Ort für Flash
+Encryption/Secure Boot und alles, was über SD-At-rest-Verschlüsselung
+hinausgeht.
+
 ### 4. `GET /sessions/{id}/dashboard` — erledigt, 7. September, zweite Runde
 
 `fetch_session()` hängt jetzt `?surface=esp32_epaper` an, analog zum

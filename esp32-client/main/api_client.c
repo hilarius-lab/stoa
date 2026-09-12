@@ -28,6 +28,7 @@
 #include "diagnostic_log.h"
 #include "refresh_policy.h"
 #include "clock.h"
+#include "crypto.h"
 
 /* Headroom, not a fit. The server projects the e-paper surface down to roughly
  * six kilobytes, so 8192 would have worked on paper — and a worst case measured
@@ -936,6 +937,11 @@ static bool stream_part(esp_http_client_handle_t client, const void *data, size_
  * segments in an hour — that difference is the whole feature. */
 static esp_http_client_handle_t uploader;
 
+static void close_audio_source(FILE *audio, audio_crypto_reader *reader) {
+    if (audio) fclose(audio);
+    if (reader) audio_crypto_reader_close(reader);
+}
+
 static bool upload_attempt(const journal_session *session, const journal_chunk *chunk,
                            char *body, size_t capacity, int *http, bool *reused) {
     char path[128], url[API_URL_MAX], file_path[96], boundary[64], preamble[1400];
@@ -966,8 +972,22 @@ static bool upload_attempt(const journal_session *session, const journal_chunk *
     char ending[80];
     int suffix = snprintf(ending, sizeof(ending), "\r\n--%s--\r\n", boundary);
     if (suffix <= 0 || suffix >= (int)sizeof(ending)) return false;
-    FILE *audio = fopen(file_path, "rb");
-    if (!audio) return false;
+    /* Verified once, up front: a segment is only ever handed to the uploader
+     * after audio_crypto_verify_file() has authenticated it whole, so a
+     * corrupted at-rest ciphertext is caught here, before any bytes are sent,
+     * rather than surfacing later as a content_hash mismatch the server has
+     * to notice. */
+    bool encrypted = chunk->encryption[0] && strcmp(chunk->encryption, "none") != 0;
+    FILE *audio = NULL;
+    audio_crypto_reader *reader = NULL;
+    if (encrypted) {
+        if (!audio_crypto_verify_file(file_path, session->session_id, chunk->sequence, chunk->iv, chunk->tag) ||
+            !(reader = audio_crypto_reader_open(file_path, session->session_id, chunk->sequence, chunk->iv)))
+            return false;
+    } else {
+        audio = fopen(file_path, "rb");
+        if (!audio) return false;
+    }
     char content_type[96];
     snprintf(content_type, sizeof(content_type), "multipart/form-data; boundary=%s", boundary);
     esp_http_client_config_t config = {.url=url, .method=HTTP_METHOD_POST, .timeout_ms=20000,
@@ -980,11 +1000,11 @@ static bool upload_attempt(const journal_session *session, const journal_chunk *
     *reused = uploader != NULL;
     if (!uploader) {
         uploader = esp_http_client_init(&config);
-        if (!uploader) { fclose(audio); return false; }
+        if (!uploader) { close_audio_source(audio, reader); return false; }
         esp_http_client_set_header(uploader, "Accept", "application/json");
         esp_http_client_set_header(uploader, "X-Smart-Notebook-Contract", API_CONTRACT);
     } else if (esp_http_client_set_url(uploader, url) != ESP_OK) {
-        fclose(audio);
+        close_audio_source(audio, reader);
         esp_http_client_cleanup(uploader);
         uploader = NULL;
         return false;
@@ -1002,12 +1022,18 @@ static bool upload_attempt(const journal_session *session, const journal_chunk *
     uint64_t sent = 0;
     while (ok && sent < chunk->plain_length) {
         size_t wanted = chunk->plain_length - sent > sizeof(buffer) ? sizeof(buffer) : (size_t)(chunk->plain_length - sent);
-        size_t got = fread(buffer, 1, wanted, audio);
+        size_t got = 0;
+        if (encrypted) {
+            int n = audio_crypto_reader_read(reader, buffer, wanted);
+            if (n > 0) got = (size_t)n;
+        } else {
+            got = fread(buffer, 1, wanted, audio);
+        }
         if (got != wanted || !stream_part(client, buffer, got)) ok = false;
         sent += got;
     }
     if (ok) ok = stream_part(client, ending, (size_t)suffix);
-    fclose(audio);
+    close_audio_source(audio, reader);
     body[0] = 0;
     size_t used = 0;
     /* A connection may only be kept if the response was read to its end.
@@ -1070,6 +1096,19 @@ static bool reconciliation_has(const journal_session *session, const journal_chu
 }
 
 static bool upload_chunk(journal_session *session, journal_chunk *chunk) {
+    /* A corrupted at-rest ciphertext is a local defect, not a transient
+     * network problem: caught here as `attention`/`hash`, the same
+     * classification journal_recover() already uses for a stored-hash
+     * mismatch, instead of spending an upload attempt on it first. */
+    if (chunk->encryption[0] && strcmp(chunk->encryption, "none") != 0) {
+        char file_path[128];
+        snprintf(file_path, sizeof(file_path), "%s/%s", session->directory, chunk->file);
+        if (!audio_crypto_verify_file(file_path, session->session_id, chunk->sequence, chunk->iv, chunk->tag)) {
+            mark_chunk(session, chunk, CHUNK_ATTENTION, "hash");
+            status.uploads_failed++;
+            return false;
+        }
+    }
     if (!mark_chunk(session, chunk, CHUNK_UPLOADING, "")) return false;
     char *body = malloc(API_RESPONSE_MAX);
     if (!body) { mark_chunk(session, chunk, CHUNK_READY, ""); return false; }

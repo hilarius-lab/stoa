@@ -33,6 +33,8 @@
 #define JOURNAL_SEQUENCE_BASE 0
 #define JOURNAL_SHA_CHARS 65  /* 64 lowercase hex characters plus terminator */
 #define JOURNAL_CONTEXT_TYPE_CHARS 16
+#define JOURNAL_IV_CHARS 25   /* 12-byte GCM IV as 24 lowercase hex characters plus terminator */
+#define JOURNAL_TAG_CHARS 33  /* 16-byte GCM tag as 32 lowercase hex characters plus terminator */
 
 typedef enum {
     CHUNK_UNKNOWN = 0, /* referenced by no record; never persisted */
@@ -57,6 +59,11 @@ typedef struct {
     uint64_t source_end_ms;
     uint64_t duration_ms;
     char encryption[12];
+    /* Empty for enc="none". For enc="aes256gcm" these carry the per-segment
+     * nonce and authentication tag as lowercase hex, exactly like the plain/
+     * stored digests above. */
+    char iv[JOURNAL_IV_CHARS];
+    char tag[JOURNAL_TAG_CHARS];
     /* Real per-segment backoff timing for retry_class=backoff (API_INTERACTION.md's
      * Segmentupload table), persisted so it survives a reboot. `backoff_until` is
      * a wall-clock unix second, not a monotonic one: a monotonic deadline would
@@ -94,6 +101,15 @@ typedef struct {
  * free of platform crypto. Returns true and fills `hex` with 64 lowercase hex
  * characters and `length` with the byte count. */
 typedef bool (*journal_hash_fn)(const char *path, char *hex, uint64_t *length);
+
+/* Encrypts the plaintext file at `path` in place, binding `session_id` and
+ * `sequence` as associated data, and reports the result exactly like
+ * journal_hash_fn describes a file: `iv_hex`/`tag_hex` (JOURNAL_IV_CHARS/
+ * JOURNAL_TAG_CHARS) and the digest/length of what is now on disk. Supplied
+ * by the caller so this module stays free of platform crypto, same as the
+ * hash function above. */
+typedef bool (*journal_encrypt_fn)(const char *path, const char *session_id, unsigned sequence,
+                                   char *iv_hex, char *tag_hex, char *stored_hex, uint64_t *stored_length);
 
 uint32_t journal_crc32(const void *data, size_t length);
 
@@ -143,12 +159,13 @@ bool journal_append(journal_session *session, const char *payload, size_t payloa
 bool journal_replay(journal_session *session);
 
 /* Verify every segment against the recorded size and digest and classify it.
- * Recovers a renamed-but-unrecorded segment by hashing it and appending the
- * missing record. Never deletes, truncates or reformats user data. */
-bool journal_recover(journal_session *session, journal_hash_fn hash);
+ * Recovers a renamed-but-unrecorded segment by hashing it, encrypting it and
+ * appending the missing record. Never deletes, truncates or reformats user
+ * data. */
+bool journal_recover(journal_session *session, journal_hash_fn hash, journal_encrypt_fn encrypt);
 
 /* Reconstruct a journal for a directory recorded before H1. */
-bool journal_adopt(journal_session *session, journal_hash_fn hash,
+bool journal_adopt(journal_session *session, journal_hash_fn hash, journal_encrypt_fn encrypt,
                    journal_random_fn random_source, const char *firmware);
 
 const char *journal_state_name(chunk_state state);

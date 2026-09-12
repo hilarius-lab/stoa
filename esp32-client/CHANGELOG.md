@@ -1,5 +1,101 @@
 # Änderungen
 
+## 2026-09-12 – Rotierendes Scan-Fenster für die Boot-Wiederherstellung
+
+- Bei der Untersuchung eines vermeintlichen Freigabe-Rückstaus (51 Sessions
+  beim Nachholsync nach der Verschlüsselungsabnahme) stellte sich per
+  `memo-list`/`memo-why` heraus: die lokale Audiofreigabe funktioniert
+  korrekt — alle stichprobenartig geprüften `acked`-Sessions hatten bereits
+  `file=missing` (Audio bereits freigegeben, nur der Journal-Eintrag bleibt
+  absichtlich stehen). Kein Freigabe-Bug.
+- Dabei aber ein echter, unabhängiger Skalierungsfehler in
+  `memo_queue.c::memo_queue_scan()` gefunden: die Boot-Zeit-Wiederherstellung
+  deckelte fest bei 32 Verzeichnissen pro Durchlauf, ohne Rotation — anders
+  als der strukturell identische, bereits gelöste Fall im Sync-Pfad
+  (`api_client.c`s `SESSION_WINDOW`/`session_offset`). Da sich die
+  POSIX-`readdir()`-Reihenfolge nicht von selbst ändert, blieb jedes
+  Verzeichnis jenseits Position 32 auf einer Karte mit mehr Sessions
+  dauerhaft unwiederhergestellt.
+- Behoben mit demselben Rotationsmuster: neues `SCAN_WINDOW`/`scan_offset` in
+  `memo_queue.c`, identisch zum bewährten Vorbild in `api_client.c`. `status`
+  wird weiterhin pro Durchlauf neu berechnet; eine Session außerhalb des
+  aktuellen Fensters fehlt also vorübergehend in `ready`/`acked`/`attention`,
+  bis die Rotation sie wieder erreicht — bewusst in Kauf genommen als
+  begrenzte, selbstkorrigierende Verzögerung, kein dauerhafter Counter-Drift.
+- Live auf dem Gerät bestätigt: aufeinanderfolgende Scans zeigten „17 of 49
+  sessions … next start=0" dann „32 of 48 sessions … next start=32".
+  Dabei drei liegengebliebene, unvollständige Testaufnahmen aus den
+  Verschlüsselungs-Debugrunden aufgeräumt: zwei wurden vom frischen Boot mit
+  dem jetzt reparierten Verschlüsselungscode zuerst selbst zu echten
+  `ready`-Segmenten finalisiert (`journal_recover()`s `CHUNK_WRITING`-Pfad),
+  verweigerten `memo-discard` deshalb korrekt mit `still_deliverable`, und
+  waren erst nach serverseitiger Ablehnung (`AUDIO_METADATA_INVALID` — die
+  Aufnahmen waren tatsächlich ungültig) regulär discardable. `idf.py build`
+  grün.
+
+## 2026-09-12 – Verschlüsselung der Uploadqueue
+
+- Vierter und letzter der vier priorisierten H2-Teilpunkte (Retryklassen →
+  Stromausfalltests → Credentialrotation → Verschlüsselung). `journal.h`/
+  `journal.c` trugen `plain_`/`stored_length`/`_sha256` und `enc` schon lange
+  als Platzhalter für diesen Schritt; `journal_chunk` bekommt jetzt zusätzlich
+  Hex-codierte `iv`/`tag`, transportiert über einen neuen `journal_encrypt_fn`-
+  Callback, injiziert genau wie das bestehende `journal_hash_fn` — `journal.c`
+  bleibt frei von Plattform-Crypto.
+- Neues Modul `main/crypto.c`/`.h`: ein zufälliger 256-Bit-Schlüssel pro
+  Installation in NVS (Namespace `notebook`, wie das Geräte-Credential);
+  `audio_crypto_encrypt_file()` verschlüsselt ein fertiges Segment mit
+  AES-256-GCM (Zufalls-IV, `session_id:sequence` als Associated Data gegen
+  Segment-Vertauschen) blockweise in eine Sibling-Datei und ersetzt damit das
+  Klartext-`.M4A`, fsync-vor-rename wie der Rest des Journals.
+- Alle drei Stellen, die aus einem fertigen Klartextsegment einen
+  `chunk_ready`-Record mit `enc="none"` bauten (`recorder.c::record_memo()`,
+  `journal_recover()`s `CHUNK_WRITING`-Ast, `journal_adopt()`), rufen jetzt
+  zusätzlich den Encrypt-Callback auf.
+- `api_client.c::upload_chunk()` verifiziert den GCM-Tag über die komplette
+  Chiffratdatei, bevor eine Verbindung geöffnet wird — ein beschädigtes
+  At-rest-Chiffrat landet sofort auf `attention`/`hash` statt einen
+  Uploadversuch zu verschwenden — und `upload_attempt()` entschlüsselt danach
+  blockweise über einen neuen `audio_crypto_reader` direkt in den Sendepuffer;
+  kein Klartext auf SD, keine volle RAM-Pufferung. `enc="none"`-Bestandssegmente
+  laufen unverändert über den alten Klartextzweig.
+- Nebenbei einen echten, sonst stillen Regressionsfall gefunden und behoben:
+  der USB-Diagnoseexport (`recorder.c::export_memo()`, `memo-files`) hätte ab
+  jetzt unbemerkt Chiffrat statt Klartext gesendet. Liest jetzt den
+  Journal-Eintrag jedes Segments und entschlüsselt wie der Uploadpfad.
+- `journal_build_chunk_ready()`/`apply_payload()` schreiben/lesen `iv`/`tg` nur
+  wenn gesetzt, ein `enc="none"`-Record bleibt byteidentisch — keine
+  Journalmigration. `tools/journal_test.c` bekam einen no-op-`fake_encrypt()`
+  für alle bestehenden `journal_recover()`/`journal_adopt()`-Aufrufe plus neue
+  Prüfungen für `enc`/`iv`/`tag` nach echtem Disk-Replay;
+  `sh tools/run_journal_test.sh` grün (9580 Prüfungen). `idf.py build` grün.
+- **Erster echter Gerätetest schlug fehl, echter Fehler gefunden und
+  behoben:** jede Aufnahme brach mit `segment encryption failed` ab.
+  `mbedtls_gcm_update()` garantiert auf diesem Ziel nicht, dass die
+  Ausgabelänge pro Aufruf der Eingabelänge entspricht (internes
+  Blockpuffern, vermutlich S3-Hardwarebeschleunigung), und
+  `mbedtls_gcm_finish()` kann am Ende zusätzlich bis zu 15 Byte Restdaten
+  liefern — beides nur am Gerät sichtbar, nicht im Build. Der ursprüngliche
+  Code prüfte `produced != got` als Fehler (falsch) und verwarf
+  `mbedtls_gcm_finish()`s Ausgabe mit `NULL, 0`. Behoben in
+  `audio_crypto_encrypt_file()`, `audio_crypto_verify_file()` und
+  `audio_crypto_reader_read()`: `Eingabelänge + 15` Ausgabepuffer, echte
+  Längen statt Prüfung gegen die Eingabelänge, echter Ausgabepuffer für
+  `mbedtls_gcm_finish()`. `audio_crypto_reader` bekam einen internen
+  Pending-Puffer, um trotzdem pro `read()`-Aufruf die vom Aufrufer
+  gewünschte feste Byteanzahl zu liefern. `idf.py build` grün.
+- **Zweiter echter Gerätetest, gleiches äußeres Bild, anderer echter
+  Fehler:** nach obigem Fix schlug die Aufnahme mit identischem Fehlerbild
+  erneut fehl. Gezieltes Stufen-Logging in `audio_crypto_encrypt_file()`
+  (jede mbedtls-/Datei-Operation loggt jetzt einzeln mit Fehlercode/`errno`)
+  fand ihn sofort: `cannot open ciphertext temp file, errno=22` (`EINVAL`).
+  Jeder von dieser Firmware geschriebene Dateiname ist ein strikter
+  FAT-8.3-Kurzname (`00000000.M4A`, `JOURNAL.LOG`, …); `path + ".ENC"`
+  erzeugte `00000000.M4A.ENC` — zwei Punkte, zu lang, von FATFS mit
+  `EINVAL` abgelehnt, nur am echten Gerät sichtbar. Behoben: Endung wird per
+  `strrchr(path,'.')` ersetzt statt angehängt, Ergebnis `00000000.ENC`.
+  `idf.py build` grün. Noch nicht erneut geflasht/live geprüft.
+
 ## 2026-09-12 – Automatische Credentialrotation
 
 - Dritter der vier priorisierten H2-Teilpunkte (Retryklassen →

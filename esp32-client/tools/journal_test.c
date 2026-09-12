@@ -102,6 +102,28 @@ static void fake_random(void *out, size_t length) {
     for (size_t i = 0; i < length; i++) { seed = seed * 1103515245u + 12345u; bytes[i] = (uint8_t)(seed >> 16); }
 }
 
+/* A no-op stand-in for audio_crypto_encrypt_file(): this test exercises the
+ * journal's handling of the enc/iv/tag fields (framing, replay, recovery
+ * classification), not AES-GCM itself, which has no ESP-IDF-free host build
+ * here. Leaves the file's bytes untouched and reports the same digest for
+ * "stored" as for "plain" -- exactly what the real function would report if
+ * its cipher were the identity -- so every existing assertion about file
+ * content, size and hash after recovery/adoption stays valid unchanged. */
+static bool fake_encrypt(const char *path, const char *session_id, unsigned sequence,
+                         char *iv_hex, char *tag_hex, char *stored_hex, uint64_t *stored_length) {
+    (void)session_id; (void)sequence;
+    if (!hash_file(path, stored_hex, stored_length)) return false;
+    uint8_t iv[12], tag[16];
+    fake_random(iv, sizeof(iv));
+    fake_random(tag, sizeof(tag));
+    static const char digits[] = "0123456789abcdef";
+    for (size_t i = 0; i < sizeof(iv); i++) { iv_hex[i*2] = digits[iv[i] >> 4]; iv_hex[i*2+1] = digits[iv[i] & 0xF]; }
+    iv_hex[sizeof(iv)*2] = 0;
+    for (size_t i = 0; i < sizeof(tag); i++) { tag_hex[i*2] = digits[tag[i] >> 4]; tag_hex[i*2+1] = digits[tag[i] & 0xF]; }
+    tag_hex[sizeof(tag)*2] = 0;
+    return true;
+}
+
 /* --------------------------------------------------------------- helpers */
 
 static const char *ROOT = "/tmp/journal_test";
@@ -320,7 +342,7 @@ static void test_recovery_cases(void) {
     snprintf(dir, sizeof(dir), "%s/healthy", ROOT);
     build_session(dir, 3);
     journal_session *s = load(dir);
-    journal_recover(s, hash_file);
+    journal_recover(s, hash_file, fake_encrypt);
     check(journal_count_state(s, CHUNK_READY) == 3, "healthy session is fully ready");
     check(journal_count_state(s, CHUNK_ATTENTION) == 0, "healthy session has no attention");
     free(s);
@@ -334,7 +356,7 @@ static void test_recovery_cases(void) {
     snprintf(path, sizeof(path), "%s/00000001.M4A", dir);
     unlink(path);
     s = load(dir);
-    journal_recover(s, hash_file);
+    journal_recover(s, hash_file, fake_encrypt);
     check(journal_find(s, 1)->state == CHUNK_ATTENTION, "missing file is attention");
     check(strcmp(journal_find(s, 1)->reason, "missing") == 0, "missing reason recorded");
     check(journal_find(s, 0)->state == CHUNK_READY, "neighbours stay ready");
@@ -346,7 +368,7 @@ static void test_recovery_cases(void) {
     snprintf(path, sizeof(path), "%s/00000000.M4A", dir);
     write_file(path, "short", 5);
     s = load(dir);
-    journal_recover(s, hash_file);
+    journal_recover(s, hash_file, fake_encrypt);
     check(journal_find(s, 0)->state == CHUNK_ATTENTION, "size mismatch is attention");
     check(strcmp(journal_find(s, 0)->reason, "size") == 0, "size reason recorded");
     free(s);
@@ -361,7 +383,7 @@ static void test_recovery_cases(void) {
     write_file(path, same, length);
     free(same);
     s = load(dir);
-    journal_recover(s, hash_file);
+    journal_recover(s, hash_file, fake_encrypt);
     check(journal_find(s, 0)->state == CHUNK_ATTENTION, "hash mismatch is attention");
     check(strcmp(journal_find(s, 0)->reason, "hash") == 0, "hash reason recorded");
     free(s);
@@ -385,7 +407,7 @@ static void test_recovery_cases(void) {
     }
     s = load(dir);
     check(journal_find(s, 0)->state == CHUNK_WRITING, "unfinished segment replays as writing");
-    journal_recover(s, hash_file);
+    journal_recover(s, hash_file, fake_encrypt);
     check(journal_find(s, 0)->state == CHUNK_READY, "renamed segment is recovered to ready");
     check(journal_find(s, 0)->stored_length == 14, "recovered length recorded");
     free(s);
@@ -411,7 +433,7 @@ static void test_recovery_cases(void) {
         write_file(path, "half", 4);
     }
     s = load(dir);
-    journal_recover(s, hash_file);
+    journal_recover(s, hash_file, fake_encrypt);
     check(journal_find(s, 0)->state == CHUNK_ATTENTION, "partial segment is attention");
     check(strcmp(journal_find(s, 0)->reason, "incomplete") == 0, "incomplete reason recorded");
     check(size_of(path) == 4, "partial file is kept, not deleted");
@@ -430,7 +452,7 @@ static void test_recovery_cases(void) {
     snprintf(path, sizeof(path), "%s/00000000.M4A", dir);
     unlink(path);
     s = load(dir);
-    journal_recover(s, hash_file);
+    journal_recover(s, hash_file, fake_encrypt);
     check(journal_find(s, 0)->state == CHUNK_ACKED, "acked stays acked after the file is gone");
     free(s);
 
@@ -446,7 +468,7 @@ static void test_recovery_cases(void) {
     }
     s = load(dir);
     check(journal_find(s, 0)->state == CHUNK_UPLOADING, "uploading state replays");
-    journal_recover(s, hash_file);
+    journal_recover(s, hash_file, fake_encrypt);
     check(journal_find(s, 0)->state == CHUNK_READY, "interrupted upload collapses to ready");
     free(s);
 
@@ -456,7 +478,7 @@ static void test_recovery_cases(void) {
     snprintf(path, sizeof(path), "%s/00000009.M4A", dir);
     write_file(path, "stray", 5);
     s = load(dir);
-    journal_recover(s, hash_file);
+    journal_recover(s, hash_file, fake_encrypt);
     check(journal_find(s, 9) && journal_find(s, 9)->state == CHUNK_ATTENTION, "orphan is attention");
     check(size_of(path) == 5, "orphan file is kept");
     free(s);
@@ -528,7 +550,7 @@ static void test_ack_write_boundary(void) {
                   "a torn ack record is never believed");
             check(acked_chunk && acked_chunk->state == CHUNK_UPLOADING,
                   "torn ack record falls back to the last durable state");
-            journal_recover(s, hash_file);
+            journal_recover(s, hash_file, fake_encrypt);
             check(acked_chunk->state == CHUNK_READY,
                   "recovery turns an unconfirmed ack into a plain retry, not attention");
         }
@@ -559,7 +581,7 @@ static void test_adoption(void) {
     journal_session *s = malloc(sizeof(journal_session));
     journal_session_init(s, dir);
     check(!journal_replay(s), "no journal present before adoption");
-    check(journal_adopt(s, hash_file, fake_random, "test"), "adoption succeeds");
+    check(journal_adopt(s, hash_file, fake_encrypt, fake_random, "test"), "adoption succeeds");
     free(s);
 
     s = load(dir);
@@ -569,7 +591,15 @@ static void test_adoption(void) {
     check(journal_count_state(s, CHUNK_READY) == 5, "adopted segments are ready");
     check(strlen(s->chunks[0].chunk_id) == 36, "adopted segment has a chunk uuid");
     check(strlen(s->session_id) == 36, "adopted session has a uuid");
-    journal_recover(s, hash_file);
+    /* Written by journal_adopt(), then read back from the actual on-disk
+     * bytes by the load() above -- real coverage of the new enc/iv/tag
+     * fields through journal_build_chunk_ready() and apply_payload(), not
+     * just the in-memory state journal_append() already updates. */
+    check(strcmp(s->chunks[0].encryption, "aes256gcm") == 0, "adopted segment marked encrypted");
+    check(strlen(s->chunks[0].iv) == 24, "adopted segment recorded a 12-byte iv");
+    check(strlen(s->chunks[0].tag) == 32, "adopted segment recorded a 16-byte tag");
+    check(strcmp(s->chunks[0].iv, s->chunks[1].iv) != 0, "distinct segments get distinct ivs");
+    journal_recover(s, hash_file, fake_encrypt);
     check(journal_count_state(s, CHUNK_ATTENTION) == 0, "adopted session verifies cleanly");
     free(s);
 }
@@ -582,7 +612,7 @@ static void test_long_session(void) {
     journal_session *s = load(dir);
     check(s->chunk_count == 32, "all 32 segments replay");
     check(s->final_sequence == 31, "final sequence recorded");
-    journal_recover(s, hash_file);
+    journal_recover(s, hash_file, fake_encrypt);
     check(journal_count_state(s, CHUNK_READY) == 32, "all 32 segments ready");
     for (unsigned i = 0; i < 32; i++) {
         check(s->chunks[i].sequence == i, "sequence order preserved");

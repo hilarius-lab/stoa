@@ -224,6 +224,7 @@ int journal_build_chunk_ready(char *out, size_t capacity, const journal_chunk *c
     if (ok) ok = write_number_field(out, capacity, &at, "d", chunk->duration_ms, true);
     if (ok) ok = write_text_field(out, capacity, &at, "enc",
                                   chunk->encryption[0] ? chunk->encryption : "none", false);
+    if (ok && chunk->iv[0]) ok = write_text_field(out, capacity, &at, "iv", chunk->iv, false);
     if (ok) ok = write_text_field(out, capacity, &at, "ph", chunk->plain_sha256, false);
     if (ok) ok = write_number_field(out, capacity, &at, "pl", chunk->plain_length, false);
     if (ok) ok = write_number_field(out, capacity, &at, "s0", chunk->source_start_ms, false);
@@ -232,6 +233,7 @@ int journal_build_chunk_ready(char *out, size_t capacity, const journal_chunk *c
     if (ok) ok = write_text_field(out, capacity, &at, "sh", chunk->stored_sha256, false);
     if (ok) ok = write_number_field(out, capacity, &at, "sl", chunk->stored_length, false);
     if (ok) ok = write_text_field(out, capacity, &at, "t", "chunk_ready", false);
+    if (ok && chunk->tag[0]) ok = write_text_field(out, capacity, &at, "tg", chunk->tag, false);
     if (ok) ok = write_raw(out, capacity, &at, "}");
     return ok ? (int)at : -1;
 }
@@ -383,6 +385,8 @@ static void apply_payload(journal_session *session, const char *json) {
         read_text(json, "ph", chunk->plain_sha256, sizeof(chunk->plain_sha256));
         read_text(json, "sh", chunk->stored_sha256, sizeof(chunk->stored_sha256));
         read_text(json, "enc", chunk->encryption, sizeof(chunk->encryption));
+        read_text(json, "iv", chunk->iv, sizeof(chunk->iv));
+        read_text(json, "tg", chunk->tag, sizeof(chunk->tag));
         chunk->state = CHUNK_READY;
         return;
     }
@@ -572,7 +576,7 @@ static bool mark(journal_session *session, journal_chunk *chunk,
     return journal_append(session, payload, (size_t)length);
 }
 
-bool journal_recover(journal_session *session, journal_hash_fn hash) {
+bool journal_recover(journal_session *session, journal_hash_fn hash, journal_encrypt_fn encrypt) {
     bool ok = true;
     for (unsigned i = 0; i < session->chunk_count; i++) {
         journal_chunk *chunk = &session->chunks[i];
@@ -599,10 +603,19 @@ bool journal_recover(journal_session *session, journal_hash_fn hash) {
                 if (!mark(session, chunk, CHUNK_ATTENTION, "unreadable")) ok = false;
                 continue;
             }
-            chunk->plain_length = chunk->stored_length = length;
+            char iv[JOURNAL_IV_CHARS], tag[JOURNAL_TAG_CHARS], stored_digest[JOURNAL_SHA_CHARS];
+            uint64_t stored_length = 0;
+            if (!encrypt(final_path, session->session_id, chunk->sequence, iv, tag, stored_digest, &stored_length)) {
+                if (!mark(session, chunk, CHUNK_ATTENTION, "encrypt")) ok = false;
+                continue;
+            }
+            chunk->plain_length = length;
             snprintf(chunk->plain_sha256, sizeof(chunk->plain_sha256), "%s", digest);
-            snprintf(chunk->stored_sha256, sizeof(chunk->stored_sha256), "%s", digest);
-            snprintf(chunk->encryption, sizeof(chunk->encryption), "none");
+            chunk->stored_length = stored_length;
+            snprintf(chunk->stored_sha256, sizeof(chunk->stored_sha256), "%s", stored_digest);
+            snprintf(chunk->encryption, sizeof(chunk->encryption), "aes256gcm");
+            snprintf(chunk->iv, sizeof(chunk->iv), "%s", iv);
+            snprintf(chunk->tag, sizeof(chunk->tag), "%s", tag);
             if (chunk->source_end_ms < chunk->source_start_ms)
                 chunk->source_end_ms = chunk->source_start_ms;
             char payload[JOURNAL_MAX_PAYLOAD];
@@ -661,7 +674,7 @@ bool journal_recover(journal_session *session, journal_hash_fn hash) {
 
 /* Directories recorded before the journal existed still hold valid audio. They
  * are given a journal so the H2 uploader can treat every recording alike. */
-bool journal_adopt(journal_session *session, journal_hash_fn hash,
+bool journal_adopt(journal_session *session, journal_hash_fn hash, journal_encrypt_fn encrypt,
                    journal_random_fn random_source, const char *firmware) {
     char payload[JOURNAL_MAX_PAYLOAD];
     char session_id[JOURNAL_UUID_CHARS];
@@ -690,13 +703,22 @@ bool journal_adopt(journal_session *session, journal_hash_fn hash,
             if (!mark(session, chunk, CHUNK_ATTENTION, "unreadable")) ok = false;
             continue;
         }
+        char iv[JOURNAL_IV_CHARS], tag[JOURNAL_TAG_CHARS], stored_digest[JOURNAL_SHA_CHARS];
+        uint64_t stored_length = 0;
+        if (!encrypt(path, session->session_id, sequence, iv, tag, stored_digest, &stored_length)) {
+            if (!mark(session, chunk, CHUNK_ATTENTION, "encrypt")) ok = false;
+            continue;
+        }
         /* Segment timing was not recorded before H1. The nominal ten-second
          * grid is used so ordering is preserved; the backend reassembles from
          * the sequence, not from these estimates. */
-        chunk->plain_length = chunk->stored_length = hashed;
+        chunk->plain_length = hashed;
         snprintf(chunk->plain_sha256, sizeof(chunk->plain_sha256), "%s", digest);
-        snprintf(chunk->stored_sha256, sizeof(chunk->stored_sha256), "%s", digest);
-        snprintf(chunk->encryption, sizeof(chunk->encryption), "none");
+        chunk->stored_length = stored_length;
+        snprintf(chunk->stored_sha256, sizeof(chunk->stored_sha256), "%s", stored_digest);
+        snprintf(chunk->encryption, sizeof(chunk->encryption), "aes256gcm");
+        snprintf(chunk->iv, sizeof(chunk->iv), "%s", iv);
+        snprintf(chunk->tag, sizeof(chunk->tag), "%s", tag);
         chunk->source_start_ms = position;
         chunk->source_end_ms = position + 10000;
         chunk->duration_ms = 10000;

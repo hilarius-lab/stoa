@@ -11,6 +11,7 @@
 #include "esp_vfs_fat.h"
 #include "mbedtls/sha256.h"
 #include "memo_queue.h"
+#include "crypto.h"
 
 static memo_queue_status status;
 
@@ -115,11 +116,11 @@ static void scan_one(const char *directory) {
         /* No journal: either a recording made before H1, or an empty stub. */
         if (!has_file(directory, "00000000.M4A")) { free(session); return; }
         journal_session_init(session, directory);
-        if (!journal_adopt(session, memo_queue_hash, memo_queue_random, MEMO_FIRMWARE))
+        if (!journal_adopt(session, memo_queue_hash, audio_crypto_encrypt_file, memo_queue_random, MEMO_FIRMWARE))
             ESP_LOGW("queue", "adoption incomplete for one session");
         status.adopted++;
     }
-    if (!journal_recover(session, memo_queue_hash))
+    if (!journal_recover(session, memo_queue_hash, audio_crypto_encrypt_file))
         ESP_LOGW("queue", "recovery could not persist every state change");
     close_open_horizon(session);
 
@@ -140,6 +141,29 @@ static void scan_one(const char *directory) {
     free(session);
 }
 
+/* Bounded per pass, like api_client.c's SESSION_WINDOW/session_offset: a full
+ * journal_recover() can stat, hash and (for a still-open segment) encrypt a
+ * file, so a window of unbounded size on a card holding months of history
+ * would turn one scan into a multi-second stall. The window start rotates
+ * between passes so a card holding more sessions than one pass covers is
+ * still scanned completely -- just spread over more passes, exactly like the
+ * upload path already does.
+ *
+ * Real gap this closes: without rotation, a fixed first-N scan revisits the
+ * same N directories every single pass (POSIX readdir() order does not change
+ * on its own), so anything past position N could never be recovered at all.
+ * That is what stranded three interrupted test recordings in `writing` state
+ * indefinitely once the card passed thirty-two sessions -- discovered while
+ * investigating a live ESP32 during the H2 encryption work.
+ *
+ * `status` is reset every pass, so a session outside this pass's window is
+ * temporarily absent from `ready`/`acked`/`attention` until rotation reaches
+ * it again -- a bounded, self-correcting lag (closed within a few passes,
+ * each triggered by any queue state change), not the unresolved counter drift
+ * the 6 September incident this file's other comments describe. */
+#define SCAN_WINDOW 32
+static unsigned scan_offset;
+
 void memo_queue_scan(void) {
     memset(&status, 0, sizeof(status));
     memo_queue_update_space();
@@ -150,24 +174,30 @@ void memo_queue_scan(void) {
     }
     /* The directory stream is not held open across the per-session work, so a
      * long recovery cannot be disturbed by the reads it performs itself. */
-    char names[32][12];
-    unsigned found = 0, matching = 0;
+    char names[SCAN_WINDOW][12];
+    unsigned found = 0, matching = 0, examined = 0;
     struct dirent *entry;
     while ((entry = readdir(root))) {
         if (!memo_directory_name(entry->d_name)) continue;
-        matching++;
+        unsigned index = matching++;
+        if (index < scan_offset || found == SCAN_WINDOW) continue;
+        examined++;
         /* memo_directory_name has already established the exact 8-character
          * form, so the copy is bounded by construction. */
-        if (found < 32) { memcpy(names[found], entry->d_name, 8); names[found][8] = 0; found++; }
+        memcpy(names[found], entry->d_name, 8); names[found][8] = 0; found++;
     }
-    bool more = matching > found;
     closedir(root);
+    if (scan_offset >= matching) scan_offset = 0; /* Sessions vanished under the offset. */
+    else if (matching > SCAN_WINDOW && examined) scan_offset = (scan_offset + examined) % matching;
+    else scan_offset = 0;
+    bool more = matching > found;
     for (unsigned i = 0; i < found; i++) {
         char directory[64];
         snprintf(directory, sizeof(directory), "%s/%s", MEMO_ROOT, names[i]);
         scan_one(directory);
     }
-    if (more) ESP_LOGW("queue", "more sessions than one scan pass covers; rerun after upload");
+    if (more) ESP_LOGW("queue", "scan window: %u of %u sessions this pass; next start=%u",
+                       found, matching, scan_offset);
     status.scanned = true;
     memo_queue_report();
 }
