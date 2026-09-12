@@ -262,6 +262,51 @@ sauber durch. Noch nicht geflasht oder live gegen ein echtes
 ohne Backend-Mitwirkung nicht erzwingbar ist, dieselbe Einschränkung wie beim
 `immediate`/`never`/`user_action`-Pfad oben.
 
+**Nachtrag, 12. September, zweite Runde: ACK-/Schreibgrenzen-Stromausfalltests
+(zweiter der vier priorisierten H2-Teilpunkte).** Die oben beschriebene
+Testlücke ist geschlossen, nicht umgangen: `tools/journal_test.c` deckte
+Recordframing, jede Recovery-Klassifizierung und Stromausfall an jeder
+Byteposition eines echten Journals schon lange ab, lief auf dieser nativen
+Windows-Toolchain aber noch nie. Ursache waren zwei unabhängige Dinge, beide
+jetzt behoben:
+
+1. `tools/run_journal_test.sh`/`journal_test.c` shellten für Setup und die
+   Byteschnitt-Sweeps über `system("rm -rf ...", "cp ...")` — genau die oben
+   beschriebene Drei-Wege-Pfadauflösung. Ersetzt durch reines C: rekursives
+   Löschen/Anlegen über `opendir`/`unlink`/`rmdir`/`mkdir`, Byteschnitte über
+   einen einmal eingelesenen Speicherpuffer statt `cp`-Backup/Restore, `mkdir`
+   mingw-kompatibel (kein Mode-Argument dort). Kein Shell-Aufruf mehr im
+   gesamten Test.
+2. Ein neuer Host-only-Shim `tools/host_compat.h` (per `-include` erzwungen)
+   ergänzt `fsync` als `_commit`, weil ESP-IDFs newlib das POSIX `fsync`
+   bereitstellt und mingw nicht.
+
+Dabei kam ein echter, vorher unentdeckter Fehler in `main/journal.c` selbst
+zum Vorschein, nicht nur im Testharness: keiner der fünf rohen `open()`-Aufrufe
+des Journals setzte `O_BINARY`. Auf dem Gerät folgenlos — ESP-IDFs VFS kennt
+keinen Text-/Binärmodus-Unterschied —, aber ein natives Windows-`open()` ohne
+dieses Flag läuft im CRT-Textmodus und übersetzt rohe `0x0A`-Bytes still beim
+Schreiben/Lesen; die kommen in Längen- und CRC-Feldern unvermeidlich vor. Fiel
+erst beim 32-Segment-Test auf, sobald das Journal über ein einzelnes 4096-Byte-
+Lesefenster hinauswuchs (Records davor blieben zufällig `0x0A`-frei). Mit
+`O_BINARY` (als `0` definiert und damit ein No-op außerhalb von Windows) an
+allen fünf Stellen behoben; `idf.py build` bleibt unverändert grün.
+
+Neuer, gezielter Testfall `test_ack_write_boundary()` ergänzt die bestehende
+Abdeckung um genau die im Aufgabentext benannte ACK-Grenze: baut die reale
+`api_client.c::upload_chunk()`-Sequenz nach (`CHUNK_UPLOADING` vor dem Request,
+`CHUNK_ACKED` nach passendem `durable_ack`) und schneidet nur diesen einen
+Übergangsrecord an jeder Byteposition. Beweist die zentrale Garantie direkt:
+ein zerrissener ACK-Record wird nie als „acked“ geglaubt, fällt auf den
+zuletzt durabel geschriebenen Zustand zurück und landet über
+`journal_recover()` in einem reinen Retry (`CHUNK_READY`), nie in `attention`
+— das unberührte Nachbarsegment bleibt bei jedem einzelnen Schnitt exakt
+unverändert. `sh tools/run_journal_test.sh` läuft jetzt lokal grün (9576
+Prüfungen, davon keine mit ASan/UBSan — dieser mingw-Toolchain fehlen die
+Sanitizer-Laufzeitbibliotheken; das Skript erkennt das und baut automatisch
+ohne sie weiter). Nicht Teil dieser Runde: die verbleibenden zwei H2-
+Teilpunkte, Credentialrotation und Verschlüsselung (in dieser Reihenfolge).
+
 ### 4. `GET /sessions/{id}/dashboard` — erledigt, 7. September, zweite Runde
 
 `fetch_session()` hängt jetzt `?surface=esp32_epaper` an, analog zum

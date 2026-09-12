@@ -11,6 +11,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <dirent.h>
 #include "../main/journal.h"
 
 static int failures = 0, checks = 0;
@@ -104,9 +105,36 @@ static void fake_random(void *out, size_t length) {
 /* --------------------------------------------------------------- helpers */
 
 static const char *ROOT = "/tmp/journal_test";
-static void run(const char *command) { if (system(command) != 0) { /* best effort */ } }
 
-static void make_dir(const char *path) { mkdir(path, 0700); }
+/* No `system()` shell-outs anywhere in this file: a native-mingw binary,
+ * cmd.exe and the invoking Git Bash each resolve a bare "/tmp/..." path (and
+ * `rm -rf`/`cp`) differently, which cost real time to diagnose (see
+ * docs/CLIENT_SERVER_STATE.md). Every directory and file operation below goes
+ * straight through the C library instead, so this test behaves identically on
+ * mingw, Linux, WSL and macOS. */
+static void make_dir(const char *path) {
+#ifdef _WIN32
+    mkdir(path); /* mingw's mkdir() takes no mode argument */
+#else
+    mkdir(path, 0700);
+#endif
+}
+
+/* Recursive `rm -rf` replacement. A path that is not a directory (or does not
+ * exist) is just unlinked; a directory is emptied first, then removed. */
+static void remove_tree(const char *path) {
+    DIR *d = opendir(path);
+    if (!d) { unlink(path); return; }
+    struct dirent *entry;
+    while ((entry = readdir(d))) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
+        char child[512];
+        snprintf(child, sizeof(child), "%s/%s", path, entry->d_name);
+        remove_tree(child);
+    }
+    closedir(d);
+    rmdir(path);
+}
 
 static void write_file(const char *path, const char *content, size_t length) {
     FILE *f = fopen(path, "wb");
@@ -249,15 +277,23 @@ static void test_truncation(void) {
     check(good == full, "intact journal consumed entirely");
 
     /* Cut the log at every byte and confirm replay always lands on a record
-     * boundary, never crashes and never invents a segment. */
+     * boundary, never crashes and never invents a segment. The intact log is
+     * held in memory once and rewritten to `path` around each cut, standing in
+     * for the `cp`-backup/restore the previous version of this test shelled
+     * out for. */
+    uint8_t *intact = malloc((size_t)full);
+    check(intact != NULL, "intact journal fits in memory for the byte-boundary sweep");
+    FILE *original = fopen(path, "rb");
+    check(original != NULL && fread(intact, 1, (size_t)full, original) == full,
+          "intact journal read back whole");
+    if (original) fclose(original);
+
     unsigned boundaries = 0;
     for (uint64_t cut = 0; cut < full; cut++) {
-        char command[900];
-        snprintf(command, sizeof(command), "cp %s %s.bak", path, path);
-        run(command);
-        int fd = open(path, O_WRONLY);
-        if (ftruncate(fd, (off_t)cut) != 0) { /* ignore */ }
-        close(fd);
+        FILE *cut_file = fopen(path, "wb");
+        check(cut_file != NULL && fwrite(intact, 1, (size_t)cut, cut_file) == cut,
+              "simulated power loss writes exactly the surviving prefix");
+        if (cut_file) fclose(cut_file);
         journal_session *cutS = load(dir);
         if (cutS->valid_bytes == cut) boundaries++;
         check(cutS->valid_bytes <= cut, "never consumes past the cut");
@@ -266,10 +302,13 @@ static void test_truncation(void) {
             check(cutS->chunks[i].state != CHUNK_UNKNOWN, "every known segment has a state");
         check(size_of(path) == cutS->valid_bytes, "torn tail truncated to a record boundary");
         free(cutS);
-        snprintf(command, sizeof(command), "cp %s.bak %s", path, path);
-        run(command);
+        FILE *restore = fopen(path, "wb");
+        check(restore != NULL && fwrite(intact, 1, (size_t)full, restore) == full,
+              "journal restored for the next simulated cut");
+        if (restore) fclose(restore);
     }
     check(boundaries >= 3, "several exact record boundaries seen");
+    free(intact);
     free(whole);
 }
 
@@ -423,6 +462,86 @@ static void test_recovery_cases(void) {
     free(s);
 }
 
+/* Power lost exactly while the durable-ACK record itself is being written.
+ *
+ * upload_chunk() in api_client.c only counts a segment delivered after
+ * mark_chunk() durably appends a CHUNK_ACKED record -- the server's answer
+ * alone never updates in-memory state. So the one moment that matters here is
+ * the write of that specific record: a torn write must never leave the
+ * journal claiming "acked" without every byte of that claim on the card, and
+ * must never invent or lose a segment either. `test_truncation()` already
+ * sweeps every byte of a whole journal, but never one that ends on an ACKED
+ * transition -- this exercises exactly that record, isolated. */
+static void test_ack_write_boundary(void) {
+    printf("power loss while writing the durable-ack record\n");
+    char dir[160], path[220];
+    snprintf(dir, sizeof(dir), "%s/ack_boundary", ROOT);
+    build_session(dir, 2);
+    snprintf(path, sizeof(path), "%s/%s", dir, JOURNAL_FILE);
+
+    /* Mirror upload_chunk()'s real sequence for chunk 0: UPLOADING before the
+     * request goes out, then ACKED once the server's durable_ack is matched.
+     * Segment 1 is untouched throughout and must stay exactly as `build_session`
+     * left it, so a bug here cannot hide behind "the other segment". */
+    {
+        journal_session *w = load(dir);
+        char payload[JOURNAL_MAX_PAYLOAD];
+        int n = journal_build_chunk_state(payload, sizeof(payload), 0, CHUNK_UPLOADING, "");
+        journal_append(w, payload, (size_t)n);
+        free(w);
+    }
+    uint64_t before_ack = size_of(path);
+
+    {
+        journal_session *w = load(dir);
+        char payload[JOURNAL_MAX_PAYLOAD];
+        int n = journal_build_chunk_state(payload, sizeof(payload), 0, CHUNK_ACKED, "");
+        journal_append(w, payload, (size_t)n);
+        free(w);
+    }
+    uint64_t after_ack = size_of(path);
+    check(after_ack > before_ack, "the ack transition actually appended a record");
+
+    uint8_t *intact = malloc((size_t)after_ack);
+    check(intact != NULL, "ack-boundary journal fits in memory");
+    FILE *original = fopen(path, "rb");
+    check(original != NULL && fread(intact, 1, (size_t)after_ack, original) == after_ack,
+          "ack-boundary journal read back whole");
+    if (original) fclose(original);
+
+    for (uint64_t cut = before_ack; cut <= after_ack; cut++) {
+        FILE *cut_file = fopen(path, "wb");
+        check(cut_file != NULL && fwrite(intact, 1, (size_t)cut, cut_file) == cut,
+              "simulated power loss during the ack write");
+        if (cut_file) fclose(cut_file);
+
+        journal_session *s = load(dir);
+        check(s->chunk_count == 2, "no segment invented or lost by a torn ack record");
+        journal_chunk *acked_chunk = journal_find(s, 0);
+        journal_chunk *other = journal_find(s, 1);
+        check(other && other->state == CHUNK_READY, "untouched segment is never disturbed");
+        if (cut == after_ack) {
+            check(acked_chunk && acked_chunk->state == CHUNK_ACKED,
+                  "a fully written ack record is trusted");
+        } else {
+            check(acked_chunk && acked_chunk->state != CHUNK_ACKED,
+                  "a torn ack record is never believed");
+            check(acked_chunk && acked_chunk->state == CHUNK_UPLOADING,
+                  "torn ack record falls back to the last durable state");
+            journal_recover(s, hash_file);
+            check(acked_chunk->state == CHUNK_READY,
+                  "recovery turns an unconfirmed ack into a plain retry, not attention");
+        }
+        free(s);
+
+        FILE *restore = fopen(path, "wb");
+        check(restore != NULL && fwrite(intact, 1, (size_t)after_ack, restore) == after_ack,
+              "ack-boundary journal restored for the next cut");
+        if (restore) fclose(restore);
+    }
+    free(intact);
+}
+
 static void test_adoption(void) {
     printf("adopting a pre-journal recording\n");
     char dir[160], path[220];
@@ -474,13 +593,14 @@ static void test_long_session(void) {
 }
 
 int main(void) {
-    char command[200];
-    snprintf(command, sizeof(command), "rm -rf %s && mkdir -p %s", ROOT, ROOT);
-    run(command);
+    remove_tree(ROOT);
+    make_dir("/tmp"); /* ignored if it already exists */
+    make_dir(ROOT);
     test_crc_and_uuid();
     test_round_trip();
     test_truncation();
     test_recovery_cases();
+    test_ack_write_boundary();
     test_adoption();
     test_long_session();
     printf("\n%d checks, %d failures\n", checks, failures);

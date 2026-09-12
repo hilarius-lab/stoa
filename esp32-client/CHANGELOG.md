@@ -1,5 +1,40 @@
 # Änderungen
 
+## 2026-09-12 – Uploadqueue-Stromausfalltests real zum Laufen gebracht
+
+- Zweiter der vier priorisierten H2-Teilpunkte (Retryklassen → Stromausfalltests
+  → Credentialrotation → Verschlüsselung). `tools/journal_test.c` deckt
+  Recordframing, jede Recovery-Klassifizierung und Stromausfall an jeder
+  Byteposition eines echten Journals bereits seit Längerem ab — lief auf diesem
+  nativen Windows-Toolchain aber noch nie, weil `tools/run_journal_test.sh` über
+  `system("rm -rf ... && cp ...")` shellte und die native mingw-EXE, `cmd.exe`
+  und die aufrufende Git-Bash denselben `/tmp/...`-Pfad jeweils unterschiedlich
+  auflösten (dieselbe Fehlerklasse wie bei `tools/ui_test.c`s `setenv()`).
+  Jetzt portabel gemacht: alle Shell-Aufrufe durch reines C ersetzt (rekursives
+  Löschen/Wiederherstellen über `opendir`/`unlink`/`rmdir`, Byteschnitte über
+  einen im Speicher gehaltenen Puffer statt `cp`-Backup), `mkdir` mingw-
+  kompatibel gemacht und ein Host-only-Shim (`tools/host_compat.h`, per
+  `-include` erzwungen) ergänzt `fsync` als `_commit`, weil ESP-IDFs newlib es
+  hat und mingw nicht. Läuft jetzt lokal grün (9576 Prüfungen).
+- Dabei einen echten, vorher unentdeckten Bug in `main/journal.c` selbst
+  gefunden, nicht nur im Testharness: die rohen `open()`-Aufrufe des Journals
+  setzten nie `O_BINARY`. Auf dem Gerät folgenlos (ESP-IDFs VFS kennt keinen
+  Text-/Binärmodus-Unterschied), aber ein natives Windows-Build öffnet ohne
+  dieses Flag im CRT-Textmodus und übersetzt rohe `0x0A`-Bytes — die in Länge-
+  und CRC-Feldern unvermeidlich vorkommen — beim Schreiben/Lesen still. Trat
+  erst beim 32-Segment-Test auf, sobald das Journal über ein einzelnes
+  Lesefenster hinauswuchs. Mit `O_BINARY` (no-op außerhalb von Windows) an
+  allen fünf `open()`-Stellen behoben; `idf.py build` bleibt unverändert grün.
+- Neuer, gezielter Testfall `test_ack_write_boundary()`: baut exakt die reale
+  `api_client.c::upload_chunk()`-Sequenz (`CHUNK_UPLOADING` → `CHUNK_ACKED`)
+  nach und schneidet nur den `CHUNK_ACKED`-Übergangsrecord selbst an jeder
+  Byteposition. Beweist die für H2 zentrale Garantie direkt: ein zerrissener
+  ACK-Record wird nie als „acked“ geglaubt, fällt auf den letzten durablen
+  Zustand (`CHUNK_UPLOADING`) zurück und wandert über `journal_recover()` in
+  einen reinen Retry (`CHUNK_READY`), nie in `attention`; das unberührte
+  Nachbarsegment bleibt in jedem Schnitt exakt unverändert.
+- `esp32-client/docs/CLIENT_SERVER_STATE.md` Punkt 3 und `task.md` aktualisiert.
+
 ## 2026-09-11 – Neustart/Herunterfahren, Sleep-Bildschirm, Akku-Auto-Sleep
 
 - Neue Settings-Aktionen „Neustart“ und „Herunterfahren“ mit zweistufiger

@@ -9,6 +9,20 @@
 #include <dirent.h>
 #include "journal.h"
 
+/* This journal is a raw binary format read and written with open()/read()/
+ * write(), never fopen()'s "b" mode. ESP-IDF's VFS has no text/binary
+ * distinction, so O_BINARY is simply undefined there and this is a no-op on
+ * the device. A host build on Windows is a different story: without it, the
+ * CRT's default text mode rewrites 0x0A bytes on the wire, corrupting any
+ * record whose framed bytes happen to contain one -- which is not rare, since
+ * length and CRC fields are raw binary. Discovered via the 32-segment host
+ * test, which only failed once the journal file grew past a single read
+ * window and started exposing bytes text-mode translation had already
+ * mangled. */
+#ifndef O_BINARY
+#define O_BINARY 0
+#endif
+
 /* ---------------------------------------------------------------- CRC32 */
 
 uint32_t journal_crc32(const void *data, size_t length) {
@@ -446,7 +460,7 @@ bool journal_append(journal_session *session, const char *payload, size_t payloa
     if (framed < 0) return false;
     char path[96];
     journal_path(session, path, sizeof(path), JOURNAL_FILE);
-    int fd = open(path, O_WRONLY | O_CREAT | O_APPEND, 0600);
+    int fd = open(path, O_WRONLY | O_CREAT | O_APPEND | O_BINARY, 0600);
     if (fd < 0) return false;
     bool ok = write(fd, record, (size_t)framed) == framed;
     if (ok) ok = fsync(fd) == 0;
@@ -470,7 +484,7 @@ bool journal_append(journal_session *session, const char *payload, size_t payloa
 static void journal_trim(journal_session *session, uint64_t keep) {
     char path[96], temporary[96];
     journal_path(session, path, sizeof(path), JOURNAL_FILE);
-    int fd = open(path, O_WRONLY);
+    int fd = open(path, O_WRONLY | O_BINARY);
     if (fd >= 0) {
         bool done = ftruncate(fd, (off_t)keep) == 0;
         if (done) fsync(fd);
@@ -478,9 +492,9 @@ static void journal_trim(journal_session *session, uint64_t keep) {
         if (done) return;
     }
     journal_path(session, temporary, sizeof(temporary), JOURNAL_TMP);
-    int in = open(path, O_RDONLY);
+    int in = open(path, O_RDONLY | O_BINARY);
     if (in < 0) return;
-    int out = open(temporary, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    int out = open(temporary, O_WRONLY | O_CREAT | O_TRUNC | O_BINARY, 0600);
     if (out < 0) { close(in); return; }
     uint8_t buffer[512];
     uint64_t copied = 0;
@@ -501,7 +515,7 @@ static void journal_trim(journal_session *session, uint64_t keep) {
 bool journal_replay(journal_session *session) {
     char path[96];
     journal_path(session, path, sizeof(path), JOURNAL_FILE);
-    int fd = open(path, O_RDONLY);
+    int fd = open(path, O_RDONLY | O_BINARY);
     if (fd < 0) return false;
     /* Records are read in windows so that a long session never needs the whole
      * journal resident; a record straddling a window is retried in the next. */
