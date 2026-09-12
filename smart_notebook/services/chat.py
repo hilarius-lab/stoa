@@ -287,6 +287,11 @@ async def build_messages(text: str, before_event_id: int, conversation_id=None, 
                     f"(Liste: {parent_title})\n"
                 )
 
+            elif result_type == "fact":
+                knowledge_context += (
+                    f"- [Fact {result['id']}] {result['content']}\n"
+                )
+
             elif result_type == "list":
                 knowledge_context += (
                     f"- [List {result['id']}] {result['title']}\n"
@@ -320,8 +325,10 @@ async def build_messages(text: str, before_event_id: int, conversation_id=None, 
         "ermittelt. Verwende nur tatsächlich relevante Treffer. "
         "Notes sind dauerhaftes Wissen. Tasks sind offene zeitgebundene "
         "Verpflichtungen. Lists sind veränderliche Sammlungen; List Items gehören "
-        "zu ihrer angegebenen Liste. Erfinde keine persönlichen Fakten, Aufgaben "
-        "oder Listeneinträge."
+        "zu ihrer angegebenen Liste. Facts sind einzelne geprüfte Aussagen, "
+        "die aus einer Note hervorgegangen sind; die Note selbst ist danach "
+        "archiviert und nicht mehr separat aufgeführt. Erfinde keine "
+        "persönlichen Fakten, Aufgaben oder Listeneinträge."
     )
 
     messages = [

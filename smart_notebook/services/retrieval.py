@@ -12,6 +12,7 @@ from .provenance import get_knowledge_sources
 from .notes import get_note_record
 from .tasks import get_task_record
 from .lists import get_list_record, get_list_item_record
+from .claims import get_claim_record
 from .topics import get_knowledge_topic_links
 
 RETRIEVAL_VERSION="efficiency-ladder-v2"
@@ -22,6 +23,7 @@ def _knowledge_version(connection):
     (SELECT concat(count(*),':',COALESCE(max(updated_at)::text,'')) FROM tasks),
     (SELECT concat(count(*),':',COALESCE(max(updated_at)::text,'')) FROM lists),
     (SELECT concat(count(*),':',COALESCE(max(updated_at)::text,'')) FROM list_items),
+    (SELECT concat(count(*),':',COALESCE(max(updated_at)::text,'')) FROM claims WHERE claim_type='fact' AND status='active'),
     (SELECT count(*)::text FROM knowledge_topic_links),(SELECT count(*)::text FROM knowledge_supersessions)))""").fetchone()[0]
 
 def _cache_identity(connection,query,selected_types,limit,min_similarity,include_vector):
@@ -43,6 +45,7 @@ def _exact_channel_candidates(connection,selected_types,query):
         "task":("tasks","content","archived=FALSE AND status='open'","task"),
         "list":("lists","title","archived=FALSE","list"),
         "list_item":("list_items","content","archived=FALSE AND status='active'","list_item"),
+        "fact":("claims","statement","claim_type='fact' AND status='active'","fact"),
     }
     for kind in selected_types:
         table,column,where,prefix=specs[kind]
@@ -65,7 +68,8 @@ def parse_knowledge_key(key: str):
         "note",
         "task",
         "list",
-        "list_item"
+        "list_item",
+        "fact"
     }
 
     if knowledge_type not in allowed_types:
@@ -202,6 +206,36 @@ def get_knowledge_record(key: str):
                     }
                     for row in rows
                 ]
+            }
+        }
+
+    if knowledge_type == "fact":
+        claim = get_claim_record(object_id)
+
+        if claim is None or claim["claim_type"] != "fact" or claim["status"] != "active":
+            return None
+
+        return {
+            "key": f"fact:{object_id}",
+            "type": "fact",
+            "id": object_id,
+            "title": None,
+            "content": claim["statement"],
+            "created_at": claim["created_at"],
+            "updated_at": claim["updated_at"],
+            "archived": False,
+            "source_event_id": None,
+            # Facts carry their own evidence system (claim_evidence, see
+            # GET /api/claims/{id}) instead of the events-table provenance
+            # get_knowledge_sources() expects -- deliberately not forced into
+            # that shape here.
+            "sources": [],
+            "metadata": {
+                "subject": claim["subject"],
+                "predicate": claim["predicate"],
+                "object_value": claim["object_value"],
+                "confidence": claim["confidence"],
+                "modality": claim["modality"]
             }
         }
 
@@ -385,6 +419,34 @@ def _vector_channel_candidates(
             for row in rows
         )
 
+    if "fact" in selected_types:
+        rows = connection.execute(
+            """
+            SELECT
+                id,
+                1 - (embedding <=> %s::vector) AS score
+            FROM claims
+            WHERE claim_type = 'fact'
+              AND status = 'active'
+              AND embedding IS NOT NULL
+            ORDER BY embedding <=> %s::vector
+            LIMIT %s
+            """,
+            (
+                vector_value,
+                vector_value,
+                HYBRID_CANDIDATE_LIMIT
+            )
+        ).fetchall()
+
+        candidates.extend(
+            {
+                "key": f"fact:{row[0]}",
+                "score": float(row[1])
+            }
+            for row in rows
+        )
+
     return _trim_channel_candidates(
         candidates,
         HYBRID_CANDIDATE_LIMIT
@@ -547,6 +609,38 @@ def _fts_channel_candidates(
         candidates.extend(
             {
                 "key": f"list_item:{row[0]}",
+                "score": float(row[1])
+            }
+            for row in rows
+        )
+
+    if "fact" in selected_types:
+        rows = connection.execute(
+            """
+            SELECT
+                id,
+                ts_rank_cd(
+                    to_tsvector('simple', statement),
+                    websearch_to_tsquery('simple', %s)
+                ) AS score
+            FROM claims
+            WHERE claim_type = 'fact'
+              AND status = 'active'
+              AND to_tsvector('simple', statement)
+                  @@ websearch_to_tsquery('simple', %s)
+            ORDER BY score DESC
+            LIMIT %s
+            """,
+            (
+                query,
+                query,
+                HYBRID_CANDIDATE_LIMIT
+            )
+        ).fetchall()
+
+        candidates.extend(
+            {
+                "key": f"fact:{row[0]}",
                 "score": float(row[1])
             }
             for row in rows
@@ -727,6 +821,36 @@ def _trigram_channel_candidates(
             for row in rows
         )
 
+    if "fact" in selected_types:
+        score_sql = _trigram_score_sql("statement")
+
+        rows = connection.execute(
+            f"""
+            SELECT
+                id,
+                {score_sql} AS score
+            FROM claims
+            WHERE claim_type = 'fact'
+              AND status = 'active'
+            ORDER BY score DESC
+            LIMIT %s
+            """,
+            (
+                query,
+                query,
+                query,
+                HYBRID_CANDIDATE_LIMIT
+            )
+        ).fetchall()
+
+        candidates.extend(
+            {
+                "key": f"fact:{row[0]}",
+                "score": float(row[1])
+            }
+            for row in rows
+        )
+
     return _trim_channel_candidates(
         candidates,
         HYBRID_CANDIDATE_LIMIT
@@ -850,6 +974,12 @@ def _knowledge_search_result_from_record(
             "title": parent.get("title")
         }
 
+    elif record["type"] == "fact":
+        result["subject"] = metadata.get("subject")
+        result["predicate"] = metadata.get("predicate")
+        result["object_value"] = metadata.get("object_value")
+        result["confidence"] = metadata.get("confidence")
+
     return result
 
 async def search_knowledge(
@@ -863,7 +993,8 @@ async def search_knowledge(
         "note",
         "task",
         "list",
-        "list_item"
+        "list_item",
+        "fact"
     }
 
     if types is None:

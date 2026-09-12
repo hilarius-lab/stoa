@@ -301,8 +301,54 @@ Priorität zuerst). Bei jedem neuen Task-Zyklus wird oben begonnen.
   sofort `disputed` sind — ohne selbst je `run_changed_conflict_scan` oder
   die Wartung aufzurufen. Verifiziert gegen den unreparierten Code
   fehlschlagend, gegen den Fix grün. Quick-Gate grün: 32 Einzeltests + Soak.
-  `BACKEND_LOGIK.md` (§11.4, W04-Zeile in §20.3) aktualisiert. Nicht
-  committed.
+  `BACKEND_LOGIK.md` (§11.4, W04-Zeile in §20.3) aktualisiert. Committed und
+  gepusht: `57c2a91`.
+
+  **W02 umgesetzt und getestet, 2026-09-12.** `retrieval.py::search_knowledge`
+  kannte bisher nur note/task/list/list_item. Das hatte einen konkreten
+  Effekt: `note_fact.py::promote_eligible_notes_to_facts` archiviert die
+  Ursprungs-Note, sobald sie zu einem Fact-Claim befördert wird (§11.3) — der
+  Fact selbst tauchte danach in der Chat-Suche nirgends mehr auf, die
+  Information war für den Chat effektiv verschwunden.
+
+  Umsetzung: „fact" als fünfter Typ über alle vier Hybrid-Kanäle ergänzt
+  (`_exact_channel_candidates`, `_vector_channel_candidates`,
+  `_fts_channel_candidates`, `_trigram_channel_candidates`), gesucht wird
+  `claims.statement`, gefiltert auf `claim_type='fact' AND status='active'`.
+  Zusätzlich `_knowledge_version()` (der Cache-Invalidierungs-Hash) um die
+  Claims-Zählung/`max(updated_at)` derselben Filterung ergänzt — sonst hätte
+  der Retrieval-Cache eine neue oder geänderte Fact-Lage nicht bemerkt.
+  `parse_knowledge_key`/`get_knowledge_record` um einen `fact`-Zweig
+  ergänzt (liest über `claims.py::get_claim_record`; die eigene
+  Evidence-basierte Herkunft der Claims wird bewusst nicht in die
+  events-basierte `sources`-Form der anderen Typen gezwungen — leeres
+  `sources: []`, echte Provenienz bleibt über `GET /api/claims/{id}`
+  verfügbar). `chat.py::build_messages` formatiert Treffer neu als
+  `[Fact N]` und der System-Prompt erklärt kurz, was ein Fact ist.
+  Bewusst **ausgeschlossen**: `disputed`/`superseded`/`retracted` — es gibt
+  noch keine Chat-seitige Behandlung für „umstrittenes Wissen anzeigen"
+  (W04s weiterhin offene Antworten-Guard-Hälfte).
+
+  Live verifiziert, nicht nur über den Test: ein Fact-Claim, der vorher für
+  den Chat unsichtbar war, wurde nach dem Fix über `search_knowledge`
+  gefunden und in einer echten LLM-Antwort korrekt verwendet
+  ("Laut dem Eintrag ist deine Lieblingsfarbe **Türkis**."). Neuer
+  Regressionstest `m8_fact_search_test.py` (drei Teile: aktive Facts
+  auffindbar, disputed/widersprüchliche Facts bleiben versteckt, echter
+  Chat-Antwortpfad nutzt einen Fact) — dabei einen echten Testisolations-Fund
+  gemacht: kurze, ähnlich aufgebaute synthetische Testaussagen
+  ("X prädikat Y") bekommen von echten Embeddings teils überraschend hohe
+  Kosinus-Ähnlichkeit allein durch die gemeinsame Form, nicht durch Inhalt
+  (0.53 zwischen zwei inhaltlich unabhängigen Test-Facts, deutlich über der
+  Schwelle 0.30) — ein Claim aus einem früheren Teiltest tauchte dadurch im
+  nächsten Teiltest auf. Behoben, indem jeder Teiltest seine eigenen Claims
+  sofort danach löscht statt erst am Testende. Verifiziert gegen den
+  unreparierten Code fehlschlagend (`ValueError: Unsupported knowledge
+  types: fact`), gegen den Fix grün. Quick-Gate grün: 33 Einzeltests + Soak.
+  `BACKEND_LOGIK.md` (§9.1, §10.2, D08/D09 in der Diskrepanz-Übersicht,
+  W02-Zeile und W04-Zeile in §20.3) aktualisiert — D09 (Client-Chat-
+  Gesprächskontext) war beim Umsetzen von W03 versehentlich nicht in dieser
+  Tabelle nachgezogen worden, jetzt mitkorrigiert. Nicht committed.
 
 - [ ] **Priorität 7 — ESP Secure Boot v2 / Flash Encryption / signiertes
   OTA mit Rollback.** Laut `esp32-client/docs/ROADMAP.md` Abschnitt H6
