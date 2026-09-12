@@ -5,6 +5,19 @@
 Priorisierte Warteschlange, vom Nutzer am 2026-09-12 festgelegt (höchste
 Priorität zuerst). Bei jedem neuen Task-Zyklus wird oben begonnen.
 
+**Priorisierungsleitlinie, vom Nutzer am 2026-09-13 präzisiert:** Ziel ist
+zunächst eine funktionsfähige Alpha, in der alle grundlegenden Konzepte
+laufen — danach sollen nur noch Minor Features oder kosmetische Details
+übrig bleiben. Das macht strukturelle/logische Backend-Arbeit (wie mit
+Anfragen umgegangen wird) wichtiger als ESP-Hardwarearbeit, die — außer
+Secure Boot (siehe Priorität 7, aus eigenen Gründen zurückgestellt) —
+überwiegend Minor Feature oder Kosmetik ist (Akkutest, temperaturabhängiges
+Refreshverhalten). Passive Verarbeitung (Speech-Input → Capture/Mutation,
+A01–A11) ist einigermaßen abgedeckt; es fehlt aber noch eine konkrete
+Vorstellung, wie ein direkter Chat funktioniert und wie man damit sauber
+interagiert. Das macht **Priorität 6 aktuell zum wichtigsten Punkt** —
+insbesondere die darin neu ergänzten Chat-Interaktions-Punkte, siehe dort.
+
 - [ ] **Priorität 2 — Attention-Segmente der lokalen Uploadqueue im
   Verlauf verwalten.** Segmente im lokalen Journal-Zustand `attention`
   (z. B. der Session-654-Fall `server_conflict`, bisher nur über die
@@ -348,7 +361,34 @@ Priorität zuerst). Bei jedem neuen Task-Zyklus wird oben begonnen.
   `BACKEND_LOGIK.md` (§9.1, §10.2, D08/D09 in der Diskrepanz-Übersicht,
   W02-Zeile und W04-Zeile in §20.3) aktualisiert — D09 (Client-Chat-
   Gesprächskontext) war beim Umsetzen von W03 versehentlich nicht in dieser
-  Tabelle nachgezogen worden, jetzt mitkorrigiert. Nicht committed.
+  Tabelle nachgezogen worden, jetzt mitkorrigiert. Committed und gepusht:
+  `4db5a54`.
+
+  **Neuer Punkt, vom Nutzer am 2026-09-13 ergänzt und laut Priorisierungs-
+  leitlinie oben aktuell der wichtigste Einzelpunkt in dieser Priorität:
+  Chat-Tools (Suche, Anlegen, Löschen) für den direkten Chat.** Aktuell hat
+  der interaktive Chat (`chat.py::ask_llm`) keinerlei Handlungsfähigkeit: er
+  bekommt bei jedem Turn zwangsweise dieselbe automatische
+  `search_knowledge`-Suche vorgesetzt (kein On-Demand-Suchaufruf durch das
+  Modell selbst) und kann keine Mutationen ausführen — Task/Liste anlegen,
+  Listeneintrag/Task löschen sind ausschließlich über den separaten Capture-/
+  Intent-Pfad (A01–A08, memo-/Audio-basiert) erreichbar, nicht über den
+  Chat. Vor dem Eintragen geprüft, ob das nicht schon anderweitig
+  strukturell abgedeckt ist: **ist es nicht.** Es gibt im gesamten Backend
+  keinen einzigen `tools`/`function_call`-Parameter in einer LLM-Anfrage
+  (durchsucht); die Mutationsausführung (`mutation_actions.py`) ist fest an
+  den Session-/Artefakt-Kontext der Capture-Pipeline gebunden, nicht an
+  einen Chat-Turn. Idee des Nutzers: dem Chat-LLM echte Tools zur Verfügung
+  stellen — mindestens Suche (statt der erzwungenen Vorab-Suche), Anlegen
+  (Task, Liste) und Löschen. **Bewusst noch nicht spezifiziert:** genaues
+  Tool-Schema, welche Operationen genau (Update? Nur Anlegen/Löschen?),
+  Bestätigungspflicht vor destruktiven Aktionen, Verhältnis zur
+  bestehenden A06/A07-Zielauflösung und -Ausführung (eigenes Tool-System
+  oder Wiederverwendung dieser Bausteine?), und ob/wie sich das mit der
+  noch offenen Antworten-Guard-Hälfte von W04 (umstrittenes Wissen im Chat
+  kennzeichnen) verträgt. Das sind Design-Entscheidungen für den nächsten
+  Arbeitsschritt, keine bereits getroffene Backendsemantik — hier bewusst
+  nur als geprüfter, bestätigt neuer Punkt dokumentiert.
 
 - [ ] **Priorität 7 — ESP Secure Boot v2 / Flash Encryption / signiertes
   OTA mit Rollback.** Laut `esp32-client/docs/ROADMAP.md` Abschnitt H6
@@ -361,6 +401,25 @@ Priorität zuerst). Bei jedem neuen Task-Zyklus wird oben begonnen.
   Steht in der Roadmap-Reihenfolge bewusst vor dem Audit (Priorität 10) —
   ein Audit vor Secure Boot würde einen Zustand prüfen, der sich danach
   nochmal ändert.
+
+  **Zurückgestellt, 2026-09-12 (Nutzerentscheidung, wie Android).** Vor der
+  Entscheidung kurz den tatsächlichen Sicherheitsgewinn gegenüber dem
+  Ist-Zustand eingeordnet: Flash Encryption wäre der einzige Baustein mit
+  substanziellem Zugewinn (der NVS-Datenschlüssel für die SD-Verschlüsselung
+  liegt aktuell im Klartext auf demselben Gerät — ohne Flash Encryption ist
+  die schon umgesetzte AES-256-GCM-Verschlüsselung gegen physischen
+  Gerätezugriff eher Kosmetik). Secure Boot schützt nur die Boot-Integrität
+  gegen physisches Umflashen, nicht die vorhandenen Daten. Signierte OTA
+  schützt aktuell praktisch nichts, da es noch gar keinen OTA-Mechanismus
+  gibt (nur `idf.py flash` per Kabel) — signiert würde etwas, das es noch
+  nicht gibt. Nutzerbegründung: Verlust/Diebstahl des Geräts ist nicht zu
+  erwarten, würde im Fall der Fälle schnell genug bemerkt, um serverseitig
+  zu isolieren, und die bis dahin auf dem Gerät verbliebenen Daten sind im
+  Vergleich zur Gesamtdatenbank nicht sensibel genug, um das Brick-Risiko
+  (eFuses sind irreversibel) und den Aufwand (OTA-Mechanik erst von Grund
+  auf bauen) zu rechtfertigen. Kein Sicherheitsloch, das aktiv entsteht —
+  eine bewusste Priorisierungsentscheidung für ein Ein-Personen-Gerät ohne
+  Fremdverteilung.
 
 - [ ] **Priorität 8 — ESP 48-Stunden-Dauerbetriebstest mit 5000-mAh-Akku
   (H6).** Überwiegend Geräte-/Messaufgabe, kaum Code; kann parallel zu
