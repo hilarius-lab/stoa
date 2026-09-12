@@ -1281,3 +1281,51 @@ direkt, die zweite (mit finalem Sleep-Bild) als „perfekt“. Ein realer
 Niedrigakku-Durchlauf für den 5-%-Auto-Sleep lässt sich nicht gezielt
 herbeiführen und bleibt offen, bis der Akku im normalen Betrieb dort
 ankommt.
+
+## Session 1119 dauerhaft in `draining` — Ursache gefunden und behoben, 12. September
+
+A11 (siehe oben, nächtlicher Retry für `client_sessions.attention_required`)
+hatte einen offenen Nebenbefund hinterlassen: Session 1119 war nicht mehr
+`attention_required`, hing aber seitdem unverändert in `draining`, obwohl der
+ESP laut Audit-Trail `finish` zweimal erneut gesendet hatte
+(`attention_required→draining` um 20:09 UTC, `draining→draining` um 20:59
+UTC).
+
+Direkte Prüfung von `client_sessions`, `audio_chunks`, `client_session_audit`
+und `ingestion_sessions` für diese Session zeigte den Mechanismus: Der erste
+`finish`-Aufruf lief 2026-09-11 durch, schloss den Upload korrekt ab und die
+Ingestion-Pipeline lief unabhängig weiter bis `ingestion_sessions.status=
+'completed'`. Parallel dazu schlug die STT-Feinklassifikation an genau
+diesem Whitespace-Bug fehl (derselbe wie bei Session 1032, damals noch nicht
+im laufenden Worker geladen) und setzte `client_sessions.state=
+'attention_required'`. Als der ESP `finish` danach erneut sendete, griff in
+`finish_client_session()` derselbe Regressionsschutz, der dort bereits für
+`old=="processing"` dokumentiert ist ("a retry that lands after the session
+already reached processing must be a no-op"), **nicht** für
+`old=="attention_required"` — die Funktion setzte den Zustand unbedingt
+zurück auf `draining`. `reconciliation()` meldete `upload_complete=True` (der
+einzelne Chunk war vollständig vorhanden), also rief der Code unbedingt
+`finish_ingestion_session_record()` erneut auf. Diese Funktion wirft
+`ValueError`, sobald die Ingestion-Session nicht mehr `open` ist — hier war
+sie bereits `completed`. Der Fehler wurde nirgends gefangen (der Router
+fängt nur `ClientSessionConflict`), die Anfrage endete serverseitig mit
+HTTP 500, und `draining` blieb stehen, weil dieser Wert bereits in einer
+eigenen, vorher committeten Transaktion geschrieben war. Jeder weitere Retry
+traf exakt denselben Absturz erneut — daher zwei identische Einträge im
+Audit-Trail ohne jede weitere Transition danach.
+
+Behoben mit zwei kleinen, lokalen Änderungen in
+`client_sessions.py::finish_client_session()`: Der bestehende
+No-Regression-Schutz gilt jetzt auch für `old=="attention_required"` (Retry
+wird zum No-op statt zur Regression), und `finish_ingestion_session_record()`
+wird nur noch aufgerufen, während die Ingestion-Session tatsächlich noch
+`open` ist — andernfalls heilt der Code selbst in `processing`, statt
+abzustürzen. Neuer Test `m8_client_session_finish_regression_test.py` fährt
+eine echte Capture bis `completed` und erzwingt danach genau diese
+Konstellation sowie den allgemeineren Fall (`draining` bei bereits
+fortgeschrittener Ingestion-Session); beide Fälle wurden zuerst gegen den
+unreparierten Code verifiziert (reproduzieren exakt denselben `ValueError`)
+und dann gegen den reparierten Code (grün). Vollständiges M8-Gate mit 29
+Prüfungen einschließlich logischem Vier-Stunden-Soak grün. Session 1119
+selbst blieb als Testbeleg unangetastet und zeigt weiterhin den historischen
+Fehlerzustand in der Datenbank.

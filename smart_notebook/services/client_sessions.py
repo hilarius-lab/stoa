@@ -160,12 +160,18 @@ def finish_client_session(client_session_id,final_sequence,final_source_end_ms=N
         if previous is not None and previous!=final_sequence:raise ClientSessionConflict("final_sequence conflicts with the previously closed upload horizon")
         # The client is expected to keep retrying finish until it locally
         # confirms completion (contract, not a bug) — a retry that lands after
-        # the session already reached processing must be a no-op, not a
-        # regression back to draining. Observed on the real device: twelve
-        # draining/processing round-trips for one session over roughly three
-        # hours, all from this exact path, before mark_settled() could ever
-        # fire client-side.
-        if old=="processing":
+        # the session already moved past draining (processing, or stalled at
+        # attention_required) must be a no-op, not a regression back to
+        # draining. Observed on the real device: twelve draining/processing
+        # round-trips for one session over roughly three hours, all from this
+        # exact path, before mark_settled() could ever fire client-side. The
+        # attention_required case regressed the same way (session 1119): a
+        # retried finish landed after capture_intent_failed had already set
+        # attention_required, pushed the session back to draining, and then
+        # crashed below because the ingestion session had already advanced —
+        # stranding it in draining permanently instead of leaving the retry a
+        # no-op.
+        if old in ("processing","attention_required"):
             c.commit()
             return get_client_session(client_session_id)
         c.execute("UPDATE client_sessions SET state='draining',expected_final_sequence=%s,final_source_end_ms=%s,finish_requested_at=COALESCE(finish_requested_at,%s),updated_at=%s WHERE client_session_id=%s",
@@ -173,9 +179,18 @@ def finish_client_session(client_session_id,final_sequence,final_source_end_ms=N
         _audit(c,client_session_id,"finish_requested",old,"draining",{"final_sequence":final_sequence});c.commit()
     rec=reconciliation(client_session_id)
     if rec["upload_complete"]:
-        from .ingestion import finish_ingestion_session_record
-        legacy=finish_ingestion_session_record(ingestion_id)
-        if legacy:schedule_final_stt_windows(ingestion_id)
+        from .ingestion import finish_ingestion_session_record,get_ingestion_session_record
+        # finish_ingestion_session_record() raises for any status other than
+        # 'open'/'finished' (routers/ingestion.py relies on that to report a
+        # 409 for its own legacy finish endpoint). By the time a retried
+        # finish reaches here, the worker pipeline may have already advanced
+        # the ingestion session past 'open' on its own; calling the legacy
+        # finish again would raise uncaught here and strand the session in
+        # 'draining' (session 1119). Only call it while it is still safe to.
+        current=get_ingestion_session_record(ingestion_id)
+        if current and current["status"]=="open":
+            legacy=finish_ingestion_session_record(ingestion_id)
+            if legacy:schedule_final_stt_windows(ingestion_id)
         with get_db_connection() as c:c.execute("UPDATE client_sessions SET state='processing',updated_at=%s WHERE client_session_id=%s",(datetime.now(TIMEZONE),client_session_id));c.commit()
     return get_client_session(client_session_id)
 
