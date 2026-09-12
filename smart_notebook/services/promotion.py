@@ -71,6 +71,41 @@ def _transfer_all_topics(artifact_id,knowledge_type,knowledge_id):
         c.commit()
     return linked
 
+def claim_promotion_error_artifacts_for_night_repair(limit=100):
+    now=datetime.now(TIMEZONE);limit=max(1,min(limit,1000))
+    with get_db_connection() as c:
+        rows=c.execute("""WITH candidates AS(SELECT id FROM session_artifacts WHERE status='confirmed'
+        AND promotion_error IS NOT NULL AND promoted_at IS NULL AND night_repair_attempts=0
+        ORDER BY updated_at,id FOR UPDATE SKIP LOCKED LIMIT %s)
+        UPDATE session_artifacts a SET night_repair_attempts=1,updated_at=%s FROM candidates ca
+        WHERE a.id=ca.id RETURNING a.id,a.session_id""",(limit,now)).fetchall();c.commit()
+    return rows
+
+
+async def retry_promotion_errors_for_night_repair(limit=100,mode='llm'):
+    """Retry up to `limit` session_artifacts stuck with a promotion_error, once each.
+
+    A11/W06: promote_session_artifacts() catches per-artifact exceptions internally
+    (see the except-block below) so one failing artifact never fails the session's
+    overall knowledge finalization -- the client_session this artifact belongs to
+    already reached 'completed' and client_sessions.py's own night repair never
+    sees it. Nothing else ever calls promote_session_artifacts() again for that
+    artifact on its own. Mirrors the existing night-repair shape: one attempt per
+    artifact, ever, gated by night_repair_attempts, grouped back into a single
+    promote_session_artifacts() call per session_id (it already accepts a
+    restricted artifact_ids list for exactly this kind of partial retry).
+    """
+    claimed=claim_promotion_error_artifacts_for_night_repair(limit)
+    by_session={}
+    for artifact_id,session_id in claimed:by_session.setdefault(session_id,[]).append(artifact_id)
+    results=[]
+    for session_id,artifact_ids in by_session.items():
+        outcome=await promote_session_artifacts(session_id,mode,artifact_ids=artifact_ids)
+        results.append({"session_id":session_id,"artifact_ids":artifact_ids,
+                         "promoted":outcome["promoted"],"deferred":outcome["deferred"]})
+    return results
+
+
 async def promote_session_artifacts(session_id,mode='llm',artifact_ids=None):
     with get_db_connection() as c:
         session_row=c.execute("SELECT started_at FROM ingestion_sessions WHERE id=%s",(session_id,)).fetchone()

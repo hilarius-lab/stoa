@@ -15,6 +15,7 @@ TESTS=[
     "m8_client_session_test.py",
     "m8_client_session_night_repair_test.py",
     "m8_client_session_finish_regression_test.py",
+    "m8_chat_promotion_night_repair_test.py",
     "m8_esp_backend_requirements_test.py",
     "m8_esp_dashboard_projection_test.py",
     "device_auth_test.py",

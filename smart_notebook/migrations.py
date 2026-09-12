@@ -684,6 +684,12 @@ MIGRATIONS=[
         "ALTER TABLE client_sessions ADD COLUMN night_repair_attempts INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE client_sessions ADD CONSTRAINT client_sessions_night_repair_attempts_check CHECK(night_repair_attempts>=0 AND night_repair_attempts<=1)",
     ]),
+    ("0051_chat_and_promotion_night_repair","One nightly retry for failed chat turns and for promotion-error session artifacts (A11/W06)",[
+        "ALTER TABLE client_conversation_turns ADD COLUMN night_repair_attempts INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE client_conversation_turns ADD CONSTRAINT client_conversation_turns_night_repair_attempts_check CHECK(night_repair_attempts>=0 AND night_repair_attempts<=1)",
+        "ALTER TABLE session_artifacts ADD COLUMN night_repair_attempts INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE session_artifacts ADD CONSTRAINT session_artifacts_night_repair_attempts_check CHECK(night_repair_attempts>=0 AND night_repair_attempts<=1)",
+    ]),
 ]
 
 

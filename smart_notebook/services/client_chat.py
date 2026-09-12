@@ -123,6 +123,34 @@ def retry_turn(turn_id):
     return get_turn(turn_id)
 
 
+def queue_failed_chat_turns_for_night_repair(limit=100):
+    """Requeue up to `limit` chat turns stuck in 'failed' for one retry each.
+
+    A11/W06: unlike processing_jobs.parked (jobs.py::queue_parked_jobs_for_night_repair)
+    and client_sessions.attention_required (client_sessions.py::retry_attention_required_
+    client_sessions_for_night_repair), a chat turn that lands in 'failed' only ever
+    recovers if the client calls retry_turn() itself -- nothing on the backend
+    ever retried it on its own. Mirrors retry_turn()'s own state reset, gated by
+    night_repair_attempts (0..1) so a turn that fails again after its one nightly
+    repair escalates and stays failed for good instead of being retried forever.
+    The actual retry runs later, picked up by worker.py's existing chat queue
+    (run_chat_turn_once), the same as any other queued turn.
+    """
+    now=datetime.now(TIMEZONE);limit=max(1,min(limit,1000))
+    with get_db_connection() as c:
+        rows=c.execute("""WITH candidates AS(SELECT id FROM client_conversation_turns WHERE status='failed'
+        AND night_repair_attempts=0 ORDER BY completed_at,id FOR UPDATE SKIP LOCKED LIMIT %s)
+        UPDATE client_conversation_turns t SET status='queued',night_repair_attempts=1,error=NULL,
+        started_at=NULL,completed_at=NULL,updated_at=%s FROM candidates ca WHERE t.id=ca.id
+        RETURNING t.id,t.conversation_id""",(limit,now)).fetchall()
+        conversation_ids=list({r[1] for r in rows})
+        if conversation_ids:
+            c.execute("""UPDATE client_conversations SET status='processing',revision=revision+1,last_activity_at=%s
+            WHERE id=ANY(%s)""",(now,conversation_ids))
+        c.commit()
+    return [get_turn(r[0]) for r in rows]
+
+
 def turn_events(turn_id,after=0):
     with get_db_connection() as c:
         if c.execute("SELECT 1 FROM client_conversation_turns WHERE id=%s",(turn_id,)).fetchone() is None:return None
