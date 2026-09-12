@@ -121,7 +121,7 @@ Priorität zuerst). Bei jedem neuen Task-Zyklus wird oben begonnen.
   Karte tatsächlich ohne „wird geladen …“ erscheint — erfordert einen echten
   Tastendruck am Gerät, bisher nur der Cache-Füllpfad über das Log geprüft.
 
-- [ ] **Priorität 5 — Wartungs-Fehlerisolation (W07, Backend).** Bei der
+- [x] **Priorität 5 — Wartungs-Fehlerisolation (W07, Backend).** Bei der
   Vorbereitung von Priorität 10 (Audit) am 2026-09-12 gegen den aktuellen
   Code gefunden: `run_daily_maintenance()` (`smart_notebook/services/
   maintenance.py`) ruft alle Nachtschritte sequenziell ohne
@@ -138,6 +138,58 @@ Priorität zuerst). Bei jedem neuen Task-Zyklus wird oben begonnen.
   einzeln fehlerisoliert (ein fehlschlagender Schritt blockiert die
   anderen nicht mehr) und eine echte Nachholgrenze statt eines festen
   Tagesbeginns.
+
+  **Umgesetzt und live verifiziert, 2026-09-12.** Beide Teile behoben:
+
+  1. `run_daily_maintenance()`: jeder der ~16 Schritte läuft jetzt einzeln in
+     einem eigenen try/except (`maintenance.py::_isolated_step`/
+     `_isolated_sync_step`), statt in einem gemeinsamen Block. Ein
+     fehlschlagender Schritt bekommt einen neutralen, formgleichen
+     Default-Rückgabewert und wird über das bestehende Logging-Muster
+     `emit_event("maintenance", f"{step}_failed", "error",
+     metadata={"error_type": type(exc).__name__})` protokolliert — bewusst
+     nur der Exception-Typ, nie die Nachricht (Normdatei verbietet Inhalte in
+     Logs). Das Gesamtergebnis trägt zusätzlich `failed_steps`. Direkt
+     verifiziert: ein per Mock erzwungener Fehler in `consolidate_today()`
+     lässt alle nachfolgenden Schritte (inkl. der A11/W06-Nachtreparaturen)
+     unverändert weiterlaufen statt abzubrechen.
+  2. `consolidation.py::get_today_unarchived_events()` → umbenannt zu
+     `get_pending_consolidation_events()`: die künstliche Untergrenze
+     „00:00 des Aufruftags" entfällt ersatzlos, da `events.archived=FALSE`
+     bereits die alleinige „noch nicht konsolidiert"-Markierung ist (dieselbe,
+     auf die sich der bestehende manuelle Endpoint
+     `/api/events/{id}/unarchive` verlässt). Einzige verbleibende Grenze ist
+     eine Obergrenze `as_of` (Default: Aufrufzeitpunkt). Kein neues
+     Wasserstand-Tracking/keine Migration nötig — bewusste Design-Entscheidung
+     nach Rücksprache: automatischer Nachholvorgang in einem Rutsch statt
+     gedeckelt/gestückelt. `prompts.py::CONSOLIDATION_SYSTEM_PROMPT` um einen
+     Satz ergänzt, der einen mehrtägigen Rückstand jetzt auch benennt (die
+     Regel „relativ zum Zeitstempel des jeweiligen Quell-Events" existierte
+     schon vorher und behandelte das inhaltlich bereits richtig).
+
+  **Realer Fund beim Verifizieren:** Im Zuge der Vorbereitung war der Bug
+  bereits aktiv scharf — 88 unarchivierte Events vom 8.–12.9. steckten fest.
+  Live gegen die Produktions-DB verifiziert: ein einzelner
+  `consolidate_today()`-Aufruf hat alle 88 Events verarbeitet und archiviert
+  (1 Note-Kandidat, Rest laut Prompt-Regeln zu Recht verworfen); Rückstand
+  danach 0.
+
+  Neuer Regressionstest `m8_maintenance_error_isolation_test.py` (beide
+  Teile), verifiziert gegen den unreparierten Code fehlschlagend (ImportError
+  auf die alte Funktion) und gegen den Fix grün; jetzt Teil der `TESTS`-Liste
+  in `m8_release_gate_test.py`. Dabei einen echten, unabhängigen Gate-Gap
+  gefunden und mitbehoben: `m8_stt_uncertainty_test.py` (Priorität 4, bereits
+  committed) fehlte dort komplett — frühere Notizen zu einem „grünen
+  M8-Gate" dafür bezogen sich offenbar nur auf den isolierten Testlauf, nicht
+  auf den echten Sammel-Gate-Lauf. Quick-Gate (`--quick`, ohne den 4h-Soak in
+  Echtzeit und ohne `assert_release_docs()`) mit
+  `CLIENT_DEVICE_AUTH_REQUIRED=false` (bekannte Umgebungseigenheit dieses
+  Repos, nicht durch diese Änderung verursacht) grün: 30 Einzeltests + Soak.
+  Der volle Release-Gate-Lauf (inkl. `assert_release_docs()`) wurde nicht
+  ausgeführt, da dessen Dokuprüfungen unabhängig von W07 sind.
+  `BACKEND_LOGIK.md` (§15.1, W07-Zeile in §20.3) aktualisiert. Nicht
+  committed — wie in diesem Chat üblich, wird vor dem Commit auf explizites
+  Go des Nutzers gewartet.
 
 - [ ] **Priorität 6 — Restliche fachliche Lücken aus BACKEND_LOGIK.md §18
   (Backend).** Ebenfalls am 2026-09-12 gegen den aktuellen Code neu

@@ -63,8 +63,10 @@ Gib ausschließlich Daten aus, die dem vorgegebenen JSON-Schema entsprechen.
 
 CONSOLIDATION_SYSTEM_PROMPT = """Du bist die tägliche Konsolidierungsschicht des Smart Notebook.
 
-Du erhältst rohe User-Events eines Tages. Extrahiere nur Informationen, die nach dem
-Tagesende noch als persönliches Wissen oder als offene Aufgabe nützlich sein können.
+Du erhältst rohe, noch nicht konsolidierte User-Events -- normalerweise eines Tages,
+nach einem ausgefallenen Lauf auch mehrerer zurückliegender Tage. Extrahiere nur
+Informationen, die über den jeweiligen Erfassungstag hinaus noch als persönliches
+Wissen oder als offene Aufgabe nützlich sein können.
 
 Erlaubte Kandidatentypen:
 - note: konkrete, längerfristig relevante Information.

@@ -20,7 +20,7 @@ from .client_chat import queue_failed_chat_turns_for_night_repair
 from .promotion import retry_promotion_errors_for_night_repair
 from .shadow import purge_expired_shadow_details
 from .audio import purge_expired_audio
-from .observability import purge_expired_logs
+from .observability import purge_expired_logs, emit_event
 from .retrieval import purge_expired_retrieval_cache
 from .reference_resolver import purge_expired_reference_candidates
 from .nightly_consolidation import run_nightly_knowledge_consolidation
@@ -381,27 +381,64 @@ async def run_note_cleanup(
         "analysis": analyzed
     }
 
-async def run_daily_maintenance():
-    consolidation = await consolidate_today()
-    nightly_knowledge=await run_nightly_knowledge_consolidation(dry_run=False,semantic_review=True)
-    conflicts = await run_changed_conflict_scan(dry_run=False)
-    from .note_fact import promote_eligible_notes_to_facts
-    note_fact_promotions=promote_eligible_notes_to_facts(dry_run=False)
-    repaired_jobs=queue_parked_jobs_for_night_repair()
-    repaired_sessions=await retry_attention_required_client_sessions_for_night_repair()
-    repaired_stalled_sessions=await retry_stalled_processing_client_sessions_for_night_repair()
-    repaired_chat_turns=queue_failed_chat_turns_for_night_repair()
-    repaired_promotions=await retry_promotion_errors_for_night_repair()
-    purged_shadow_details=purge_expired_shadow_details()
-    audio_retention=purge_expired_audio()
-    purged_logs=purge_expired_logs()
-    purged_cache=purge_expired_retrieval_cache()
-    purged_reference_runs=purge_expired_reference_candidates()
-    from .client_chat import purge_expired_conversations
-    purged_conversations=purge_expired_conversations()
+async def _isolated_step(failed_steps, step_name, coroutine, default):
+    try:
+        return await coroutine
+    except Exception as exc:
+        emit_event("maintenance", f"{step_name}_failed", "error", metadata={"error_type": type(exc).__name__})
+        failed_steps.append(step_name)
+        return default
 
-    expired_tasks = expire_overdue_tasks()
-    archived_tasks = archive_closed_tasks()
+def _isolated_sync_step(failed_steps, step_name, func, default):
+    try:
+        return func()
+    except Exception as exc:
+        emit_event("maintenance", f"{step_name}_failed", "error", metadata={"error_type": type(exc).__name__})
+        failed_steps.append(step_name)
+        return default
+
+async def run_daily_maintenance():
+    # W07: every step is isolated -- one step's exception must not skip the
+    # rest of the night's run (that previously took the A11/W06 night-repair
+    # steps built later in this file down with it whenever an earlier step,
+    # e.g. consolidate_today(), raised). failed_steps names exactly which
+    # steps did not complete this run so a failure isn't silently indistinguishable
+    # from "nothing to do".
+    failed_steps = []
+
+    def _promote_notes():
+        from .note_fact import promote_eligible_notes_to_facts
+        return promote_eligible_notes_to_facts(dry_run=False)
+
+    def _purge_conversations():
+        from .client_chat import purge_expired_conversations
+        return purge_expired_conversations()
+
+    consolidation = await _isolated_step(failed_steps, "consolidation", consolidate_today(),
+        {"events_processed": 0, "candidates": [], "results": [], "events_archived": 0})
+    nightly_knowledge = await _isolated_step(failed_steps, "nightly_knowledge",
+        run_nightly_knowledge_consolidation(dry_run=False, semantic_review=True), {})
+    conflicts = await _isolated_step(failed_steps, "claim_conflicts", run_changed_conflict_scan(dry_run=False), {})
+    note_fact_promotions = _isolated_sync_step(failed_steps, "note_fact_promotions", _promote_notes, {})
+    repaired_jobs = _isolated_sync_step(failed_steps, "job_night_repair", queue_parked_jobs_for_night_repair, [])
+    repaired_sessions = await _isolated_step(failed_steps, "client_session_night_repair",
+        retry_attention_required_client_sessions_for_night_repair(), [])
+    repaired_stalled_sessions = await _isolated_step(failed_steps, "stalled_processing_session_night_repair",
+        retry_stalled_processing_client_sessions_for_night_repair(), [])
+    repaired_chat_turns = _isolated_sync_step(failed_steps, "chat_turn_night_repair",
+        queue_failed_chat_turns_for_night_repair, [])
+    repaired_promotions = await _isolated_step(failed_steps, "promotion_night_repair",
+        retry_promotion_errors_for_night_repair(), [])
+    purged_shadow_details = _isolated_sync_step(failed_steps, "shadow_retention", purge_expired_shadow_details, 0)
+    audio_retention = _isolated_sync_step(failed_steps, "audio_retention", purge_expired_audio,
+        {"deleted_count": 0, "deleted_chunk_ids": [], "errors": []})
+    purged_logs = _isolated_sync_step(failed_steps, "log_retention", purge_expired_logs, 0)
+    purged_cache = _isolated_sync_step(failed_steps, "retrieval_cache", purge_expired_retrieval_cache, 0)
+    purged_reference_runs = _isolated_sync_step(failed_steps, "reference_resolver_retention",
+        purge_expired_reference_candidates, 0)
+    purged_conversations = _isolated_sync_step(failed_steps, "conversation_retention", _purge_conversations, 0)
+    expired_tasks = _isolated_sync_step(failed_steps, "task_expiry", expire_overdue_tasks, [])
+    archived_tasks = _isolated_sync_step(failed_steps, "task_archival", archive_closed_tasks, [])
 
     return {
         "consolidation": consolidation,
@@ -424,5 +461,6 @@ async def run_daily_maintenance():
             "expired_tasks": expired_tasks,
             "archived_count": len(archived_tasks),
             "archived_tasks": archived_tasks
-        }
+        },
+        "failed_steps": failed_steps
     }

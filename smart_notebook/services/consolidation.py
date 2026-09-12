@@ -1,7 +1,7 @@
 # Consolidation service
 import httpx
 import json
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from ..config import TIMEZONE
 from .ai_tasks import get_ai_task_profile
@@ -21,10 +21,16 @@ from .dedupe import decide_note_deduplication, decide_task_deduplication
 from .content_types import validate_classification
 from .semantic_router import route_artifact, validate_route
 
-def get_today_unarchived_events():
-    now = datetime.now(TIMEZONE)
-    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    day_end = day_start + timedelta(days=1)
+def get_pending_consolidation_events(as_of=None):
+    # W07: `archived=FALSE` is already the authoritative "still needs
+    # consolidating" marker (see also the manual /api/events/{id}/unarchive
+    # endpoint, which relies on exactly this to make an old event eligible
+    # again) -- an additional "created today" lower bound only ever excluded
+    # events a failed or skipped night left behind, with no way to catch them
+    # up later. `as_of` is an upper bound only, so a run has a well-defined,
+    # reproducible boundary instead of implicitly depending on wall-clock time
+    # during the query.
+    as_of = as_of or datetime.now(TIMEZONE)
 
     with get_db_connection() as connection:
         rows = connection.execute(
@@ -32,11 +38,10 @@ def get_today_unarchived_events():
             SELECT id, text, created_at
             FROM events
             WHERE archived = FALSE
-              AND created_at >= %s
               AND created_at < %s
             ORDER BY created_at ASC, id ASC
             """,
-            (day_start, day_end)
+            (as_of,)
         ).fetchall()
 
     return [
@@ -266,7 +271,7 @@ def archive_events(event_ids: list[int]):
         connection.commit()
 
 async def consolidate_today():
-    events = get_today_unarchived_events()
+    events = get_pending_consolidation_events()
 
     if not events:
         return {
