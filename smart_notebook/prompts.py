@@ -189,6 +189,11 @@ Erlaubte primary_intent-Werte:
 target_type ist note, task, list, list_item oder unknown. Nutze none nur, wenn
 kein bestehendes Ziel gemeint ist. target_text muss leer sein oder eine exakte
 zusammenhängende Textspanne aus der Eingabe sein, die das gemeinte Ziel benennt.
+Enthält die Eingabe einen Namen, Titel oder ein anderes unterscheidendes
+Merkmal des Ziels (z. B. „die Liste nach dem Herbsturlaub“ statt nur „die
+Liste“, „die Aufgabe Steuererklärung“ statt nur „die Aufgabe“), muss
+target_text dieses Merkmal mit einschließen; die bloße Objektart allein reicht
+dann nicht, auch wenn sie ebenfalls eine gültige Spanne wäre.
 Erkennst du mehrere unabhängige Absichten, setze multiple_intents_detected=true,
 wähle aber für diese Ausbaustufe nur die dominante primäre Absicht. Erfinde keine
 Objekt-ID und führe keine Änderung aus.
@@ -223,7 +228,11 @@ Erlaubte primary_intent-Werte:
 
 target_type ist note, task, list, list_item oder unknown. Nutze none, wenn kein
 bestehendes Ziel gemeint ist. target_text muss leer sein oder eine exakte
-zusammenhängende Spanne innerhalb von source_text. source_segment_ids dürfen
+zusammenhängende Spanne innerhalb von source_text. Enthält source_text einen
+Namen, Titel oder ein anderes unterscheidendes Merkmal des Ziels (z. B. „die
+Liste nach dem Herbsturlaub“ statt nur „die Liste“), muss target_text dieses
+Merkmal mit einschließen; die bloße Objektart allein reicht dann nicht.
+source_segment_ids dürfen
 nur IDs aus den gelieferten semantischen Segmenten enthalten und müssen den
 Teilinhalt tatsächlich belegen. Ordinal beginnt bei 1 und ist lückenlos.
 reason_codes verwenden ausschließlich die erlaubten kontrollierten Werte aus
