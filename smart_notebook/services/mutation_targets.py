@@ -171,6 +171,24 @@ def _answer_is_affirmative(answer):
     return _normalized(answer) in {"ja","ja bitte","bestätigen","bestaetigen","mach das","mache das"}
 
 
+async def _widen_candidates(part,candidates,answer):
+    """A05's original search ran on the intent's source/target text, captured
+    before this answer existed. If the answer names a target that search never
+    surfaced, the frozen candidate_keys snapshot can never contain it, and no
+    later wording could ever resolve this question -- the exact dead end this
+    function closes. A fresh search keyed on the answer itself is the only way
+    such a target can still be found; existing keys are kept so an already
+    frozen (wrong) candidate remains selectable via "keines von beiden" style
+    negation logic elsewhere, and duplicates are dropped by key."""
+    from .knowledge_preflight import TYPE_FILTERS,_candidate_ref
+    from .retrieval import search_knowledge
+    types=TYPE_FILTERS.get(part["target_type"],TYPE_FILTERS["unknown"])
+    found=[_candidate_ref(item) for item in await search_knowledge(answer,limit=7,types=types,include_vector=True)]
+    existing={item["key"] for item in candidates}
+    extra=[item for item in found if item["key"] not in existing and _compatible(part,item["type"])]
+    return candidates+extra
+
+
 async def resume_mutation_target_resolution(question_id,answer,mode="llm"):
     """Apply one source-bound clarification answer to its existing A06 snapshot."""
     resolutions=[item for item in get_session_mutation_target_resolutions_for_question(question_id)]
@@ -190,12 +208,15 @@ async def resume_mutation_target_resolution(question_id,answer,mode="llm"):
         decision={"status":"cancelled","selected_candidate_index":0,"confidence":1.0,
                   "reason_codes":["user_cancelled","clarification_answer"]};source="clarification"
     else:
+        def _match(pool,text):
+            found=[]
+            for index,candidate in enumerate(pool,start=1):
+                label=_normalized(_candidate_label(candidate))
+                if label and (label in text or (len(text)>=4 and text in label)):
+                    found.append(index)
+            return found
         normalized=_normalized(answer)
-        matches=[]
-        for index,candidate in enumerate(candidates,start=1):
-            label=_normalized(_candidate_label(candidate))
-            if label and (label in normalized or (len(normalized)>=4 and normalized in label)):
-                matches.append(index)
+        matches=_match(candidates,normalized)
         if len(matches)==1:
             decision={"status":"resolved","selected_candidate_index":matches[0],"confidence":1.0,
                       "reason_codes":["clarification_answer"]};source="clarification"
@@ -207,8 +228,16 @@ async def resume_mutation_target_resolution(question_id,answer,mode="llm"):
                       "selected_candidate_index":0,"confidence":0.0,
                       "reason_codes":["insufficient_clarification"]};source="deterministic_test"
         elif mode=="llm":
-            decision,source=await _resolve_with_llm(part,candidates,clarification_answer=answer)
-            decision["reason_codes"]=list(dict.fromkeys(decision["reason_codes"]+["clarification_answer"]))
+            widened=await _widen_candidates(part,candidates,answer)
+            if len(widened)>len(candidates):
+                candidates=widened
+                matches=_match(candidates,normalized)
+            if len(matches)==1:
+                decision={"status":"resolved","selected_candidate_index":matches[0],"confidence":1.0,
+                          "reason_codes":["clarification_answer"]};source="clarification"
+            else:
+                decision,source=await _resolve_with_llm(part,candidates,clarification_answer=answer)
+                decision["reason_codes"]=list(dict.fromkeys(decision["reason_codes"]+["clarification_answer"]))
         else:raise ValueError("Target resolution mode must be llm or deterministic")
         if decision["status"]=="resolved" and decision["confidence"]<MUTATION_TARGET_MIN_CONFIDENCE:
             decision={"status":"ambiguous" if len(candidates)>1 else "unresolved","selected_candidate_index":0,
@@ -219,9 +248,10 @@ async def resume_mutation_target_resolution(question_id,answer,mode="llm"):
     now=datetime.now(TIMEZONE)
     with get_db_connection() as c:
         c.execute("""UPDATE mutation_target_resolutions SET status=%s,target_type=%s,target_id=%s,target_key=%s,
-        confidence=%s,reason_codes=%s,decision_source=%s,updated_at=%s WHERE id=%s""",
+        confidence=%s,reason_codes=%s,candidate_keys=%s,decision_source=%s,updated_at=%s WHERE id=%s""",
         (decision["status"],target["type"] if target else None,target["id"] if target else None,
-         target["key"] if target else None,decision["confidence"],Jsonb(decision["reason_codes"]),source,now,
+         target["key"] if target else None,decision["confidence"],Jsonb(decision["reason_codes"]),
+         Jsonb(list(dict.fromkeys(list(allowed)+[item["key"] for item in candidates]))),source,now,
          resolution["id"]));c.commit()
         row=c.execute(RESOLUTION_SELECT+" WHERE r.id=%s",(resolution["id"],)).fetchone()
     return _item(row)

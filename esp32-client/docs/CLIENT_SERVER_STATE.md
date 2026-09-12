@@ -1625,3 +1625,51 @@ und dann gegen den reparierten Code (grün). Vollständiges M8-Gate mit 29
 Prüfungen einschließlich logischem Vier-Stunden-Soak grün. Session 1119
 selbst blieb als Testbeleg unangetastet und zeigt weiterhin den historischen
 Fehlerzustand in der Datenbank.
+
+## Rückfrage-Antwortkreislauf: eingefrorener Kandidatenpool gefunden und
+behoben, 12. September
+
+Reale Live-Probe der in W05 als „strukturell geschlossen“ dokumentierten
+Rückfrage-Detailansicht (siehe oben, „der in W05 geplante Antwortkreislauf …
+ist davon getrennt und weiterhin offen“): Der Nutzer wollte per Sprachbefehl
+die Liste „nach dem Herbsturlaub“ löschen. Eine ältere offene Rückfrage bot
+dafür nur „Einkaufsliste“ oder „Packliste“ an — keines von beidem war
+gemeint, weil A05s ursprüngliche Kandidatensuche mit dem (durch den bereits
+behobenen `target_text`-Bug) verkürzten Zieltext lief. Eine neue Freitext-
+Memo-Antwort in der Detailansicht („Keines von beiden. Ich meinte die
+Nach-dem-Herbst-Urlaub-Liste.“) wurde vom Backend fehlerfrei verarbeitet
+(kein Absturz, `clarification_answer_attempts.status='completed'`), blieb
+aber `needs_clarification`. Ursache: `mutation_targets.py::
+resume_mutation_target_resolution()` prüft eine Antwort ausschließlich gegen
+den bei Rückfrage-Erstellung einmalig eingefrorenen A05-Kandidatensnapshot
+(`candidate_keys`). War das gemeinte Ziel dort nie enthalten, konnte keine
+noch so genaue Antwort die Rückfrage je auflösen — eine strukturelle
+Sackgasse, kein Modellfehler. Weil die Rückfrage offenblieb, wählte der
+Nutzer testweise die angebotene „Packliste“, was folgerichtig zur
+(reversiblen) Archivierung der falschen Liste führte.
+
+Behoben durch eine neue Funktion `_widen_candidates()`: Führt eine Antwort zu
+keinem Treffer im eingefrorenen Pool, sucht sie per `search_knowledge()`
+zusätzlich mit dem Antworttext selbst als Query, filtert die Treffer nach
+Typkompatibilität (`_compatible()`), verwirft bereits bekannte Schlüssel und
+reicht die erweiterte Kandidatenliste an den LLM-Resolver weiter; die
+erweiterte Menge wird zusätzlich in `candidate_keys` persistiert, damit auch
+eine weiterhin mehrdeutige Folgeantwort sie sieht. Mit dem realen Fall
+verifiziert: Dieselbe Antwort löst mit dem Fix korrekt auf `list:111 „Nach
+dem Herbsturlaub“` mit Konfidenz 0,95 auf. Bemerkenswert: Der schnelle exakte
+Teilstring-Abgleich (`_match`) trifft hier bewusst nicht — die STT-Schreibung
+„Herbst Urlaub“ (mit Leerzeichen) ist kein Teilstring von „Herbsturlaub“ —,
+erst der LLM-Schritt mit dem erweiterten Kandidatenpool findet das richtige
+Ziel semantisch. `m8_mutation_target_resolution_test.py`,
+`m8_clarification_loop_test.py` und die angrenzenden A07/A08-Regressionen
+bleiben grün.
+
+Zwei begleitende Befunde ohne Zusammenhang zum eigentlichen Fehler: Das vom
+Nutzer gemeldete Ausrufezeichen in der Statusleiste stammte nicht von diesem
+Vorfall, sondern von der bereits weiter oben dokumentierten, absichtlich
+liegen gelassenen `server_conflict`-Session 654 vom 11. September — per
+`memo-discard C1C15C38` reell entfernt (`@DISCARDED files=3 attention=1`,
+`memo-list` danach ohne `attention`-Einträge). Und die versehentlich
+archivierte Packliste samt ihrer drei kaskadiert mitarchivierten Einträge
+wurde über den bestehenden Unarchive-Service bzw. direktes Zurücksetzen von
+`status`/`archived` wiederhergestellt.
