@@ -2,6 +2,168 @@
 
 ## Open
 
+Priorisierte Warteschlange, vom Nutzer am 2026-09-12 festgelegt (höchste
+Priorität zuerst). Bei jedem neuen Task-Zyklus wird oben begonnen.
+
+- [ ] **Priorität 1 — ESP-Hochfahren mit Wakeup-Bild.** Analog zum
+  bestehenden Herunterfahren-Bildschirm (`SCREEN_SLEEP`, Asset `sleep.bin`,
+  siehe erledigter Eintrag „Erste ESP32-Einstellungsstufe … Herunterfahren“
+  weiter unten) soll auch beim Hochfahren statt der aktuellen Ansicht
+  (`app_main()` zeigt direkt `SCREEN_CONNECTING`) zunächst ein eigenes Bild
+  erscheinen. Nutzerbild liegt als `wakeup.png` im Projekt-Root. Umsetzung
+  spiegelbildlich zum Sleep-Bild: über `tools/pack_image_asset.py` auf das
+  480×800-Hochformat-Canvas packen (mit der dort etablierten Drehung, nicht
+  auf 800×480 zielen — genau der Fehler, der beim Sleep-Bild einmal real
+  auftrat), Registrierung in `main/CMakeLists.txt` (`EMBED_FILES`), neuer
+  Bildschirmzustand analog `SCREEN_SLEEP` in `screen.h`/`screen.c`, gezeigt
+  mit erzwungenem vollem Refresh ganz am Anfang von `app_main()` in
+  `main.c`, statt des bisherigen ersten `screen_show(SCREEN_CONNECTING,
+  NULL)`. `generate_h3_assets.py` darf „wakeup“ nicht mit erzeugen, sonst
+  überschreibt ein künftiger Sammel-Regenerierungslauf das handgestaltete
+  Bild wieder mit Platzhaltertext (dieselbe Falle, die beim Sleep-Bild schon
+  dokumentiert ist).
+
+  **Dauer, auf Nutzerwunsch an echte Betriebsbereitschaft gebunden statt an
+  eine feste Zeit** (2026-09-12 nachgeschärft): Das Gerät ist praktisch erst
+  nutzbar, wenn das erste Dashboard geholt wurde, nicht schon bei
+  hergestellter WLAN-Verbindung. Der Ersteinrichtungs-Portal-Flow (kein
+  gespeichertes WLAN, `setup==true`) bekommt kein Wakeup-Bild — das ist
+  Konfiguration, kein Aufwachen, und bleibt beim bestehenden `SCREEN_SETUP`.
+
+  **Umgesetzt 2026-09-12, reale Sichtprobe und Fallback-Test stehen noch
+  aus.** `screen_show(SCREEN_WAKEUP, NULL)` ersetzt in `main.c` das bisherige
+  `screen_show(SCREEN_CONNECTING, NULL)` direkt vor `api_client_start()`.
+  Dabei ein echter, am Gerät nachvollzogener struktureller Fund: der lokale
+  Boot-Recovery-Pfad in `recorder.c` (`recorder_task()`) erreicht
+  `SCREEN_READY` schon Sekunden nach dem Boot, komplett unabhängig von
+  Netzwerk/Dashboard (Kommentar dort: „READY is an honest state" — bezogen
+  auf die lokale Aufnahmefunktion, nicht auf das Dashboard). Ungefiltert
+  hätte das binnen ~6 Sekunden ein leeres Dashboard über das Wakeup-Bild
+  geblendet, real im Firmware-Log bestätigt, bevor die Korrektur griff.
+  Neuer `wakeup_pending`-Zustand in `screen.c` fängt deshalb jede
+  `SCREEN_READY`-Anfrage ab und hält sie auf `SCREEN_WAKEUP` zurück, bis
+  `screen_snapshot_received()` (aufgerufen aus `fetch_dashboard()`,
+  `main/api_client.c:731`, bei Erfolg) echte Daten meldet; Aufnahme,
+  Fehleranzeige und jeder andere Bildschirmzustand bleiben unberührt, da nur
+  `SCREEN_READY`-Anfragen abgefangen werden. Scheitert die Verbindung
+  ungewöhnlich lange (WLAN weg, Server nicht erreichbar), gibt `main.c` nach
+  60 Sekunden (`WAKEUP_FALLBACK_TICKS`) ohne Dashboard auf und ruft die neue
+  `screen_wakeup_timeout()` auf: zeigt den echten `SCREEN_CONNECTING`-
+  Diagnosebildschirm und beendet den Wakeup-Zustand dauerhaft, damit ein
+  echtes Problem nicht hinter einem statischen Bild verschwindet und ein
+  späterer Warteschlangen-Ping nicht stillschweigend zurück aufs Bild
+  springt. Zweiter realer Fund: der Übergang Connecting→Wakeup lief zunächst
+  über die partielle Waveform statt eines vollen Refreshs (Ghosting-Risiko
+  bei einem kompletten Bildwechsel) — behoben mit demselben erzwungenen
+  Vollrefresh wie beim Sleep-Bild, aber nur beim tatsächlichen Übergang in
+  den Zustand (`previous_state != SCREEN_WAKEUP`), sonst hätte jeder
+  spätere, inhaltlich identische Warteschlangen-Ping das unveränderte Bild
+  erneut sichtbar aufflackern lassen — real als vierfaches Flackern
+  beobachtet, dann behoben und über drei Boot-Iterationen im Log bestätigt
+  (genau eine Wakeup-Vollaktualisierung, genau eine READY-Vollaktualisierung
+  erst nach `dashboard: snapshot accepted`). `idf.py build` grün, Flash auf
+  COM9 erfolgt. Details in `esp32-client/CHANGELOG.md`. **Offen:** reale
+  Sichtprobe, ob das gepackte Bild auf dem Panel gut aussieht, und ein
+  realer Test des 60-Sekunden-Fallbacks (Server oder WLAN absichtlich
+  unerreichbar machen).
+
+- [ ] **Priorität 2 — Attention-Segmente der lokalen Uploadqueue im
+  Verlauf verwalten.** Segmente im lokalen Journal-Zustand `attention`
+  (z. B. der Session-654-Fall `server_conflict`, bisher nur über die
+  seriellen Diagnosebefehle `memo-list`/`memo-why`/`memo-discard`
+  sichtbar und löschbar) sollen zusätzlich in der ESP-Verlaufsansicht
+  markiert, auswählbar und über die Gerätetasten löschbar sein — ohne
+  USB-Terminal. Zu unterscheiden von der bereits bestehenden Markierung
+  serverseitiger `client_sessions.state=attention_required`-Zeilen in
+  `main/history.c` (`history_state_label`/`history_state_icon` decken das
+  schon ab); hier geht es um lokale, rein geräteseitige Journal-Segmente,
+  die dort noch gar nicht auftauchen. Muss dieselbe bestehende
+  Discard-Sicherheitsregel respektieren (`still_deliverable` verweigert
+  den Discard, bis das Audio wirklich nicht mehr zustellbar ist — „die
+  Warnung ist weg“ darf nie mit „das Audio ist weg“ verwechselt werden).
+  Betrifft `main/history.c`, `main/journal.c`/`memo_queue.c` (lokale
+  Segmentzustände) und die Tastenbehandlung für Auswahl/Löschen. Offene
+  Designfrage vor Umsetzungsbeginn: eigener Abschnitt unterhalb der
+  serverseitigen Sessionliste oder Verschmelzung je Session, falls ein
+  Segment zu einer dort bereits sichtbaren Session gehört.
+
+  **Umgesetzt 2026-09-12, reale Sichtprobe mit einem echten `attention`-Fall
+  steht noch aus.** Designentscheidung: Verschmelzung. `memo_queue.c` liefert
+  jetzt zusätzlich zu den Zählern `memo_queue_attention_snapshot()` — jede
+  lokale Session, die während des ohnehin schon fensterbegrenzten
+  `memo_queue_scan()`-Durchlaufs (`SCAN_WINDOW`, siehe dortiger Kommentar) als
+  `CHUNK_ATTENTION`/`create_attention` erkannt wird, samt `session_id`
+  (Journal-UUID = `client_session_id` auf der Leitung), Grund und einem
+  `blocked`-Flag (`still_deliverable`: noch `ready`/`uploading` vorhanden).
+  Bewusst *in* `scan_one()` mitgezogen statt als eigener Vollscan — ein
+  zusätzlicher ungebundener Verzeichnisdurchlauf bei jedem `memo-discard`
+  oder jeder Upload-Zustandsänderung hätte genau das Problem
+  zurückgebracht, das `SCAN_WINDOW` laut eigenem Kommentar erst behoben hat.
+  Die Liste teilt sich deshalb denselben begrenzten, selbstkorrigierenden
+  Nachlauf wie `ready`/`acked`/`attention` bei mehr Sessions als ein
+  Durchlauf abdeckt.
+
+  `screen.c`s `history_rows()` gleicht bei jedem Zeichnen jede Server-Zeile
+  per `client_session_id` gegen diese Liste ab; ein Treffer bekommt die
+  Markierung „· lokal“ und `ICON_SEV_WARNING`. Eine lokale Session ohne
+  passende Server-Zeile (noch nicht angelegt oder außerhalb der geholten
+  Seite) erscheint als eigene Zeile darunter, identifiziert über ihre lokale
+  ID statt eines Zeitstempels — eine lokale Auffälligkeit darf nie unsichtbar
+  bleiben, nur weil der Server noch nicht nachgezogen hat oder gar nicht
+  erreichbar ist (`draw_history()`/`move_history_focus()` fallen bei
+  fehlgeschlagenem Serverabruf jetzt auf `"[]"` zurück statt die lokalen
+  Zeilen mit wegzuwerfen). Aktivieren einer solchen Zeile öffnet einen
+  Bestätigungsdialog („Aufnahme löschen“ / „Ja, löschen“), der bei
+  `blocked` die Zeile „Ja, löschen“ durch einen Sperrgrund ersetzt — dafür
+  wurde `settings_confirm_draw()` (bisher Neustart/Herunterfahren) um einen
+  expliziten `locked_reason`-Parameter erweitert, weil der bisherige fest
+  codierte Text „SD-Karte beschäftigt“ für diesen Fall schlicht falsch
+  gewesen wäre. Bestätigen ruft das bestehende `recorder_discard()` auf;
+  dieselbe `still_deliverable`-Regel gilt unverändert. `idf.py build` grün,
+  Flash auf COM9 erfolgt, Boot-Log dreier Durchläufe ohne Fehler oder
+  Backtrace geprüft (aktuell `attention=0` auf dem Gerät — der Zweig, der
+  eine Session tatsächlich in die neue Liste einträgt, lief dabei nicht
+  mit). **Offen:** eine reale Sichtprobe mit mindestens einer echten
+  `attention`-Session — Verschmelzung, lokale Extra-Zeile und der
+  Lösch-Dialog inklusive Sperrzustand wurden nicht am Gerät gesehen, nur
+  gegen den Code und den vorhandenen `attention=0`-Boot-Pfad geprüft.
+
+- [ ] **Priorität 3 — Preloading/Caching für Detailansichten.** Kein
+  bereits bestehender Eintrag gefunden (in `task.md`, `ROADMAP.md`,
+  `CHANGELOG.md` und `docs/` gesucht) — neu aufgenommen, nicht mit dem in
+  `esp32-client/docs/CLIENT_SERVER_STATE.md` Abschnitt 7a erwähnten,
+  bewusst zurückgestellten Sanduhr-/Ladeindikator zu verwechseln (andere
+  Anforderung). Serveranfragen für Dashboard-Karten/Session-Details sollen
+  nicht mehr ausschließlich synchron bei jedem Öffnen einer Detailansicht
+  gestellt werden, sondern im Hintergrund vorab geladen und lokal
+  zwischengespeichert werden (RAM oder SD, beides zulässig), damit ein
+  bereits abgerufenes Detail ohne erneuten Serverumweg sofort erscheint.
+  Betrifft den bestehenden synchronen Abrufpfad über den Uploadworker in
+  `main/api_client.c` (siehe `CLIENT_SERVER_STATE.md`, Abschnitt
+  „Detailansicht“) und `main/detail.c`. Muss mit der bestehenden
+  Snapshot-Alterungslogik (`screen_snapshot_cache_limit`) und der
+  Cache-Invalidierung bei neuen Snapshots zusammenspielen, damit kein
+  veralteter Detailinhalt gezeigt wird.
+
+- [ ] **Priorität 4 — Späterer STT-Unsicherheitsblock.** Lokale
+  Whisper-Wortkonfidenzen und vom LLM bewertete Satzplausibilität
+  gemeinsam auswerten. Bei materieller Inkonsistenz optional einen
+  zweiten STT-Lauf mit anderen Parametern verwenden, um die Unsicherheit
+  zu bestätigen oder aufzulösen; nur ungelöste, handlungsrelevante Fälle
+  als gezielte Rückfrage ausgeben. Keine stille Transkriptkorrektur und
+  kein pauschaler Zweitlauf.
+
+- [ ] **Priorität 5 — Netzwerk-/Transport-/Verschlüsselungsaudit.** Sehr
+  spät vor dem produktionsnahen Alpha-Einsatz einen systemweiten
+  Netzwerk-, Transport- und Verschlüsselungsaudit durchführen:
+  TLS/Authentisierung, Credentialrotation, Hotspot/Portal, WLAN-Profile,
+  lokale SD-/NVS-Daten, Backendgrenzen und bekannte Klartext-/
+  Fallbackpfade prüfen; kritische Befunde vor Freigabe schließen.
+
+Gestrichen auf Nutzerwunsch (2026-09-12): ESP-Zeitzone als persistierbare
+IANA-Zone auswählbar machen. Die verifizierte `Europe/Berlin`-Regel bleibt
+dauerhaft fest eingebaut, dieser Punkt kommt nicht wieder auf die Roadmap.
+
 - [x] Echter Sprachbefehl „Lösche die Liste 'nach dem Herbsturlaub'" löschte die Liste nicht — Ursache gefunden und behoben. Die `archive`-Klassifikation (`capture_intent.py::classify_content_intent_with_llm`) erkannte `target_type=list` korrekt mit 0,95 Konfidenz, aber `target_text` war nur „die Liste" — ohne den eigentlichen Listennamen. Dieser verkürzte `target_text` speist direkt die A05-Kandidatensuche (`knowledge_preflight.py:187`, `query=part["target_text"].strip() or part["source_text"].strip()`); da `target_text` nicht leer war, griff der Fallback auf `source_text` nie, die Suche fand zwei falsche Listen, blieb mehrdeutig und stellte eine Rückfrage, die nie die richtige Liste nannte. Kein Backend-Bug in Router/Validierung/Promotion (anders als der heute schon gefixte Commit `0421a1b`, der die Listenerstellung betraf) — sondern eine zu vage Prompt-Anweisung für die Zielspannen-Extraktion bei Mutationsabsichten. Behoben in `smart_notebook/prompts.py`: `CAPTURE_INTENT_SYSTEM_PROMPT` und `CAPTURE_INTENT_SPLIT_SYSTEM_PROMPT` (dieselbe Formulierung, beide betroffen) verlangen jetzt ausdrücklich, dass `target_text` einen im Satz vorhandenen Namen, Titel oder ein anderes unterscheidendes Merkmal mit einschließt, statt nur die bloße Objektart. Da beide Prompts für alle drei Mutationsabsichten (`change`/`complete`/`archive`) identisch gelten, deckt der Fix automatisch alle drei ab — keine separate Änderung pro Aktion nötig. Mit vier echten LLM-Aufrufen gegen den laufenden Produktions-LLM-Endpoint verifiziert: „Lösche die Liste nach dem Herbsturlaub" → `target_text="die Liste nach dem Herbsturlaub"` (zweimal reproduziert), „Hake die Aufgabe Steuererklärung ab" → `target_text="Steuererklärung"`, „Ändere die Notiz zum Kundengespräch, die Uhrzeit war falsch" → `target_text="die Notiz zum Kundengespräch"`. Dabei einen separaten, vorbestehenden und nicht durch diese Änderung verursachten Grenzfall gefunden und gegen den unveränderten Code reproduziert: eine rein pronominale Referenz ohne jeden Namen („Streich das aus meiner Liste.") scheitert bereits vor dieser Änderung an `_validate_decision`s Pflichtfeld-Prüfung („Mutation intent requires an exact target span") — nicht behoben, da außerhalb des Zuschnitts dieser Aufgabe und ein eigenständiges Problem (fehlender Kontextbezug, nicht verkürzter Zielname). `m8_contract_foundation_test.py` schlägt sowohl vor als auch nach dieser Änderung identisch fehl (`CLIENT_DEVICE_AUTH_REQUIRED=true` in `.env`, vorbestehend und unabhängig, bereits an anderer Stelle dokumentiert) — kein Regressionsindiz. Kein automatisierter Regressionstest ergänzt: die Vollständigkeit von `target_text` hängt am nicht-deterministischen LLM-Prompt, nicht an deterministischer Validierungslogik (dieselbe Einschränkung wie bei der Promotion-Korrektur in `0421a1b`). — Erledigt 2026-09-12.
 
 - [x] Reale Live-Probe der W05-Rückfrage-Detailansicht deckte einen echten strukturellen Fehler auf und drei damit zusammenhängende Aufräumpunkte, alle behoben. Nutzer wollte per Sprachbefehl die Liste „nach dem Herbsturlaub" löschen; eine ältere offene Rückfrage bot dafür nur „Einkaufsliste" oder „Packliste" an — keines von beidem war gemeint. Eine neue Freitext-Memo-Antwort in der Rückfrage-Detailansicht („Keines von beiden. Ich meinte die Nach-dem-Herbst-Urlaub-Liste.") wurde vom Backend fehlerfrei verarbeitet (`clarification_answer_attempts` zeigt `completed`, kein Absturz), blieb aber `needs_clarification`/`insufficient_clarification` — nachweislich nicht behebbar, denn `resume_mutation_target_resolution()` prüft eine Antwort ausschließlich gegen den einmalig bei Rückfrage-Erstellung eingefrorenen A05-Kandidatensnapshot (`candidate_keys`); die tatsächlich gemeinte Liste war dort nie enthalten, weil A05s ursprüngliche Suche auf dem (durch den heute schon gefixten `target_text`-Bug) verkürzten Zieltext lief. Da die Rückfrage offenblieb, wählte der Nutzer testweise die angebotene „Packliste" — technisch korrekt ausgeführt, aber ungewollt archiviert (reversibel, nicht physisch gelöscht). Das separat gemeldete Ausrufezeichen in der Statusleiste stammte nachweislich aus einem völlig anderen, bereits in `CLIENT_SERVER_STATE.md` dokumentierten Altfall (Session 654 vom 11. September, `server_conflict`, historischer Quick-Upload-Guard-Bug, längst serverseitig behoben, Chunk aber absichtlich nicht automatisch aufgeräumt) — keine Verbindung zum heutigen Vorfall. **Struktureller Fix:** `mutation_targets.py::resume_mutation_target_resolution()` erweitert den Kandidatenpool jetzt bei einer nicht zuordenbaren Freitextantwort um eine frische `search_knowledge()`-Suche mit dem Antworttext selbst als Query (neue Funktion `_widen_candidates()`), bevor der LLM-Resolver läuft; gefundene neue Kandidaten werden nach Typkompatibilität gefiltert, dedupliziert und zusätzlich in `candidate_keys` persistiert, damit auch eine weiterhin mehrdeutige Folgeantwort die erweiterte Menge sieht. Mit dem realen Fall verifiziert (nicht nur Testfixtures): dieselbe echte Antwort löst mit dem Fix korrekt auf `list:111 „Nach dem Herbsturlaub"` mit Konfidenz 0,95 auf, obwohl die STT-Schreibung „Herbst Urlaub" (mit Leerzeichen) nicht als Substring zum Listennamen „Herbsturlaub" passt und daher nur der LLM-Schritt, nicht der schnelle exakte Abgleich, sie fand. `m8_mutation_target_resolution_test.py`, `m8_clarification_loop_test.py`, `m8_mutation_action_test.py`, `m8_partial_action_test.py`, `m8_knowledge_clarification_test.py` weiterhin grün; `m8_contract_foundation_test.py`/`m8_capture_contract_test.py` schlagen unverändert am vorbestehenden, unabhängigen `CLIENT_DEVICE_AUTH_REQUIRED`-Defekt fehl. **Aufräumung:** Packliste (Liste 48) und ihre drei kaskadiert mitarchivierten Einträge (Sonnencreme, Zahnbürste, Reisepass) über den bestehenden `set_list_archived`-Service bzw. direktes Zurücksetzen von `status`/`archived` auf den Vorzustand wiederhergestellt; der `server_conflict`-Altchunk aus Session 654 per `memo-discard C1C15C38` reell vom Gerät entfernt (`@DISCARDED files=3 attention=1`), `memo-list` zeigt danach keine `attention`-Einträge mehr. Dabei zwei Nebenbefunde ohne Codeänderung: vier verwaiste `idf_monitor.py`-Prozesse blockierten COM9 (derselbe Tree-Kill-Bedarf wie zuvor dokumentiert, mit `taskkill /T /F` behoben) und ein vorbestehender Mojibake-Datenfehler in `list_items.content` („Zahnb�rste" statt „Zahnbürste", vermutlich alte STT-/Encoding-Ursache, unabhängig von diesem Fund, nicht angefasst). — Erledigt 2026-09-12.
@@ -15,7 +177,6 @@
 - [x] Backend-Auto-Modus A08: Gemischte Mutationen werden je Intentteil freigegeben. Tentative Teile bleiben unter der Schwelle `0.85`, erzeugen eine quellgebundene Bestätigungsfrage und blockieren unabhängige sichere Geschwister nicht; das öffentliche Ergebnis enthält abgeschirmte Einzeloutcomes und `partially_completed`. Ein Retry wiederholt keine bereits abgeschlossene Geschwisteraktion. Dediziertes DB-Gate, angrenzende Regressionen, echter strukturierter Split-Aufruf und vollständiges M8-Gate mit 24 Prüfungen einschließlich logischem Vier-Stunden-Soak sind grün; Fixture-Nachkontrolle ist sauber. Die echte Session 766 erledigte „Kupfermond“ mit `0.95`, hielt den tentativen Löschteil mit `0.75` zurück, ließ die Liste unverändert und erzeugte genau eine quellgebundene Rückfrage. Der Nutzer bestätigte beide sichtbaren Ergebnisse. W05-Antwort/Fortsetzung bleibt separat. — Erledigt 2026-09-11.
 - [x] W05 Question-/Clarification-Kreislauf: Mutations- und Wissenspfad sind strukturell geschlossen. Eine geöffnete ESP-Rückfrage bindet die nächste gültige BOOT-Aufnahme oder ausdrückliche Auswahl exakt an ihre persistierte Abhängigkeit. A06/A07-Mutationen werden gegen den ursprünglichen A05-Snapshot höchstens einmal fortgesetzt. Ein hochkonfidenter A05-Widerspruch zwischen neuer Fact-/Note-/Decision-Aussage und vorhandenen Notes stoppt jetzt die Promotion; auswählbar sind bei eindeutigem Altstand „Neue Angabe“/„Bisherige Angabe“, alternativ übernimmt eine freie Antwort nur eine exakte Korrekturspanne. Snapshotänderungen blockieren, verdrängtes Wissen wird reversibel archiviert, Antwortsession und Vorher-/Nachherzustand bleiben im Audit. Beide gezielten Gates und vollständiges M8 mit 26 Prüfungen einschließlich logischem Vier-Stunden-Soak sind grün; der echte strukturierte Resolver lieferte die korrekte wörtliche Ersatzspanne mit 0,95. Mutationsoptionen, freie Mutationsantwort, unmittelbare Rückkehr und Navigation sind real bestätigt. Die erste Wissens-Liveprobe wurde auf Nutzerwunsch abgebrochen: Session 1030 promovierte „Der W05-Testschrank steht links neben dem Fenster.“ korrekt auf Note 168; Session 1031 transkribierte die widersprechende Rechts-Aussage korrekt, klassifizierte den Memo-Zieltyp jedoch als `unknown` und erzeugte kein Artefakt. W05 wurde dadurch nicht erreicht und weder bestanden noch widerlegt. Ein zweiter Versuch (Session 1032, „Korrektur zum W05-Testschrank: …“) deckte einen echten, reproduzierten Backendfehler auf statt einer Modellunsicherheit: Das Wort „Korrektur“ klassifizierte die Eingabe als `change`-Mutation auf `target_type=note`, `target_text="W05-Testschrank"`; die STT-Rohtranskription enthielt jedoch „W05 -Testschrank“ (Leerzeichen vor dem Bindestrich), und die byte-exakte Spannenprüfung in `capture_intent.py::_validate_decision` lehnte den ansonsten korrekten, nur whitespace-normalisierten Zielspan ab. Das riss die Session hart auf `attention_required`, statt geordnet abzuschließen oder abzustellen. Behoben mit einer whitespace-insensitiven Spannenprüfung (`_contains_span`), die dieselbe Anti-Halluzinations-Garantie (identische Zeichen, identische Reihenfolge) beibehält; gezielte Regression `capture_intent_span_test.py` reproduziert den realen Session-1032-Fall und die abgelehnte Erfindung, vollständiges M8 mit 27 Prüfungen einschließlich logischem Vier-Stunden-Soak ist grün. Sessions 1030–1032 und Note 168 blieben unverändert als Testbeleg stehen. Offen bleibt weiterhin die reale Audio→Wissensrückfrage→Auswahl/Korrektur-Probe mit einer rein deklarativen, nicht mutationsverdächtigen Formulierung; der optionale kontextlose Memo-Fallback ist kein W05-Abnahmekriterium. Ein dritter Versuch (Session 1119, rein deklarativ „Der W05-Testschrank steht jetzt rechts neben dem Fenster.“) traf erneut denselben `attention_required`-Absturz — Ursache war diesmal nicht der Code, sondern dass der laufende Worker-Prozess den Fix aus Session 1032 nicht geladen hatte (Python lädt geänderte Module nicht automatisch nach); nach Worker-Neustart erzeugte derselbe Satz (Session 1120) den echten W05-Rückfragefall am Gerät: „Soll die neue Angabe ‚Der W05-Testschrank steht rechts neben dem Fenster.‘ die bisherige Angabe ‚Der W05-Testschrank steht links neben dem Fenster.‘ ersetzen?“ mit den Optionen „Zurück“, „Neue Angabe“, „Bisherige Angabe“ — genau das erwartete Ergebnis, real am Gerät bestätigt. Damit ist die reale W05-Wissensabnahme erbracht; W05 gilt als vollständig geschlossen (strukturell und live). Auswahl/Korrekturantwort auf diese konkrete Rückfrage wurden nicht mehr gesondert durchgespielt, da der Mutationspfad (Auswahl zwischen Optionen, freie Korrektur, sofortige Rückkehr) bereits zuvor real abgenommen war und hier identisch verdrahtet ist.
 - [x] ESP-Firmware-Fund während der W05-Liveprobe: `HISTORY_MAX` in `esp32-client/main/screen.c` war mit `8192` nur halb so groß wie `API_RESPONSE_MAX` (16384) im Fetch-Puffer — derselbe Fehlerklasse, die für `SNAPSHOT_MAX` dort bereits dokumentiert ist. Der Fetch holt die Verlaufsantwort vollständig (real gemessen: 9190 Bytes), aber `screen_history_received()` kopiert sie per `snprintf` in den zu kleinen Puffer, schneidet sie ab, `cJSON_Parse` scheitert am kaputten JSON, und die Ansicht zeigt „Noch keine Aufnahmen“ — nicht von echter Leere zu unterscheiden; der SD-Log bleibt unbetroffen, weil er ein separater Codepfad ist. Live beobachtet direkt nach der bestandenen W05-Rückfrage (Session 1120). Im Quellcode behoben (`HISTORY_MAX` auf 16384, mit Kommentar zur Invariante); `screen.c` liegt außerhalb der Hosttest-Abdeckung von `tools/run_ui_test.sh` (braucht FreeRTOS/heap_caps, kein reiner Zeichen-Code wie `history.c`). Build, Flash und reale Sichtprobe bestanden: Verlaufsansicht zeigt die Einträge wieder. — Erledigt 2026-09-11.
-- [ ] Späterer STT-Unsicherheitsblock: lokale Whisper-Wortkonfidenzen und vom LLM bewertete Satzplausibilität gemeinsam auswerten. Bei materieller Inkonsistenz optional einen zweiten STT-Lauf mit anderen Parametern verwenden, um die Unsicherheit zu bestätigen oder aufzulösen; nur ungelöste, handlungsrelevante Fälle als gezielte Rückfrage ausgeben. Keine stille Transkriptkorrektur und kein pauschaler Zweitlauf.
 - [x] ESP-Sichtkorrekturen nach dem nächsten Backendblock: redundantes `open` von Taskkarten auf der E-Paper-Projektion entfernt; SD-Logscrollgrenzen aus Darstellungstext vereinheitlicht und mit sichtbarer Fensterposition überprüfbar gemacht; gesunden automatischen Dashboardabruf mit vier Minuten Startgrenze plus einer Minute Transportreserve für das Fünf-Minuten-Erfolgsziel versehen. Manueller Sync bleibt, und die Kopfzeilenzeit wird weiterhin nur durch den letzten erfolgreich validierten Abruf erneuert. Projektionsregression, ESP-IDF-Build, Flash und reale automatische Pollprobe sind grün; die erneute Logviewer-Tasten-/Sichtprobe folgt im Gespräch. — Erledigt 2026-09-10.
 - [x] ESP-Einstellungen um ausdrücklich bestätigte lokale Aktionen „Neustart“ und „Herunterfahren“ ergänzen. Beide während Aufnahme und kritischen SD-Schreibphasen sperren; Neustart erst nach sauberem Flush. Herunterfahren darf erst nach verifizierter PMIC-Abschaltsequenz umgesetzt werden und muss das Verhalten mit angeschlossenem USB sowie den erneuten Start über PWR real prüfen. **Normkonflikt geklärt, Nutzerentscheidung:** `battery.h` legt fest, dass kein PMIC-Register je beschrieben wird; eine echte PMIC-Abschaltsequenz bräuchte genau das. Auf ausdrücklichen Nutzerwunsch bleibt die Read-only-Grenze unangetastet — „Herunterfahren“ nutzt `esp_deep_sleep_start()` mit `esp_sleep_enable_ext0_wakeup(GPIO_NUM_0, 0)` (Aufwachen über denselben BOOT-Taster) statt eines echten PMIC-Poweroffs; das ist eine bewusste Abweichung vom wörtlichen Aufgabentext, kein PMIC-Abschalten. Umgesetzt: zwei neue Settings-Zeilen mit zweistufiger Ja/Nein-Bestätigung (`settings_confirm_draw`), gesperrt mit sichtbarem Grund, solange `recorder_busy()` wahr ist (Aufnahme oder kritischer SD-Schreibvorgang); Neustart über dieselbe `recorder_busy()`-Sperre und `esp_restart()`-Sequenz, die der bestehende serielle `reboot`-Befehl in `main.c` bereits benutzt (dort „während einer Aufnahme verweigert“, dokumentiert in `CLIENT_SERVER_STATE.md`) — zwei Einstiege, ein Verhalten. Host-Test (`tools/ui_test.c`) deckt Zeilen, gesperrte und freigegebene Bestätigungsansicht innerhalb der Bildschirmgrenzen ab. Lokaler `gcc` nachträglich per `scoop install gcc` installiert und der reale Testlauf durchgeführt statt nur manuell gelesen: Ein echter Kompilierfehler kam dabei zum Vorschein (`settings_confirm_draw` nutzte den Parameter `bottom` nicht, `-Werror` schlägt fehl) und wurde mit denselben Bounds-Checks wie `settings_diagnostics_draw` behoben; danach kompiliert `settings.c` sauber und alle neuen Prüfungen sind grün. Eine vorbestehende, von dieser Änderung unabhängige Testlücke bleibt: `tools/ui_test.c` ruft `setenv()` auf, das die native Windows-`mingw`-Toolchain nicht kennt (nur unter Linux/WSL/macOS lauffähig, wie das Skript es voraussetzt); mit einem rein lokalen, nicht eingecheckten Kompatibilitäts-Shim isoliert verifiziert und dabei ein zweiter, ebenfalls vorbestehender und unabhängiger Fehlschlag ohne Bezug zu dieser Änderung gefunden (`dashboard_refresh_interval_s`-Erwartung, auch auf dem sauberen Stand vor dieser Änderung reproduziert) — nicht Teil dieser Aufgabe, nicht angefasst. **Auf Nutzerwunsch während derselben Aufgabe erweitert, bevor die erste Runde geflasht war** (zwei zusätzliche Anforderungen, kein separater Task): (1) ein eigener Bildschirm beim Einschlafen statt eines schlicht einfrierenden letzten Frames, und (2) ein automatischer Akku-Sleep, damit ein leerlaufender Akku nicht unbemerkt als eingefrorenes Bild endet. Dabei einen bestehenden, nie genutzten Punkt gefunden: `EPD_Sleep()` (eigener Deep-Sleep-Befehl an den Panel-Controller-Chip) existiert in `epaper_port.h` seit Langem, wurde aber vor dieser Änderung nirgends aufgerufen — jeder bisherige Zustand ließ den Panel-Treiber unnötig unter Strom. Umgesetzt: neuer `SCREEN_SLEEP`-Zustand mit eigenem `sleep.bin`-Asset (Platzhalter-Text „Ruhezustand / Zum Aufwachen BOOT-Taste drücken“ über `generate_h3_assets.py`, austauschbar durch ein selbst gestaltetes PNG über das neue `tools/pack_image_asset.py` — beliebige Quellauflösung, letterboxed auf 800×480, gedithert). Der Zustand zieht als Einziger keinen Dashboard-Overlay (`>=SCREEN_READY`-Prüfung explizit ausgenommen) und erzwingt über `force_full` immer einen vollen, sauberen Refresh statt eines Partial-Updates. Nach dem vollen Refresh: `EPD_Sleep()`, dann `esp_deep_sleep_start()` — das E-Paper hält das Bild danach stromlos. Neue öffentliche Funktion `screen_enter_sleep_if_safe()` bündelt die `recorder_busy()`-Sperre für beide Aufrufer (Settings-Bestätigung und Akku-Trigger). Akku-Trigger in `battery.c::take_sample()`: bei jeder 5-Sekunden-Messung, `soc<=5` **und** nicht an USB, wird derselbe Sleep angefragt; eine laufende Aufnahme verschiebt das schlicht auf die nächste Messung statt zu unterbrechen. Registrierung in `main/CMakeLists.txt` (`EMBED_FILES`) ergänzt. Diese drei Dateien (`screen.c`, `screen.h`, `battery.c`) sind in dieser Umgebung nicht kompilierbar (kein FreeRTOS/ESP-IDF-Hostsimulat), anders als `settings.c` — nur sorgfältige manuelle Prüfung, kein echter Testlauf. Erster Build/Flash der Neustart/Herunterfahren-Stufe vom Nutzer bestätigt (vor der Sleep-Bild-/Akku-Erweiterung). Reales Bild vom Nutzer geliefert (`deep_sleep.png`, Projekt-Root) und gepackt — dabei einen echten Fehler im neuen `pack_image_asset.py` selbst gefunden, bevor er auslieferte: das Skript zielte zuerst auf die 800×480-Querformat-Zielgröße, aber jeder andere Bildschirm dieses Projekts wird im 480×800-Hochformat entworfen und erst ganz am Ende gedreht (siehe `blank()`/`startup()` in `generate_h3_assets.py`); das Nutzerbild (971×1619, Seitenverhältnis 0,600) passt nahezu exakt auf 480×800 (0,600) und wäre auf der falschen Zielgröße zu einem schmalen Streifen zwischen breiten weißen Rändern geschrumpft. Auf das Hochformat-Canvas mit anschließender Drehung umgestellt (identisch zum bestehenden Muster), danach volle, saubere Bildfläche ohne Zuschnitt. `generate_h3_assets.py` erzeugt „sleep“ nicht mehr mit; sonst hätte ein künftiger Sammel-Regenerierungslauf das handgestaltete Bild stillschweigend wieder durch den Platzhaltertext ersetzt. Zweiter Build/Flash mit dem finalen Sleep-Bild vom Nutzer als „perfekt“ bestätigt. — Erledigt 2026-09-11. Ein realer Niedrigakku-Durchlauf (5-%-Auto-Sleep) lässt sich nicht gezielt herbeiführen und bleibt offen, bis der Akku dort im normalen Betrieb ankommt; kein Abnahmekriterium für diesen Task.
 - [x] A11-Recovery, Teilausschnitt `client_sessions.attention_required` (auf Nutzerwunsch vor dem allgemeinen A11-Vollumfang priorisiert): Anders als `processing_jobs.parked` (bereits per `jobs.py::queue_parked_jobs_for_night_repair` einmalig nachts wiederholt) hatte `client_sessions.state='attention_required'` aus `capture_intent_failed`/`knowledge_finalization_failed`/`clarification_answer_failed` überhaupt keinen Wiederholungsmechanismus — real beobachtet an Session 1119, die seit dem behobenen Whitespace-Bug unangetastet hängen blieb, weil nichts `finalize_client_session_with_knowledge` je erneut aufrief. Migration `0050_client_session_night_repair` ergänzt `client_sessions.night_repair_attempts` (0..1, wie beim bestehenden Pendant); `client_sessions.py::claim_attention_required_client_sessions_for_night_repair` beansprucht bis zu N Sessions einmalig, `retry_attention_required_client_sessions_for_night_repair` ruft für jede die bestehende `settle_client_session_for_ingestion` synchron auf (kein eigener Worker-Pool nötig, die Funktion besitzt bereits eigene Transaktionen und Fehlerbehandlung); in `run_daily_maintenance` eingehängt. Umfang bewusst auf `client_sessions.attention_required` begrenzt; Chat-/Promotion-Retries bleiben separate spätere Arbeit. Neuer Test `m8_client_session_night_repair_test.py` (registriert im M8-Gate, jetzt 28 Prüfungen) läuft gegen einen echten Capture→Segmentierung→Artefakt-Durchlauf: erzwingt `attention_required` künstlich, prüft Beanspruchung, Einmaligkeit, erfolgreiche Wiederherstellung auf `completed` und dauerhafte Eskalation nach einem bereits verbrauchten Versuch. Dabei eine echte Racebedingung gefunden und robust gemacht: Dieses Testverzeichnis läuft ohne eigene Test-Datenbank gegen dieselbe DB wie ein echter, parallel laufender `worker.py all`-Prozess — ein Job kann bereits von diesem übernommen sein, bevor der Test ihn selbst beansprucht (beobachtet: Job binnen Millisekunden `running` unter fremder Worker-ID). Der Test verlässt sich daher auf Polling des tatsächlichen Sessionzustands statt auf den Rückgabewert des eigenen Verarbeitungsversuchs. Vollständiges M8-Gate grün. **Live-Beobachtung, nicht behoben:** Session 1119 selbst ist inzwischen nicht mehr `attention_required`, sondern hängt jetzt bei `draining` — der ESP hat laut Audit-Trail `finish` wiederholt erneut gesendet (`attention_required`→`draining` um 20:09 UTC, ein weiteres `draining`→`draining` um 20:59 UTC), aber `reconciliation()` scheint seitdem kein `upload_complete` mehr zu melden. Das ist ein anderer, noch nicht verstandener Zustand als der hier behobene und kein A11-Abnahmekriterium; Session 1119 bleibt als Testbeleg unangetastet, die Ursache ist für eine spätere Aufgabe vorgemerkt.
@@ -38,8 +199,6 @@
 
 **Erster echter Gerätetest schlug fehl, echter Fehler gefunden und behoben:** jede Aufnahme brach sofort mit `segment encryption failed` ab (sichtbar am Gerät als „Achtung — lokale Diagnose über USB öffnen"). Ursache: `mbedtls_gcm_update()` garantiert auf diesem Ziel nicht, dass die Ausgabelänge pro Aufruf der Eingabelänge entspricht — laut dem vendorierten `components/mbedtls/mbedtls/include/mbedtls/gcm.h` puffert sie intern blockweise (das `acceleration`-Feld im Kontext deutet auf die S3-Hardwarebeschleunigung als Ursache hin), und `mbedtls_gcm_finish()` kann am Ende zusätzlich bis zu 15 Byte Restdaten liefern. Diese beiden Eigenschaften lassen sich nicht gegen den Compiler prüfen, nur am realen Gerät. Der ursprüngliche Code prüfte `produced != got` als Fehlerbedingung (falsch) und verwarf `mbedtls_gcm_finish()`s Ausgabeparameter mit `NULL, 0` (hätte am Dateiende Bytes verloren). Behoben in `audio_crypto_encrypt_file()`, `audio_crypto_verify_file()` und `audio_crypto_reader_read()`: Ausgabepuffer mit `Eingabelänge + 15` Headroom (mbedtls-Untergrenze), `produced`/`tail_len` als tatsächliche Längen übernommen statt geprüft, echter Ausgabepuffer für `mbedtls_gcm_finish()`. `audio_crypto_reader` bekam dafür einen internen Pending-Puffer, da ein Aufrufer pro `read()` eine feste, selbst gewählte Byteanzahl erwartet, GCM aber pro internem Schritt eine davon unabhängige Menge liefert. `idf.py build` bleibt grün, `sh tools/run_journal_test.sh` unverändert grün (reines Host-C ohne mbedtls-Abhängigkeit, von diesem Fehler nicht betroffen). **Zweiter echter Gerätetest, gleiches äußeres Bild, anderer echter Fehler:** nach obigem Fix schlug die Aufnahme mit identischem Fehlerbild erneut fehl. Gezieltes Stufen-Logging (jede mbedtls-/Datei-Operation in `audio_crypto_encrypt_file()` loggt jetzt einzeln mit Fehlercode/`errno`) fand ihn sofort: `cannot open ciphertext temp file, errno=22` (`EINVAL`). Ursache: jeder von dieser Firmware geschriebene Dateiname ist ein strikter FAT-8.3-Kurzname (`00000000.M4A`, `JOURNAL.LOG`, …); `path + ".ENC"` erzeugte `00000000.M4A.ENC` — zwei Punkte, zu lang, von FATFS mit `EINVAL` abgelehnt, nur am echten Gerät sichtbar. Behoben: Endung wird per `strrchr(path,'.')` ersetzt statt angehängt, Ergebnis `00000000.ENC`. `idf.py build` grün, `sh tools/run_journal_test.sh` unverändert grün (crypto.c ist nicht Teil des Hosttests). **Dritter Gerätetest nach beiden Fixes: erfolgreich.** Reale Aufnahme lief durch (`capture SAVED; segments=1`), wurde hochgeladen und vom Server bestätigt (`acked=1 ... finish=1` im Sync-Log). Damit ist H2 vollständig — alle vier priorisierten Teilpunkte real am Gerät bestätigt. `esp32-client/docs/CLIENT_SERVER_STATE.md` Punkt 3 aktualisiert. — Erledigt 2026-09-12.
 
-- [ ] Sehr spät vor dem produktionsnahen Alpha-Einsatz einen systemweiten Netzwerk-, Transport- und Verschlüsselungsaudit durchführen: TLS/Authentisierung, Credentialrotation, Hotspot/Portal, WLAN-Profile, lokale SD-/NVS-Daten, Backendgrenzen und bekannte Klartext-/Fallbackpfade prüfen; kritische Befunde vor Freigabe schließen.
-- [ ] Späteres Komfortfeature: ESP-Zeitzone als persistierbare IANA-Zone auswählbar machen. Bis dahin bleibt die verifizierte `Europe/Berlin`-Regel bewusst fest eingebaut.
 
 - [x] Backend-Auto-Modus A04: Ein gemeinsamer Typvertrag unterscheidet materialisierbare Session-Artefakte, separat gespeicherte Questions und Fact-/Decision-Kandidaten für Claims; Segmentierung, Router, Shadow, API-Schemas, direkter Capture, Tageskonsolidierung und Artefaktvalidierung verwenden dieselben Definitionen und lokalen Guards. `list_candidate` ist schema- und migrationsfest ergänzt. Tasktitel werden kurz und ohne relative Zeitangaben erzeugt; „heute Nachmittag“ wird relativ zum Aufnahmezeitpunkt als 12:00–18:00 normalisiert. Die nach der ersten Audioabnahme nötige Listenstabilisierung ist automatisiert und mit vier echten Audio→DB→ESP-Proben bestätigt. — Erledigt 2026-09-10.
 

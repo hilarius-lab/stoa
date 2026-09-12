@@ -50,6 +50,11 @@ void api_client_open_session(const char *session_id);
 /* Content-free local state for the settings diagnostics. No URL, credential,
  * response body or user content crosses this boundary. */
 api_client_diagnostic api_client_get_diagnostic(void);
+/* True once the first dashboard snapshot of this boot has been fetched.
+ * main.c uses this to fall the wakeup screen back to SCREEN_CONNECTING if
+ * becoming usable is taking unusually long, instead of hiding a real
+ * connection problem behind a static picture. Never clears before reboot. */
+bool api_client_dashboard_ready_once(void);
 
 /* Content-free diagnostics for USB tests. */
 void api_client_report(void);

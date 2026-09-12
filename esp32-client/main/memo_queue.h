@@ -17,6 +17,22 @@
 #define MEMO_SPACE_WARN_PERCENT 5
 #define MEMO_SPACE_BLOCK_BYTES (256ull * 1024 * 1024)
 
+/* One local session found in `attention` during the most recent scan pass --
+ * the history view's on-device replacement for what USB memo-list/memo-why
+ * used to be the only way to see. `session_id` is the journal's own UUID (the
+ * wire `client_session_id`), so a caller can line this up with a visible
+ * server row without either side knowing about the other's storage. `blocked`
+ * mirrors recorder_discard()'s `still_deliverable` refusal ahead of time, so
+ * the UI can grey out a confirming row instead of offering a discard that
+ * would only come back as an error. */
+#define MEMO_QUEUE_ATTENTION_MAX 16
+typedef struct {
+    char id[9];
+    char session_id[JOURNAL_UUID_CHARS];
+    char reason[24];
+    bool blocked;
+} memo_queue_attention_entry;
+
 typedef struct {
     unsigned sessions;
     unsigned adopted;
@@ -48,6 +64,15 @@ void memo_queue_scan(void);
 void memo_queue_update_space(void);
 
 memo_queue_status memo_queue_get(void);
+/* Copies up to `max` entries found during the last scan pass and returns how
+ * many exist. Rebuilt (and reset) every memo_queue_scan() call exactly like
+ * `status` above, so it shares the same bounded, self-correcting lag on a
+ * card holding more sessions than one pass's SCAN_WINDOW covers -- a session
+ * outside this pass's window is temporarily absent until rotation reaches it
+ * again, closed within a few passes. Lock-free on purpose, the same as
+ * memo_queue_get(): both are a plain-struct read of state the recorder task
+ * alone writes, read by the display task the way it already reads that one. */
+unsigned memo_queue_attention_snapshot(memo_queue_attention_entry *out, unsigned max);
 void memo_queue_note_ready(uint64_t bytes);
 /* Every other state change goes through here, with the state the segment left
  * and the state it reached. Both are needed: counting only arrivals lets a

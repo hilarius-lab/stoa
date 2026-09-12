@@ -34,16 +34,17 @@ int settings_scroll_for(int top, int bottom, int focus, int current_scroll);
 void settings_diagnostics_draw(unsigned char *canvas, int top, int bottom,
                                const settings_diagnostics *state);
 
-/* Restart and shut down each require an explicit second confirmation before
- * they act, so a stray middle-button press on the settings row cannot
- * trigger either. Focus 0 is Back/No; focus 1 is the confirming Yes row,
- * only offered while `locked` is false. `locked` covers recording and any
- * in-flight critical SD write (recorder_busy()): a restart or shutdown
- * during that window would race the file it is writing, so the view shows
- * why it is refusing instead of the Yes row. */
+/* A generic two-row confirm: restart and shut down each require an explicit
+ * second confirmation before they act, so a stray middle-button press on the
+ * settings row cannot trigger either, and the history view reuses the same
+ * shape for discarding a local recording. Focus 0 is Back/No; focus 1 is the
+ * confirming Yes row, only offered while `locked` is false. `locked_reason`
+ * is shown instead of the Yes row while locked -- restart/shutdown name
+ * recorder_busy(), the history discard names its own still-deliverable
+ * refusal, and neither reason may stand in for the other. */
 void settings_confirm_draw(unsigned char *canvas, int top, int bottom,
                            const char *title, const char *confirm_label,
-                           bool locked, int focus);
+                           bool locked, const char *locked_reason, int focus);
 
 /* The log viewer receives only the already-sanitized fixed-vocabulary text
  * from diagnostic_log. It has one focused Back action; up/down scroll lines. */

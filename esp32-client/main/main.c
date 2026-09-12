@@ -401,7 +401,13 @@ void app_main(void) {
     if (setup) {
         ESP_ERROR_CHECK(start_portal(have_network, false));
     } else {
-        screen_show(SCREEN_CONNECTING, NULL);
+        /* Wakeup image instead of the plain connecting screen: the device is
+         * not actually usable yet at this point anyway (no dashboard, no
+         * queue state confirmed), so show that honestly instead of a status
+         * screen with nothing behind it yet. The wakeup_fallback check below
+         * reveals the real SCREEN_CONNECTING diagnostics if this takes
+         * unusually long. */
+        screen_show(SCREEN_WAKEUP, NULL);
         api_client_start(network_configuration.server);
         ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
         ESP_ERROR_CHECK(select_network(0, false));
@@ -410,11 +416,28 @@ void app_main(void) {
     if(!setup) recorder_start();
     static char command[300]; size_t command_len=0;
     unsigned ticks = 0, middle_ticks = 0;
+    /* Wakeup screen fallback: at 100 ms per loop iteration, 600 ticks is one
+     * minute. Normal boot (Wi-Fi association, SNTP, TLS, the first dashboard
+     * fetch) finishes well inside that; a minute with nothing yet is worth
+     * showing the real connecting/diagnostic screen for instead of leaving a
+     * static picture up over what could be a genuine, silent connection
+     * failure. Fires at most once per boot. */
+    #define WAKEUP_FALLBACK_TICKS 600u
+    unsigned wakeup_ticks = 0;
+    bool wakeup_fallback_shown = false;
     /* Edge state of the two focus keys. They are read here and nowhere else, so
      * the previous level lives with the loop that samples it. */
     bool up_was_down = false, down_was_down = false;
     while (true) {
         vTaskDelay(pdMS_TO_TICKS(100));
+        if (!setup && !wakeup_fallback_shown) {
+            if (api_client_dashboard_ready_once()) {
+                wakeup_fallback_shown = true; /* Reached READY on its own; stop counting. */
+            } else if (++wakeup_ticks >= WAKEUP_FALLBACK_TICKS) {
+                screen_wakeup_timeout();
+                wakeup_fallback_shown = true;
+            }
+        }
         int wifi_edge = atomic_exchange(&wifi_diag_pending, 0);
         if (wifi_edge == 1)
             diagnostic_log_event(DIAG_EVENT_WIFI_DOWN, 0, 0, 0);

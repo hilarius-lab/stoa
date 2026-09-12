@@ -14,6 +14,8 @@
 #include "crypto.h"
 
 static memo_queue_status status;
+static memo_queue_attention_entry attention_entries[MEMO_QUEUE_ATTENTION_MAX];
+static unsigned attention_count;
 
 void memo_queue_random(void *out, size_t length) { esp_fill_random(out, length); }
 
@@ -103,8 +105,10 @@ static void close_open_horizon(journal_session *session) {
 }
 
 /* One session at a time: the replay structure is large, so it lives in PSRAM
- * and is released before the next directory is opened. */
-static void scan_one(const char *directory) {
+ * and is released before the next directory is opened. `id` is the bare
+ * 8-character directory name, already known to the caller, so this never has
+ * to re-derive it from `directory` just to fill an attention entry. */
+static void scan_one(const char *directory, const char *id) {
     journal_session *session = heap_caps_malloc(sizeof(journal_session), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!session) {
         ESP_LOGE("queue", "no memory to recover a session");
@@ -130,6 +134,20 @@ static void scan_one(const char *directory) {
     status.ready += journal_count_state(session, CHUNK_READY);
     status.acked += journal_count_state(session, CHUNK_ACKED);
     status.attention += session_attention;
+    if (session_attention > 0 && attention_count < MEMO_QUEUE_ATTENTION_MAX) {
+        memo_queue_attention_entry *e = &attention_entries[attention_count++];
+        snprintf(e->id, sizeof(e->id), "%s", id);
+        snprintf(e->session_id, sizeof(e->session_id), "%s", session->session_id);
+        const char *reason = (session->create_attention && session->create_reason[0])
+            ? session->create_reason : NULL;
+        if (!reason)
+            for (unsigned i = 0; i < session->chunk_count; i++)
+                if (session->chunks[i].state == CHUNK_ATTENTION && session->chunks[i].reason[0])
+                    { reason = session->chunks[i].reason; break; }
+        snprintf(e->reason, sizeof(e->reason), "%s", reason ? reason : "unbekannt");
+        e->blocked = journal_count_state(session, CHUNK_READY) +
+                     journal_count_state(session, CHUNK_UPLOADING) > 0;
+    }
     /* Segment identifiers and reasons only; never a file name the user chose
      * or any audio content. */
     ESP_LOGI("queue", "session recovered: segments=%u ready=%u acked=%u attention=%u adopted=%d",
@@ -166,6 +184,7 @@ static unsigned scan_offset;
 
 void memo_queue_scan(void) {
     memset(&status, 0, sizeof(status));
+    attention_count = 0; /* Rebuilt this pass, same bounded lag as `status`. */
     memo_queue_update_space();
     DIR *root = opendir(MEMO_ROOT);
     if (!root) {
@@ -194,7 +213,7 @@ void memo_queue_scan(void) {
     for (unsigned i = 0; i < found; i++) {
         char directory[64];
         snprintf(directory, sizeof(directory), "%s/%s", MEMO_ROOT, names[i]);
-        scan_one(directory);
+        scan_one(directory, names[i]);
     }
     if (more) ESP_LOGW("queue", "scan window: %u of %u sessions this pass; next start=%u",
                        found, matching, scan_offset);
@@ -203,6 +222,12 @@ void memo_queue_scan(void) {
 }
 
 memo_queue_status memo_queue_get(void) { return status; }
+
+unsigned memo_queue_attention_snapshot(memo_queue_attention_entry *out, unsigned max) {
+    unsigned n = attention_count < max ? attention_count : max;
+    if (out && n) memcpy(out, attention_entries, n * sizeof(memo_queue_attention_entry));
+    return n;
+}
 
 void memo_queue_note_ready(uint64_t bytes) {
     (void)bytes;

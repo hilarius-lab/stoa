@@ -36,6 +36,7 @@ extern const unsigned char recording[] asm("_binary_recording_bin_start");
 extern const unsigned char memo_saved[] asm("_binary_memo_saved_bin_start");
 extern const unsigned char error[] asm("_binary_error_bin_start");
 extern const unsigned char sleep_screen[] asm("_binary_sleep_bin_start");
+extern const unsigned char wakeup[] asm("_binary_wakeup_bin_start");
 extern const unsigned char setup[] asm("_binary_setup_bin_start");
 extern const unsigned char connecting[] asm("_binary_connecting_bin_start");
 extern const unsigned char connected[] asm("_binary_connected_bin_start");
@@ -103,6 +104,10 @@ static atomic_bool network_setup_screen_active;
 /* One atomic word keeps minute and calendar date coherent across midnight.
  * bit 31 valid; 0..10 minute; 11..15 day; 16..19 month; 20..26 year modulo 100. */
 static atomic_uint status_clock;
+/* True from the moment SCREEN_WAKEUP is first shown until either a real
+ * dashboard snapshot arrives or main.c's boot timeout gives up waiting. See
+ * the wakeup-hold comment in the display task's message loop. */
+static atomic_bool wakeup_pending;
 static atomic_bool snapshot_seen, snapshot_empty;
 static _Atomic int64_t snapshot_at_us;
 /* The upload worker writes a pending snapshot, then wakes the display task.
@@ -178,6 +183,14 @@ static bool history_open, history_waiting;
  * the header button" holds in both views. */
 static int history_focus = -1;
 static int history_scroll;
+/* Confirm sub-view for discarding a local `attention` session straight from
+ * this list -- the on-device replacement for USB `memo-discard`. A nested
+ * state exactly like restart_open/shutdown_open below, not a separate view,
+ * because it only ever exists while history_open does. */
+static bool history_discard_open;
+static char history_discard_id[9];
+static bool history_discard_blocked;
+static int history_discard_focus;
 /* One past recording, opened from the list. It is an ordinary dashboard
  * envelope and is drawn by the ordinary dashboard renderer. */
 static char *session_json;
@@ -507,12 +520,36 @@ static void open_detail(void) {
 /* The rows are parsed straight out of the response each time it is drawn rather
  * than cached as a struct array: the list is short, the panel redraws at most a
  * couple of times per second, and one representation cannot drift from another.
- * Returns the number of rows the response holds; `canvas` may be NULL to count
- * and measure without drawing. */
+ * The same reasoning now covers the local attention entries merged in below:
+ * memo_queue_attention_snapshot() is a cheap RAM copy, so re-reading it on
+ * every pass costs nothing and cannot drift from what discarding would act on.
+ *
+ * A local `attention` session whose `session_id` matches a visible server
+ * row's `client_session_id` is marked onto that row; one that matches nothing
+ * currently listed (not yet created server-side, or off the fetched page) is
+ * appended afterwards as its own row, identified by its local id since it has
+ * no server timestamp to show. A local session must never go unlisted just
+ * because the server has not caught up yet -- that used to mean the only way
+ * to even see it was memo-list.
+ *
+ * Returns the total row count, server and local combined; `canvas` may be
+ * NULL to count and measure without drawing. When `hit_id` is non-NULL and a
+ * row at `focus` carries a local attention entry, its id and blocked/
+ * still-deliverable state are copied out -- this is how activation finds out
+ * what it is about to offer discarding, re-derived rather than cached for the
+ * same reason as everything else here. */
 static int history_rows(unsigned char *canvas, const char *json,
-                        int scroll, int focus) {
+                        int scroll, int focus,
+                        char *hit_id, size_t hit_id_capacity, bool *hit_blocked) {
+    if (hit_id && hit_id_capacity) hit_id[0] = 0;
+    if (hit_blocked) *hit_blocked = false;
+
+    memo_queue_attention_entry local[MEMO_QUEUE_ATTENTION_MAX];
+    unsigned local_count = memo_queue_attention_snapshot(local, MEMO_QUEUE_ATTENTION_MAX);
+    bool matched[MEMO_QUEUE_ATTENTION_MAX] = {0};
+
     cJSON *root = cJSON_Parse(json);
-    if (!cJSON_IsArray(root)) { cJSON_Delete(root); return 0; }
+    bool is_array = cJSON_IsArray(root);
     /* The status bar and the header row are already on the canvas at this
      * point, so anything scrolled above BODY_TOP must not be drawn at all —
      * clipping here is what keeps the list out of the bars. Rows are drawn only
@@ -521,30 +558,69 @@ static int history_rows(unsigned char *canvas, const char *json,
     int y = BODY_TOP - scroll;
     /* The clock is asked once per pass, so every row and the header agree on
      * whether the times are local. */
-    bool local = clock_ready();
+    bool local_clock = clock_ready();
     if (canvas && y >= BODY_TOP)
-        history_header_draw(canvas, 12, y, CARD_FULL_WIDTH, local);
+        history_header_draw(canvas, 12, y, CARD_FULL_WIDTH, local_clock);
     y += HISTORY_HEADER_HEIGHT;
     int index = 0;
-    cJSON *item;
-    cJSON_ArrayForEach(item, root) {
+    if (is_array) {
+        cJSON *item;
+        cJSON_ArrayForEach(item, root) {
+            history_row row = {0};
+            cJSON *state = cJSON_GetObjectItemCaseSensitive(item, "state");
+            cJSON *created = cJSON_GetObjectItemCaseSensitive(item, "created_at");
+            cJSON *sid = cJSON_GetObjectItemCaseSensitive(item, "client_session_id");
+            const char *state_text = cJSON_IsString(state) ? state->valuestring : NULL;
+            history_format_time(row.when, sizeof(row.when),
+                                cJSON_IsString(created) ? created->valuestring : NULL, local_clock);
+            int local_index = -1;
+            if (cJSON_IsString(sid))
+                for (unsigned i = 0; i < local_count; i++)
+                    if (!matched[i] && !strcmp(local[i].session_id, sid->valuestring)) {
+                        local_index = (int)i;
+                        break;
+                    }
+            if (local_index >= 0) {
+                matched[local_index] = true;
+                snprintf(row.state, sizeof(row.state), "%s \xc2\xb7 lokal",
+                         history_state_label(state_text));
+                row.icon = ICON_SEV_WARNING;
+                if (hit_id && index == focus) {
+                    snprintf(hit_id, hit_id_capacity, "%s", local[local_index].id);
+                    if (hit_blocked) *hit_blocked = local[local_index].blocked;
+                }
+            } else {
+                snprintf(row.state, sizeof(row.state), "%s",
+                         history_state_label(state_text));
+                /* Presence is the signal; the server's wording is never rendered. */
+                row.icon = history_state_icon(state_text,
+                    cJSON_IsString(cJSON_GetObjectItemCaseSensitive(item, "last_error")));
+            }
+            if (canvas && y >= BODY_TOP && y + HISTORY_ROW_HEIGHT <= BODY_BOTTOM)
+                history_row_draw(canvas, &row, 12, y, CARD_FULL_WIDTH, index == focus);
+            y += HISTORY_ROW_HEIGHT;
+            index++;
+        }
+    }
+    cJSON_Delete(root);
+    for (unsigned i = 0; i < local_count; i++) {
+        if (matched[i]) continue;
         history_row row = {0};
-        cJSON *state = cJSON_GetObjectItemCaseSensitive(item, "state");
-        cJSON *created = cJSON_GetObjectItemCaseSensitive(item, "created_at");
-        history_format_time(row.when, sizeof(row.when),
-                            cJSON_IsString(created) ? created->valuestring : NULL, local);
-        snprintf(row.state, sizeof(row.state), "%s",
-                 history_state_label(cJSON_IsString(state) ? state->valuestring : NULL));
-        /* Presence is the signal; the server's wording is never rendered. */
-        row.icon = history_state_icon(
-            cJSON_IsString(state) ? state->valuestring : NULL,
-            cJSON_IsString(cJSON_GetObjectItemCaseSensitive(item, "last_error")));
+        snprintf(row.when, sizeof(row.when), "%s", local[i].id);
+        /* Precision, not just the buffer size, so the compiler can see the
+         * "lokal: " prefix plus a full-length reason[24] can never overflow
+         * row.state[24] -- the same worst case it already flagged once. */
+        snprintf(row.state, sizeof(row.state), "lokal: %.16s", local[i].reason);
+        row.icon = ICON_SEV_WARNING;
+        if (hit_id && index == focus) {
+            snprintf(hit_id, hit_id_capacity, "%s", local[i].id);
+            if (hit_blocked) *hit_blocked = local[i].blocked;
+        }
         if (canvas && y >= BODY_TOP && y + HISTORY_ROW_HEIGHT <= BODY_BOTTOM)
             history_row_draw(canvas, &row, 12, y, CARD_FULL_WIDTH, index == focus);
         y += HISTORY_ROW_HEIGHT;
         index++;
     }
-    cJSON_Delete(root);
     return index;
 }
 
@@ -562,27 +638,33 @@ static void draw_history(unsigned char *buffer) {
         text_draw(buffer, &text_font_body, 24, BODY_TOP + 24, line, strlen(line));
         return;
     }
-    char *copy = heap_caps_malloc(HISTORY_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!copy || !history_take(copy, HISTORY_MAX)) {
-        const char *line = "Verlauf nicht abrufbar";
-        text_draw(buffer, &text_font_body, 24, BODY_TOP + 24, line, strlen(line));
-        free(copy);
+    if (history_discard_open) {
+        settings_confirm_draw(buffer, BODY_TOP, BODY_BOTTOM, "Aufnahme löschen",
+                              "Ja, löschen", history_discard_blocked,
+                              "Gesperrt: Audio noch nicht zugestellt.",
+                              history_discard_focus);
         return;
     }
-    if (history_rows(buffer, copy, history_scroll, history_focus) == 0) {
-        const char *line = "Noch keine Aufnahmen";
+    char *copy = heap_caps_malloc(HISTORY_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    bool have_server = copy && history_take(copy, HISTORY_MAX);
+    /* A server list that cannot be fetched must not also hide a local
+     * `attention` session that has nothing to do with this particular fetch
+     * failing -- "[]" lets the merge below still run and append it. */
+    int count = history_rows(buffer, have_server ? copy : "[]",
+                             history_scroll, history_focus, NULL, 0, NULL);
+    free(copy);
+    if (count == 0) {
+        const char *line = have_server ? "Noch keine Aufnahmen" : "Verlauf nicht abrufbar";
         text_draw(buffer, &text_font_body, 24, BODY_TOP + 24, line, strlen(line));
     }
-    free(copy);
 }
 
 /* Move the selection and scroll just enough to keep it visible. The list is a
  * single column of equal rows, so this needs none of the dashboard's paging. */
 static void move_history_focus(int delta) {
     char *copy = heap_caps_malloc(HISTORY_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!copy) return;
-    if (!history_take(copy, HISTORY_MAX)) { free(copy); return; }
-    int count = history_rows(NULL, copy, 0, -1);
+    bool have_server = copy && history_take(copy, HISTORY_MAX);
+    int count = history_rows(NULL, have_server ? copy : "[]", 0, -1, NULL, 0, NULL);
     free(copy);
     if (count <= 0) return;
     int next = history_focus + delta;
@@ -616,6 +698,7 @@ static void open_history(void) {
     history_waiting = true;
     history_focus = -1;
     history_scroll = 0;
+    history_discard_open = false;
     api_client_open_history();
 }
 
@@ -630,13 +713,13 @@ static void draw_settings(unsigned char *buffer) {
     if (restart_open) {
         settings_confirm_draw(buffer, BODY_TOP, BODY_BOTTOM, "Neustart",
                               "Ja, neu starten", recorder_busy(),
-                              confirm_focus);
+                              "Gesperrt: SD-Karte beschäftigt.", confirm_focus);
         return;
     }
     if (shutdown_open) {
         settings_confirm_draw(buffer, BODY_TOP, BODY_BOTTOM, "Herunterfahren",
                               "Ja, herunterfahren", recorder_busy(),
-                              confirm_focus);
+                              "Gesperrt: SD-Karte beschäftigt.", confirm_focus);
         return;
     }
     if (!diagnostics_open) {
@@ -1071,7 +1154,15 @@ static void screen_task(void *unused) {
                         move_settings_focus(message.focus_delta);
                 }
                 else if (selector_open) move_selector_focus(message.focus_delta);
-                else if (history_open) move_history_focus(message.focus_delta);
+                else if (history_open) {
+                    if (history_discard_open) {
+                        int next = history_discard_focus + message.focus_delta;
+                        int limit = history_discard_blocked ? 0 : 1;
+                        if (next < 0) next = 0;
+                        if (next > limit) next = limit;
+                        history_discard_focus = next;
+                    } else move_history_focus(message.focus_delta);
+                }
                 else move_focus(message.focus_delta);
             } else if (detail_open) {
                 /* "Zurück" focused, or no action on this entity at all: leave,
@@ -1097,13 +1188,40 @@ static void screen_task(void *unused) {
             } else if (selector_open) {
                 activate_selector();
             } else if (history_open) {
-                /* The header button opens the selector. Session details are
-                 * intentionally absent from history; pressing a row refreshes
-                 * its directly visible status instead. */
-                if (history_focus < 0) open_selector();
+                if (history_discard_open) {
+                    /* Focus 1 only exists while not blocked, the same
+                     * guarantee restart/shutdown rely on, so this can never
+                     * fire the discard while it would only come back as
+                     * still_deliverable. */
+                    if (history_discard_focus == 1 && !history_discard_blocked)
+                        recorder_discard(history_discard_id);
+                    history_discard_open = false;
+                } else if (history_focus < 0) open_selector();
                 else {
-                    history_waiting = true;
-                    api_client_open_history();
+                    /* Which local id (if any) row `history_focus` carries is
+                     * re-derived here rather than cached from the draw pass,
+                     * same reasoning as history_rows itself: one lookup that
+                     * cannot drift from what is actually on screen. */
+                    char local_id[9] = {0};
+                    bool local_blocked = false;
+                    char *copy = heap_caps_malloc(HISTORY_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+                    bool have_server = copy && history_take(copy, HISTORY_MAX);
+                    history_rows(NULL, have_server ? copy : "[]", 0, history_focus,
+                                local_id, sizeof(local_id), &local_blocked);
+                    free(copy);
+                    if (local_id[0]) {
+                        snprintf(history_discard_id, sizeof(history_discard_id), "%s", local_id);
+                        history_discard_blocked = local_blocked;
+                        history_discard_focus = 0;
+                        history_discard_open = true;
+                    } else {
+                        /* The header button opens the selector. Session
+                         * details are intentionally absent from history;
+                         * pressing an ordinary row refreshes its directly
+                         * visible status instead. */
+                        history_waiting = true;
+                        api_client_open_history();
+                    }
                 }
             } else if (*active_focus_ptr() < 0) {
                 open_selector();
@@ -1314,8 +1432,35 @@ static void screen_task(void *unused) {
          * refresh branch fire even in the unlikely case the sleep background
          * matches what was already on the panel. */
         if (message.state == SCREEN_SLEEP) message.force_full = true;
+        /* Same reasoning as the sleep image above: a full-picture swap over a
+         * partial waveform ghosts badly, and the very first draw after the
+         * plain SCREEN_CONNECTING screen at boot is exactly that. Guarded to
+         * the actual transition-in, unlike sleep: sleep is requested exactly
+         * once, but every ambient queue-status ping held back to WAKEUP below
+         * re-requests this same state, and forcing a full refresh on each of
+         * those would flash the unchanged picture over and over until the
+         * dashboard arrives. The ordinary no-visual-change skip further down
+         * already suppresses a redraw of genuinely identical content. */
+        if (message.state == SCREEN_WAKEUP && previous_state != SCREEN_WAKEUP)
+            message.force_full = true;
+        /* The wakeup picture holds the panel until something worth looking at
+         * has actually arrived. recorder_task()'s own boot-recovery READY
+         * (and every later ambient screen_memo(SCREEN_READY,...) queue-status
+         * ping) is real and honest for recording purposes, but fires whether
+         * or not a real dashboard exists yet -- left alone it would flash an
+         * empty dashboard over the wakeup image within a few seconds of
+         * boot, long before Wi-Fi or the server are even reachable. Held back
+         * here instead of skipped at the source, so recording itself and every
+         * other state stay completely unaffected. Released the moment a real
+         * snapshot lands (screen_snapshot_received) or the boot fallback in
+         * main.c gives up waiting (screen_wakeup_timeout) -- whichever comes
+         * first, never both. */
+        if (message.state == SCREEN_WAKEUP) atomic_store(&wakeup_pending, true);
+        if (message.state == SCREEN_READY && atomic_load(&wakeup_pending))
+            message.state = SCREEN_WAKEUP;
         const unsigned char *background =
             (message.state == SCREEN_SETUP || message.state == SCREEN_SETUP_TEMP) ? setup :
+            message.state == SCREEN_WAKEUP ? wakeup :
             message.state == SCREEN_CONNECTING ? connecting : message.state == SCREEN_CONNECTED ? connected :
             message.state == SCREEN_READY ? ready : message.state == SCREEN_RECORDING ? recording :
             message.state == SCREEN_MEMO_SAVED ? memo_saved : message.state == SCREEN_ERROR ? error :
@@ -1486,6 +1631,15 @@ void screen_memo(screen_state state,unsigned seconds) {
     screen_message message={.state=state,.seconds=seconds};
     post(&message);
 }
+void screen_wakeup_timeout(void) {
+    /* Ends the wakeup hold for good, independent of whether a dashboard ever
+     * arrives afterwards: once the honest connecting/diagnostic screen has
+     * been shown, a later ambient screen_memo(SCREEN_READY,...) must not
+     * silently flip back to the picture and hide whatever was worth
+     * surfacing. */
+    atomic_store(&wakeup_pending, false);
+    screen_show(SCREEN_CONNECTING, NULL);
+}
 void screen_enter_sleep_if_safe(void) {
     if (recorder_busy()) {
         ESP_LOGI("screen", "sleep request refused: recorder busy");
@@ -1528,6 +1682,12 @@ void screen_snapshot_cache_limit(unsigned seconds) {
     atomic_store(&cache_max_age_s, seconds);
 }
 void screen_snapshot_received(const char *json, bool empty) {
+    /* A real fetch succeeded -- schema-valid and all, whether or not the user
+     * happens to have any sections yet. That is the wakeup picture's actual
+     * exit condition, released here rather than at the SCREEN_READY call
+     * site because api_client.c calls this first and unconditionally, even
+     * while a recording defers the matching screen_show(SCREEN_READY,...). */
+    atomic_store(&wakeup_pending, false);
     if (pending_snapshot_json && snapshot_lock &&
         xSemaphoreTake(snapshot_lock, pdMS_TO_TICKS(500)) == pdTRUE) {
         snprintf(pending_snapshot_json, SNAPSHOT_MAX, "%s", json ? json : "");

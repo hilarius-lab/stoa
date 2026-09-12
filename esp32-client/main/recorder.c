@@ -205,7 +205,10 @@ static discard_result discard_one(const char *id,unsigned *removed_out,unsigned 
 }
 
 /* The counters are rebuilt from the card rather than adjusted by hand, so the
- * queue and the status bar cannot drift from what is actually there. */
+ * queue and the status bar cannot drift from what is actually there. This
+ * also refreshes memo_queue_attention_snapshot()'s list, the history view's
+ * on-device replacement for USB memo-list/memo-why: memo_queue_scan() rebuilds
+ * it as a side effect of the same windowed pass. */
 static void refresh_queue_from_card(void) {
     memo_queue_scan();
     memo_queue_status queued=memo_queue_get();

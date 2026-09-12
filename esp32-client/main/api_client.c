@@ -124,6 +124,11 @@ static atomic_bool complete_task_pending;
 static atomic_bool history_pending;
 static char session_id_wanted[40];
 static atomic_bool session_pending;
+/* Set once the very first dashboard snapshot of this boot has been accepted
+ * and drawn. main.c's wakeup-screen timeout reads this to decide whether the
+ * device is still merely connecting or has actually become usable; it never
+ * clears again until the next reboot. */
+static atomic_bool dashboard_ready_once;
 
 /* A small durable desired-state queue for list items. Unlike the audio queue,
  * these records contain no user content, only opaque UUIDs and active/done.
@@ -756,6 +761,7 @@ static void fetch_dashboard(void) {
             /* Recording is local truth and owns the panel while it runs. A
              * snapshot that arrives mid-recording is accepted but not drawn;
              * the recorder returns to READY itself when the memo is stored. */
+            atomic_store(&dashboard_ready_once, true);
             if(recorder_busy()) ESP_LOGI("dashboard","render deferred: recording active");
             else screen_show(SCREEN_READY,NULL);
         } else ESP_LOGW("dashboard","snapshot rejected");
@@ -2175,6 +2181,8 @@ api_client_diagnostic api_client_get_diagnostic(void) {
         .gate_failed = atomic_load(&diagnostic_gate_failed),
     };
 }
+
+bool api_client_dashboard_ready_once(void) { return atomic_load(&dashboard_ready_once); }
 
 void api_client_network_up(void) { if (worker) xTaskNotifyGive(worker); }
 void api_client_queue_changed(void) { if (worker) xTaskNotifyGive(worker); }

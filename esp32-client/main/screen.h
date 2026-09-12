@@ -1,5 +1,5 @@
 #pragma once
-typedef enum { SCREEN_SETUP, SCREEN_SETUP_TEMP, SCREEN_CONNECTING, SCREEN_CONNECTED, SCREEN_SAVED,
+typedef enum { SCREEN_SETUP, SCREEN_SETUP_TEMP, SCREEN_WAKEUP, SCREEN_CONNECTING, SCREEN_CONNECTED, SCREEN_SAVED,
     SCREEN_READY, SCREEN_RECORDING, SCREEN_MEMO_SAVED, SCREEN_ERROR, SCREEN_SLEEP } screen_state;
 void screen_start(void);
 void screen_show(screen_state state, const char *password);
@@ -12,6 +12,12 @@ void screen_memo(screen_state state, unsigned seconds);
  * action and a critically low, non-charging battery reading both call this,
  * and neither may cut power out from under an active recording or SD write. */
 void screen_enter_sleep_if_safe(void);
+/* Ends the SCREEN_WAKEUP hold and falls back to the plain SCREEN_CONNECTING
+ * diagnostics screen. Call this once, from main.c, if boot is taking
+ * unusually long without a dashboard yet -- never called if the dashboard
+ * arrives first, since screen_snapshot_received() already ends the hold by
+ * itself in that case. */
+void screen_wakeup_timeout(void);
 // Local queue indication drawn into the top-right corner of the idle screens.
 // Provisional glyph badges until H3 designs the real status line.
 void screen_status(unsigned pending, unsigned attention, bool storage_low);

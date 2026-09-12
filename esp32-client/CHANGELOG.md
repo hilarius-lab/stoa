@@ -1,5 +1,87 @@
 # Änderungen
 
+## 2026-09-12 – Lokale `attention`-Sessions im Verlauf verwalten
+
+- `memo_queue.c`s ohnehin fensterbegrenzter `memo_queue_scan()`-Durchlauf
+  (`SCAN_WINDOW`) trägt jetzt zusätzlich `memo_queue_attention_snapshot()`
+  zusammen: jede Session, die `scan_one()` als `CHUNK_ATTENTION` oder
+  `create_attention` klassifiziert, landet mit `session_id` (Journal-UUID,
+  = `client_session_id` auf der Leitung), Grund und `blocked`
+  (`still_deliverable`) in einer kleinen, lock-frei gelesenen Liste —
+  dieselbe Konvention wie beim bestehenden `memo_queue_get()`. Bewusst in den
+  vorhandenen Scan integriert statt eines eigenen Vollscans: ein
+  zusätzlicher ungebundener Verzeichnisdurchlauf bei jedem Discard oder jeder
+  Upload-Zustandsänderung hätte den genauen Fehler zurückgebracht, den
+  `SCAN_WINDOW` laut seinem eigenen Kommentar erst behoben hat (ein erster
+  Entwurf tat das versehentlich in `recorder.c` und wurde vor dem Flash
+  wieder verworfen).
+- `screen.c`s `history_rows()` gleicht jede Server-Zeile per
+  `client_session_id` gegen diese Liste ab und markiert einen Treffer mit
+  „· lokal“; eine lokale Session ohne passende Server-Zeile erscheint als
+  eigene Zeile darunter, über ihre lokale ID identifiziert. `draw_history()`
+  und `move_history_focus()` fallen bei fehlgeschlagenem Serverabruf auf
+  `"[]"` zurück statt lokale Zeilen mit wegzuwerfen — eine lokale
+  Auffälligkeit darf nie unsichtbar sein, nur weil der Server gerade nicht
+  erreichbar ist.
+- Aktivieren einer solchen Zeile öffnet einen neuen Bestätigungsdialog
+  („Aufnahme löschen“ / „Ja, löschen“) statt wie bei einer gewöhnlichen Zeile
+  nur zu aktualisieren; Bestätigen ruft das bestehende `recorder_discard()`
+  auf, dieselbe `still_deliverable`-Sicherheitsregel gilt unverändert.
+  `settings_confirm_draw()` (bisher nur Neustart/Herunterfahren) bekam dafür
+  einen expliziten `locked_reason`-Parameter: der bisher fest codierte Text
+  „SD-Karte beschäftigt“ wäre für eine gesperrte Löschung schlicht falsch
+  gewesen. `tools/ui_test.c` und beide bestehenden Aufrufer angepasst.
+- `idf.py build` grün, Flash auf COM9 erfolgt, Boot-Log ohne Fehler oder
+  Backtrace geprüft. **Offen:** eine reale Sichtprobe mit mindestens einer
+  echten `attention`-Session — auf dem Testgerät liegen aktuell keine vor
+  (`attention=0`), daher wurden Verschmelzung, lokale Extra-Zeile und der
+  Lösch-Dialog samt Sperrzustand nur gegen den Code geprüft, nicht am Gerät
+  gesehen.
+
+## 2026-09-12 – Wakeup-Bild beim Hochfahren
+
+- Neuer Bildschirmzustand `SCREEN_WAKEUP`, analog zum bestehenden
+  Herunterfahren-Bild (`SCREEN_SLEEP`): zeigt beim Hochfahren statt des
+  bisherigen leeren `SCREEN_CONNECTING` das vom Nutzer gestaltete
+  `wakeup.png` (über `tools/pack_image_asset.py` gepackt, `assets/wakeup.bin`,
+  `main/CMakeLists.txt`s `EMBED_FILES` ergänzt). `generate_h3_assets.py`
+  erzeugt „wakeup" bewusst nicht mit — dieselbe Falle wie beim Sleep-Bild.
+- Auf Nutzerwunsch an echte Betriebsbereitschaft gebunden statt an eine feste
+  Zeit: das Bild bleibt stehen, bis der erste reale Dashboard-Snapshot
+  eingetroffen ist (`screen_snapshot_received()`), nicht schon bei
+  hergestellter WLAN-Verbindung. Ein struktureller Fund dabei: der lokale
+  Boot-Recovery-Pfad in `recorder.c` erreicht `SCREEN_READY` schon Sekunden
+  nach dem Boot, komplett unabhängig von Netzwerk/Dashboard („READY is an
+  honest state" für die Aufnahmefunktion) — ungefiltert hätte das binnen
+  weniger Sekunden ein leeres Dashboard über das Wakeup-Bild geblendet. Neuer
+  `wakeup_pending`-Zustand in `screen.c` hält deshalb jede `SCREEN_READY`-
+  Anfrage auf `SCREEN_WAKEUP` zurück, bis `screen_snapshot_received()` echte
+  Daten meldet; Aufnahme, Fehleranzeige und alle anderen Zustände bleiben
+  davon unberührt, da nur `SCREEN_READY`-Anfragen abgefangen werden.
+- Fällt die Verbindung ungewöhnlich lange aus (WLAN weg, Server nicht
+  erreichbar), gibt `main.c` nach 60 Sekunden ohne Dashboard auf und ruft
+  `screen_wakeup_timeout()` auf: zeigt den echten `SCREEN_CONNECTING`-
+  Diagnosebildschirm und beendet den Wakeup-Zustand dauerhaft, damit ein
+  echtes Problem nicht hinter einem statischen Bild verschwindet und ein
+  späterer Warteschlangen-Ping nicht stillschweigend zurück aufs Bild
+  springt.
+- Zwei reale Gerätebefunde beim ersten Test korrigiert: (1) der Wechsel
+  Connecting→Wakeup lief zunächst über die partielle Waveform statt eines
+  vollen Refreshs (sichtbares Ghosting-Risiko bei einem kompletten
+  Bildwechsel) — behoben mit demselben erzwungenen Vollrefresh wie beim
+  Sleep-Bild, aber nur beim tatsächlichen Übergang in den Zustand, nicht bei
+  jedem folgenden, inhaltlich identischen Warteschlangen-Ping (sonst hätte
+  das unveränderte Bild bei jedem Ping erneut sichtbar geflackert). (2) Ohne
+  den `wakeup_pending`-Rückhalt sprang das Gerät real schon nach ~6 Sekunden
+  auf ein leeres `SCREEN_READY` um, lange bevor WLAN überhaupt verbunden war
+  — mit Firmware-Log am Gerät nachvollzogen und durch obige Korrektur
+  behoben; danach zeigte das reale Boot-Log genau eine Wakeup-Vollaktualisierung
+  und genau eine READY-Vollaktualisierung erst nach `dashboard: snapshot
+  accepted`. `idf.py build` grün, Flash auf COM9 und Log-Verifikation über
+  drei Iterationen bestanden. Reale Sichtprobe des Bildinhalts auf dem Panel
+  und ein realer Test des 60-Sekunden-Fallbacks (Server/WLAN absichtlich
+  nicht erreichbar) stehen noch aus.
+
 ## 2026-09-12 – Rotierendes Scan-Fenster für die Boot-Wiederherstellung
 
 - Bei der Untersuchung eines vermeintlichen Freigabe-Rückstaus (51 Sessions

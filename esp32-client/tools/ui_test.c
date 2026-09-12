@@ -452,9 +452,10 @@ static void settings_view(void) {
     settings_draw(canvas, 100, 792, 0, 5, true, true);
     settings_draw(canvas, 100, 792, 0, 6, true, true);
     settings_confirm_draw(canvas, 100, 792, "Neustart", "Ja, neu starten",
-                          false, 1);
+                          false, "Gesperrt: SD-Karte beschäftigt.", 1);
     settings_confirm_draw(canvas, 100, 792, "Herunterfahren",
-                          "Ja, herunterfahren", true, 0);
+                          "Ja, herunterfahren", true,
+                          "Gesperrt: SD-Karte beschäftigt.", 0);
     outside = 0;
     for (int y = 0; y < 800; y++)
         for (int x = 0; x < 480; x++)
