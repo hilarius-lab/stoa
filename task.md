@@ -79,7 +79,7 @@ insbesondere die darin neu ergänzten Chat-Interaktions-Punkte, siehe dort.
   Lösch-Dialog inklusive Sperrzustand wurden nicht am Gerät gesehen, nur
   gegen den Code und den vorhandenen `attention=0`-Boot-Pfad geprüft.
 
-- [ ] **Priorität 3 — Preloading/Caching für Detailansichten.** Kein
+- [x] **Priorität 3 — Preloading/Caching für Detailansichten.** Kein
   bereits bestehender Eintrag gefunden (in `task.md`, `ROADMAP.md`,
   `CHANGELOG.md` und `docs/` gesucht) — neu aufgenommen, nicht mit dem in
   `esp32-client/docs/CLIENT_SERVER_STATE.md` Abschnitt 7a erwähnten,
@@ -131,8 +131,15 @@ insbesondere die darin neu ergänzten Chat-Interaktions-Punkte, siehe dort.
   snapshot accepted` — der Preload-Pfad liefert real gegen den
   Produktionsserver aus. Details in `esp32-client/CHANGELOG.md`. **Offen:**
   eine reale Sichtprobe, dass ein Wiederöffnen einer schon einmal gesehenen
-  Karte tatsächlich ohne „wird geladen …“ erscheint — erfordert einen echten
+  Karte tatsächlich ohne „wird geladen …” erscheint — erfordert einen echten
   Tastendruck am Gerät, bisher nur der Cache-Füllpfad über das Log geprüft.
+
+  **Abgeschlossen, 2026-09-13 (Nutzer-Sichtprobe am Gerät).** Wiederöffnen
+  einer bereits vorher gesehenen Karte erscheint sofort ohne Ladeindikator.
+  Zur Klarstellung: es handelt sich um den oben beschriebenen RAM/PSRAM-Cache
+  (`screen.c::entity_cache`, 8 Slots), nicht um SD-Karten-Zwischenspeicherung
+  — falls dazu künftig noch ein separater Bedarf besteht, ist das ein neuer,
+  eigener Punkt.
 
 - [x] **Priorität 5 — Wartungs-Fehlerisolation (W07, Backend).** Bei der
   Vorbereitung von Priorität 10 (Audit) am 2026-09-12 gegen den aktuellen
@@ -200,9 +207,11 @@ insbesondere die darin neu ergänzten Chat-Interaktions-Punkte, siehe dort.
   Repos, nicht durch diese Änderung verursacht) grün: 30 Einzeltests + Soak.
   Der volle Release-Gate-Lauf (inkl. `assert_release_docs()`) wurde nicht
   ausgeführt, da dessen Dokuprüfungen unabhängig von W07 sind.
-  `BACKEND_LOGIK.md` (§15.1, W07-Zeile in §20.3) aktualisiert. Nicht
-  committed — wie in diesem Chat üblich, wird vor dem Commit auf explizites
-  Go des Nutzers gewartet.
+  `BACKEND_LOGIK.md` (§15.1, W07-Zeile in §20.3) aktualisiert. **Korrektur
+  2026-09-13:** Diese Zeile hatte fälschlich „nicht committed" behauptet —
+  der Commit war zu dem Zeitpunkt bereits erfolgt (`c902239`, 2026-09-12
+  22:25, bereits in `origin/main`), nur diese Notiz wurde danach nicht mehr
+  nachgezogen. Nichts nachzuholen.
 
 - [ ] **Priorität 6 — Restliche fachliche Lücken aus BACKEND_LOGIK.md §18
   (Backend).** Ebenfalls am 2026-09-12 gegen den aktuellen Code neu
